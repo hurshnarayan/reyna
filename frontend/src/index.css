@@ -1,0 +1,197 @@
+/* ── reyna empress — high contrast, bold headings, dark on white ── */
+:root {
+  --bg-color: #e8e6e1;
+  --main-color: #1a1a1a;
+  --accent: #25D366;
+  --accent-dim: rgba(37, 211, 102, 0.08);
+  --accent-blue: #2563eb;
+  --accent-blue-dim: rgba(37, 99, 235, 0.08);
+  --sub-color: #777;
+  --sub-alt-color: #fff;
+  --text-color: #1a1a1a;
+  --text-secondary: #555;
+  --error-color: #dc2626;
+  --roundness: 10px;
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  /* reyna green — for CTAs and status only, not headings */
+  --reyna-accent: #25D366;
+  --reyna-accent-dim: rgba(37, 211, 102, 0.08);
+
+  /* empress gold */
+  --empress-gold: #C9A961;
+  --empress-gold-dim: rgba(201, 169, 97, 0.15);
+
+  /* sidebar */
+  --sidebar-bg: #111;
+  --sidebar-border: #222;
+
+  /* notifications */
+  --notif-success-border: rgba(37, 99, 235, 0.7);
+  --notif-success-bg: rgba(30, 64, 175, 0.92);
+  --notif-success-bg-hover: rgba(30, 64, 175, 0.6);
+  --notif-error-border: rgba(220, 38, 38, 0.7);
+  --notif-error-bg: rgba(153, 27, 27, 0.92);
+  --notif-error-bg-hover: rgba(153, 27, 27, 0.6);
+  --notif-notice-border: rgba(14, 165, 233, 0.7);
+  --notif-notice-bg: rgba(3, 105, 161, 0.92);
+  --notif-notice-bg-hover: rgba(3, 105, 161, 0.6);
+
+  /* cards — pure white on dark-ish bg = maximum contrast */
+  --card-bg: #fff;
+  --card-border: #ddd8d0;
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --card-hover: #f7f6f3;
+
+  /* inputs */
+  --input-bg: #fff;
+  --input-border: #c8c3b8;
+}
+
+/* ── Dark mode overrides ── */
+body.reyna-dark {
+  --bg-color: #141414;
+  --main-color: #e8e6e1;
+  --sub-color: #888;
+  --sub-alt-color: #1a1a1a;
+  --text-color: #e8e6e1;
+  --text-secondary: #aaa;
+
+  --card-bg: #1e1e1e;
+  --card-border: #2a2a2a;
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.15);
+  --card-hover: #252525;
+
+  --input-bg: #1e1e1e;
+  --input-border: #333;
+}
+
+/* fix hardcoded colors in dark mode */
+body.reyna-dark [style*="color: #1a1a1a"],
+body.reyna-dark [style*="color: rgb(26, 26, 26)"] { color: var(--text-color) !important; }
+body.reyna-dark [style*="background: #fff"],
+body.reyna-dark [style*="background: rgb(255, 255, 255)"] { background: var(--card-bg) !important; }
+body.reyna-dark [style*="background-color: #fff"],
+body.reyna-dark [style*="background-color: rgb(255, 255, 255)"] { background-color: var(--card-bg) !important; }
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: var(--font);
+  color: var(--text-color);
+  background: var(--bg-color);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+::selection { background: var(--reyna-accent); color: #fff; }
+a { text-decoration: none; color: inherit; }
+code { font-family: var(--font-mono); }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--sub-color); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-color); }
+
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes reynaLoader { 0% { transform: translateX(-100%) scaleX(0); } 50% { transform: translateX(0) scaleX(1); } 100% { transform: translateX(100%) scaleX(0); } }
+@keyframes notifEnter { from { opacity: 0; } to { opacity: 1; } }
+@keyframes notifExit { from { opacity: 1; height: auto; margin-bottom: 16px; } to { opacity: 0; height: 0; margin-bottom: 0; } }
+@keyframes alertsSlideIn { from { margin-right: -10rem; } to { margin-right: 0; } }
+
+.reyna-loader-bar { animation: reynaLoader 2s ease-in-out infinite; }
+.notif-enter { animation: notifEnter 0.125s ease both; }
+.notif-exit { animation: notifExit 0.25s ease both; }
+.alerts-sidebar-enter { animation: alertsSlideIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.fade-in { animation: fadeIn 0.4s ease both; }
+
+.fa, .fas, .far, .fab { line-height: 1; }
+input[type="text"], input[type="email"], input[type="tel"], input[type="password"] { font-family: var(--font); }
+button { font-family: var(--font); transition: border-color 0.15s, box-shadow 0.15s; }
+
+/* ── Lusion-style floating background blobs ── */
+.reyna-bg-blobs {
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  pointer-events: none; overflow: hidden; z-index: 0;
+}
+.reyna-blob {
+  position: absolute; border-radius: 50%;
+  filter: blur(90px); opacity: 0.1;
+  will-change: transform;
+}
+.reyna-blob-1 {
+  width: 340px; height: 340px; background: #25D366;
+  top: -60px; right: 8%;
+}
+.reyna-blob-2 {
+  width: 260px; height: 260px; background: #2563eb;
+  bottom: 5%; left: 4%;
+}
+.reyna-blob-3 {
+  width: 200px; height: 200px; background: #C9A961;
+  top: 40%; right: -2%;
+  animation: reynaBlobFloat3 17s ease-in-out infinite;
+}
+@keyframes reynaBlobFloat3 {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(-20px, 18px); }
+}
+
+/* ── Music dot pulse ── */
+@keyframes reynaMusicPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+.reyna-music-dot { animation: reynaMusicPulse 1.5s ease infinite; }
+
+/* ── Pill hover ── */
+.reyna-pill:hover { opacity: 0.85; }
+
+/* ── Sidebar nav arrow animation ── */
+.reyna-nav-arrow {
+  font-size: 8px;
+  margin-left: auto;
+  opacity: 0.3;
+  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease;
+  transform: rotate(0deg);
+}
+.reyna-arrow-active {
+  transform: rotate(180deg);
+  opacity: 1;
+}
+.reyna-arrow-open {
+  transform: rotate(90deg);
+  opacity: 1;
+}
+
+/* ── Disable button animation when toggled off in settings ── */
+.reyna-no-btn-anim .reyna-hover-active { background-image: none !important; color: inherit !important; --btn-text: inherit !important; }
+
+/* ── Settings panel ── */
+@keyframes settingsSlideIn {
+  from { opacity: 0; transform: translateX(-20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.reyna-settings-panel { animation: settingsSlideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+/* ── Global Lusion button hover — radial gradient background ── */
+/* No fill div needed. Text naturally sits on top of its own background. */
+.reyna-hover-active {
+  --btn-text: #fff !important;
+  color: #fff !important;
+  background-image: radial-gradient(circle at var(--rx, 50%) var(--ry, 50%), var(--fill, #1a1a1a) 0%, var(--fill, #1a1a1a) 100%) !important;
+  background-size: 0% 0% !important;
+  overflow: hidden !important;
+  position: relative !important;
+}
+.reyna-hover-active.reyna-hover-expanding {
+  background-size: 600% 600% !important;
+  transition: background-size 0.45s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+.reyna-hover-active *,
+.reyna-hover-active i,
+.reyna-hover-active span,
+.reyna-hover-active .fas,
+.reyna-hover-active .far,
+.reyna-hover-active .fab {
+  --btn-text: #fff !important;
+  color: #fff !important;
+}

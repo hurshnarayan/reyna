@@ -1,0 +1,14 @@
+{
+  "name": "reyna-whatsapp-bot",
+  "version": "0.1.0",
+  "scripts": {
+    "start": "node bot.js",
+    "dev": "node --watch bot.js",
+    "clean": "rm -rf auth_state downloaded_files && echo 'Cleaned!'"
+  },
+  "dependencies": {
+    "baileys": "^7.0.0-rc.9",
+    "pino": "^10.3.1",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

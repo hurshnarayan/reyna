@@ -1,0 +1,90 @@
+# ── OS ──
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# ── Backend (Go) ──
+backend/reyna-server
+backend/server
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
+backend/drive_storage/
+backend/bin/
+backend/tmp/
+*.test
+*.out
+coverage.txt
+
+# ── Other frontend variants/backups — ignore everything except `frontend/` ──
+/frontend.old/
+/frontend_lusion/
+/frontend_serika_dark_inter/
+/frontend_settings_lusion/
+/frontend.zip
+/frontend-redesigned-Apr8.zip
+/frontend_inter_serika_dark.zip
+/frontend.*.zip
+/frontend_*.zip
+/frontend-*.zip
+/frontend.bak/
+/frontend_*/
+/frontend-*/
+/frontend.*/
+
+# ── Frontend (React + Vite) ── keep `frontend/` itself, ignore build trash
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.vite/
+frontend/.cache/
+frontend/.parcel-cache/
+frontend/.next/
+frontend/.turbo/
+frontend/coverage/
+frontend/src_backup/
+frontend/*.local
+frontend/*.tsbuildinfo
+frontend/stats.html
+frontend/.eslintcache
+
+# ── WhatsApp Bot (Node.js) ──
+whatsapp-bot/node_modules/
+whatsapp-bot/auth_state/
+whatsapp-bot/downloaded_files/
+whatsapp-bot/*.log
+
+# ── Generic node ──
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# ── Environment ──
+.env
+.env.*
+!.env.example
+
+# ── IDE / agent state ──
+.vscode/
+.idea/
+*.iml
+*.sublime-*
+.claude/
+.cursor/
+.aider*
+
+# ── Logs ──
+*.log
+logs/
+
+# ── Archives / temp ──
+*.tar.gz
+*.zip
+*.bak
+tmp/
+temp/
