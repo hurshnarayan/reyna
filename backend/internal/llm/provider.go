@@ -9,7 +9,52 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 )
+
+// isRetryableStatus returns true for transient HTTP errors that warrant a retry.
+// 429 = rate limit, 500 = internal error, 502/503/504 = upstream / overloaded.
+func isRetryableStatus(code int) bool {
+	return code == 429 || code == 500 || code == 502 || code == 503 || code == 504
+}
+
+// doGeminiRequestWithRetry posts to Gemini with up to 4 attempts on transient
+// errors (1s, 2s, 4s backoff). Returns the final response body + status.
+func doGeminiRequestWithRetry(url string, jsonBody []byte) ([]byte, int, error) {
+	var lastBody []byte
+	var lastStatus int
+	for attempt := 0; attempt < 4; attempt++ {
+		req, err := http.NewRequest("POST", url, bytes.NewReader(jsonBody))
+		if err != nil {
+			return nil, 0, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			lastStatus = 0
+			if attempt < 3 {
+				wait := time.Duration(1<<attempt) * time.Second
+				log.Printf("[LLM] Gemini network error: %v — retrying in %v (attempt %d/4)", err, wait, attempt+2)
+				time.Sleep(wait)
+				continue
+			}
+			return nil, 0, err
+		}
+		lastBody, _ = io.ReadAll(resp.Body)
+		lastStatus = resp.StatusCode
+		resp.Body.Close()
+		if resp.StatusCode == 200 {
+			return lastBody, 200, nil
+		}
+		if !isRetryableStatus(resp.StatusCode) || attempt == 3 {
+			return lastBody, lastStatus, nil
+		}
+		wait := time.Duration(1<<attempt) * time.Second
+		log.Printf("[LLM] Gemini %d — retrying in %v (attempt %d/4)", resp.StatusCode, wait, attempt+2)
+		time.Sleep(wait)
+	}
+	return lastBody, lastStatus, nil
+}
 
 // Provider is the unified interface for all LLM backends.
 type Provider interface {
@@ -214,6 +259,20 @@ func (g *geminiProvider) Complete(prompt string, maxTokens int) (string, error) 
 	// Gemini API: POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=%s", g.apiKey)
 
+	// Only force application/json output when the prompt explicitly asks for
+	// JSON. Free-form answers (Q&A, NLP reply generation) must stay plain text
+	// — otherwise Gemini wraps the response in a {"answer": "..."} envelope.
+	wantJSON := strings.Contains(prompt, "JSON") || strings.Contains(prompt, "json")
+	genConfig := map[string]interface{}{
+		"maxOutputTokens": maxTokens,
+		"temperature":     0.3,
+		"thinkingConfig":  map[string]interface{}{"thinkingBudget": 0},
+	}
+	if wantJSON {
+		genConfig["responseMimeType"] = "application/json"
+		genConfig["temperature"] = 0.2
+	}
+
 	body := map[string]interface{}{
 		"contents": []map[string]interface{}{
 			{
@@ -222,30 +281,16 @@ func (g *geminiProvider) Complete(prompt string, maxTokens int) (string, error) 
 				},
 			},
 		},
-		"generationConfig": map[string]interface{}{
-			"maxOutputTokens":  maxTokens,
-			"temperature":      0.2,
-			"responseMimeType": "application/json",
-			"thinkingConfig":   map[string]interface{}{"thinkingBudget": 0},
-		},
+		"generationConfig": genConfig,
 	}
 	jsonBody, _ := json.Marshal(body)
 
-	req, err := http.NewRequest("POST", url, bytes.NewReader(jsonBody))
+	respBody, status, err := doGeminiRequestWithRetry(url, jsonBody)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("gemini API error %d: %s", resp.StatusCode, string(respBody))
+	if status != 200 {
+		return "", fmt.Errorf("gemini API error %d: %s", status, string(respBody))
 	}
 
 	var r struct {
@@ -294,30 +339,27 @@ func (g *geminiProvider) CompleteWithDoc(prompt string, fileData []byte, mimeTyp
 				},
 			},
 		},
-		"generationConfig": map[string]interface{}{
-			"maxOutputTokens":  maxTokens,
-			"temperature":      0.2,
-			"responseMimeType": "application/json",
-			"thinkingConfig":   map[string]interface{}{"thinkingBudget": 0},
-		},
+		"generationConfig": func() map[string]interface{} {
+			cfg := map[string]interface{}{
+				"maxOutputTokens": maxTokens,
+				"temperature":     0.3,
+				"thinkingConfig":  map[string]interface{}{"thinkingBudget": 0},
+			}
+			if strings.Contains(prompt, "JSON") || strings.Contains(prompt, "json") {
+				cfg["responseMimeType"] = "application/json"
+				cfg["temperature"] = 0.2
+			}
+			return cfg
+		}(),
 	}
 	jsonBody, _ := json.Marshal(body)
 
-	req, err := http.NewRequest("POST", url, bytes.NewReader(jsonBody))
+	respBody, status, err := doGeminiRequestWithRetry(url, jsonBody)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		log.Printf("[LLM] Gemini doc API error %d, falling back to text-only", resp.StatusCode)
+	if status != 200 {
+		log.Printf("[LLM] Gemini doc API error %d, falling back to text-only", status)
 		return g.Complete(prompt, maxTokens)
 	}
 

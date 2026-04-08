@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -1088,35 +1089,81 @@ func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *ti
 	}
 
 	placeholders, args := buildInClause(groupIDs)
-	conditions := []string{"group_id IN (" + placeholders + ")"}
+	// Use a LEFT JOIN on users so we can match WHO against the user record's
+	// name/phone too — handles cases where shared_by_name was empty at upload
+	// time but the sender's user record has a real name.
+	conditions := []string{"f.group_id IN (" + placeholders + ")"}
 
-	// WHO filter — match sender name or phone
+	// WHO filter — broad: match against the file's stored sender fields OR the
+	// joined user record's name/phone. Also tokenize multi-word names so
+	// "Mohit Singh" matches files where the name was stored as just "Mohit".
 	if who != "" {
-		conditions = append(conditions, "(LOWER(shared_by_name) LIKE ? OR shared_by_phone LIKE ?)")
-		args = append(args, "%"+strings.ToLower(who)+"%", "%"+who+"%")
+		whoLower := strings.ToLower(strings.TrimSpace(who))
+		var whoParts []string
+		// First name token (handles "Mohit Singh" → match on "mohit")
+		fields := strings.Fields(whoLower)
+		first := whoLower
+		if len(fields) > 0 {
+			first = fields[0]
+		}
+		whoParts = append(whoParts,
+			"LOWER(COALESCE(f.shared_by_name,'')) LIKE ?",
+			"LOWER(COALESCE(f.shared_by_name,'')) LIKE ?",
+			"COALESCE(f.shared_by_phone,'') LIKE ?",
+			"LOWER(COALESCE(u.name,'')) LIKE ?",
+			"LOWER(COALESCE(u.name,'')) LIKE ?",
+			"COALESCE(u.phone,'') LIKE ?",
+		)
+		conditions = append(conditions, "("+strings.Join(whoParts, " OR ")+")")
+		args = append(args,
+			"%"+whoLower+"%",
+			"%"+first+"%",
+			"%"+who+"%",
+			"%"+whoLower+"%",
+			"%"+first+"%",
+			"%"+who+"%",
+		)
 	}
 
-	// WHAT filter — match filename, subject, tags, or extracted content
-	if what != "" {
-		conditions = append(conditions, "(LOWER(file_name) LIKE ? OR LOWER(subject) LIKE ? OR LOWER(tags) LIKE ? OR LOWER(extracted_content) LIKE ?)")
-		w := "%" + strings.ToLower(what) + "%"
-		args = append(args, w, w, w, w)
+	// WHAT filter — tokenized OR-match with rank-by-hits.
+	tokens := TokenizeWhat(what)
+	rankExpr := "0"
+	if what != "" && len(tokens) > 0 {
+		var orParts []string
+		var rankParts []string
+		for _, tok := range tokens {
+			orParts = append(orParts, "(LOWER(f.file_name) LIKE ? OR LOWER(f.subject) LIKE ? OR LOWER(f.tags) LIKE ? OR LOWER(f.extracted_content) LIKE ? OR LOWER(f.content_summary) LIKE ?)")
+			rankParts = append(rankParts, "(CASE WHEN LOWER(f.file_name) LIKE ? OR LOWER(f.subject) LIKE ? OR LOWER(f.tags) LIKE ? OR LOWER(f.extracted_content) LIKE ? OR LOWER(f.content_summary) LIKE ? THEN 1 ELSE 0 END)")
+			like := "%" + tok + "%"
+			args = append(args, like, like, like, like, like)
+		}
+		conditions = append(conditions, "("+strings.Join(orParts, " OR ")+")")
+		rankExpr = strings.Join(rankParts, " + ")
 	}
 
 	// WHEN filter — time window
 	if sinceTime != nil {
-		conditions = append(conditions, "created_at >= ?")
+		conditions = append(conditions, "f.created_at >= ?")
 		args = append(args, sinceTime.Format("2006-01-02 15:04:05"))
 	}
 
+	// Append rank args (same token list, same order) so the CASE expressions resolve
+	if rankExpr != "0" {
+		for _, tok := range tokens {
+			like := "%" + tok + "%"
+			args = append(args, like, like, like, like, like)
+		}
+	}
 	args = append(args, interface{}(limit))
 	query := fmt.Sprintf(
-		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
-		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
-		 FROM files WHERE %s ORDER BY created_at DESC LIMIT ?`,
-		strings.Join(conditions, " AND "),
+		`SELECT f.id, f.group_id, f.user_id, f.shared_by_phone, f.shared_by_name, f.file_name, f.file_size,
+		  f.mime_type, f.drive_file_id, f.drive_folder_id, f.subject, f.tags, f.version, f.parent_file_id, f.wa_message_id, f.status, f.created_at
+		 FROM files f LEFT JOIN users u ON u.id = f.user_id
+		 WHERE %s ORDER BY (%s) DESC, f.created_at DESC LIMIT ?`,
+		strings.Join(conditions, " AND "), rankExpr,
 	)
 
+	log.Printf("[SQL-NLP] who=%q what=%q tokens=%v sql=%s args=%v", who, what, tokens, query, args)
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
@@ -1125,7 +1172,10 @@ func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *ti
 	return scanFiles(rows)
 }
 
-// SearchFilesContent searches files by extracted content (for Q&A)
+// SearchFilesContent searches files by extracted content (for Q&A).
+// Tokenized — every significant word in `query` must appear somewhere in
+// the file's content/filename/subject/summary. Files with empty extracted
+// content are excluded so the caller can fall back to live extraction.
 func (s *Store) SearchFilesContent(groupIDs []int64, query string, limit int) ([]models.File, error) {
 	if len(groupIDs) == 0 {
 		return nil, nil
@@ -1134,22 +1184,99 @@ func (s *Store) SearchFilesContent(groupIDs []int64, query string, limit int) ([
 		limit = 5
 	}
 	placeholders, args := buildInClause(groupIDs)
-	q := "%" + strings.ToLower(query) + "%"
-	args = append(args, q, q, q, interface{}(limit))
-	rows, err := s.db.Query(
+	tokens := TokenizeWhat(query)
+	// Drop the "extracted_content != ''" hard requirement — for Q&A we may want
+	// to lazy-extract files that the bot captured but failed to extract earlier.
+	conds := []string{"group_id IN (" + placeholders + ")"}
+	rankExpr := "0"
+	if len(tokens) > 0 {
+		var orParts []string
+		var rankParts []string
+		for _, tok := range tokens {
+			orParts = append(orParts, "(LOWER(extracted_content) LIKE ? OR LOWER(content_summary) LIKE ? OR LOWER(file_name) LIKE ? OR LOWER(subject) LIKE ?)")
+			rankParts = append(rankParts, "(CASE WHEN LOWER(extracted_content) LIKE ? OR LOWER(content_summary) LIKE ? OR LOWER(file_name) LIKE ? OR LOWER(subject) LIKE ? THEN 1 ELSE 0 END)")
+			like := "%" + tok + "%"
+			args = append(args, like, like, like, like)
+		}
+		conds = append(conds, "("+strings.Join(orParts, " OR ")+")")
+		rankExpr = strings.Join(rankParts, " + ")
+		// Append rank args (same tokens again, same order)
+		for _, tok := range tokens {
+			like := "%" + tok + "%"
+			args = append(args, like, like, like, like)
+		}
+	}
+	args = append(args, interface{}(limit))
+	q := fmt.Sprintf(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
 		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
-		 FROM files WHERE group_id IN (`+placeholders+`)
-		 AND (LOWER(extracted_content) LIKE ? OR LOWER(file_name) LIKE ? OR LOWER(subject) LIKE ?)
-		 AND extracted_content != ''
-		 ORDER BY created_at DESC LIMIT ?`,
-		args...,
+		 FROM files WHERE %s
+		 ORDER BY (%s) DESC, created_at DESC LIMIT ?`,
+		strings.Join(conds, " AND "), rankExpr,
 	)
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	return scanFiles(rows)
+}
+
+// TokenizeWhat splits an NLP `what` clause into significant lowercase tokens.
+// Drops stopwords and tokens shorter than 3 chars so noise like "the", "a",
+// "of" doesn't widen the search to match every file in the DB.
+func TokenizeWhat(what string) []string {
+	stop := map[string]bool{
+		// articles / pronouns / aux
+		"the": true, "and": true, "for": true, "with": true, "from": true, "that": true,
+		"this": true, "those": true, "these": true, "any": true, "some": true, "all": true,
+		"are": true, "was": true, "were": true, "has": true, "have": true, "had": true,
+		"you": true, "your": true, "yours": true, "me": true, "mine": true, "our": true,
+		"his": true, "her": true, "him": true, "she": true, "they": true, "them": true,
+		"can": true, "could": true, "would": true, "should": true, "will": true, "shall": true,
+		"may": true, "might": true, "must": true, "into": true, "out": true, "off": true,
+		// question words
+		"what": true, "when": true, "where": true, "why": true, "how": true, "who": true,
+		"which": true, "whose": true, "did": true, "does": true, "doing": true, "done": true,
+		// generic file vocab — we know it's a file, no need to match
+		"notes": true, "note": true, "file": true, "files": true, "pdf": true, "pdfs": true,
+		"doc": true, "docs": true, "document": true, "documents": true, "page": true, "pages": true,
+		// generic Q&A request verbs
+		"please": true, "find": true, "show": true, "give": true, "tell": true, "send": true,
+		"share": true, "shared": true, "sent": true, "uploaded": true, "upload": true,
+		"explain": true, "describe": true, "define": true, "definition": true, "exact": true,
+		"exactly": true, "example": true, "examples": true, "summary": true, "summarize": true,
+		"summarise": true, "list": true, "mention": true, "mentioned": true, "mentions": true,
+		"according": true, "regarding": true, "about": true, "concerning": true, "remember": true,
+		"recall": true, "know": true, "knows": true, "told": true, "saying": true, "said": true,
+		"says": true, "want": true, "need": true, "kindly": true,
+		// time generics (real time filtering happens via WHEN, not WHAT)
+		"today": true, "tomorrow": true, "yesterday": true, "now": true, "recent": true,
+		"recently": true, "latest": true, "last": true, "ago": true, "back": true, "only": true,
+	}
+	lower := strings.ToLower(what)
+	// replace non-alphanumeric with spaces
+	cleaned := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return ' '
+	}, lower)
+	var out []string
+	seen := map[string]bool{}
+	for _, tok := range strings.Fields(cleaned) {
+		if len(tok) < 3 || stop[tok] || seen[tok] {
+			continue
+		}
+		seen[tok] = true
+		out = append(out, tok)
+	}
+	// If everything got filtered (e.g. user typed only stopwords), fall back
+	// to the original phrase so we still search something.
+	if len(out) == 0 {
+		out = []string{strings.TrimSpace(lower)}
+	}
+	return out
 }
 
 // GetFileExtractedContent returns just the extracted_content for given file IDs

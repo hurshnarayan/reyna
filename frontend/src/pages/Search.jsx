@@ -7,6 +7,83 @@ import { Fa, icons, fileIconClass, IconBox } from '../components/icons'
 function formatBytes(b) { if (b < 1024) return b + ' B'; if (b < 1048576) return (b / 1024).toFixed(1) + ' KB'; return (b / 1048576).toFixed(1) + ' MB' }
 function timeAgo(d) { const s = Math.floor((Date.now() - new Date(d).getTime()) / 1000); if (s < 60) return 'just now'; if (s < 3600) return Math.floor(s / 60) + 'm ago'; if (s < 86400) return Math.floor(s / 3600) + 'h ago'; return Math.floor(s / 86400) + 'd ago' }
 
+// cleanReply strips JSON envelopes and code fences that the LLM occasionally
+// wraps free-form answers in. Defensive — backend already cleans, but we
+// double-check on the client so old cached answers also render correctly.
+function cleanReply(s) {
+  if (!s) return ''
+  let t = String(s).trim()
+  if (t.startsWith('```')) {
+    t = t.replace(/^```(?:json|md|markdown)?/i, '').replace(/```$/, '').trim()
+  }
+  if (t.startsWith('{') && t.endsWith('}')) {
+    try {
+      const obj = JSON.parse(t)
+      for (const k of ['answer', 'reply', 'response', 'text', 'output', 'result', 'message']) {
+        if (typeof obj[k] === 'string' && obj[k].trim()) return obj[k].trim()
+      }
+    } catch {}
+  }
+  return t
+}
+
+// renderMarkdown does a tiny inline markdown-to-React render: **bold**,
+// `code`, > blockquotes, and bullet lists. No external deps.
+function renderMarkdown(text) {
+  if (!text) return null
+  const lines = text.split('\n')
+  const blocks = []
+  let listBuf = []
+  const flushList = () => {
+    if (listBuf.length > 0) {
+      blocks.push(<ul key={'ul' + blocks.length} style={{ margin: '6px 0 6px 18px', padding: 0 }}>
+        {listBuf.map((item, i) => <li key={i} style={{ marginBottom: 4 }}>{renderInline(item)}</li>)}
+      </ul>)
+      listBuf = []
+    }
+  }
+  lines.forEach((rawLine, i) => {
+    const line = rawLine.replace(/\r$/, '')
+    if (/^\s*[-•*]\s+/.test(line)) {
+      listBuf.push(line.replace(/^\s*[-•*]\s+/, ''))
+      return
+    }
+    flushList()
+    if (line.trim() === '') {
+      blocks.push(<div key={'br' + i} style={{ height: 8 }} />)
+      return
+    }
+    if (line.startsWith('> ')) {
+      blocks.push(<blockquote key={'q' + i} style={{ margin: '6px 0', padding: '6px 12px', borderLeft: '3px solid var(--reyna-accent)', background: 'rgba(37,211,102,0.06)', fontStyle: 'italic', borderRadius: 4 }}>{renderInline(line.slice(2))}</blockquote>)
+      return
+    }
+    blocks.push(<p key={'p' + i} style={{ margin: '6px 0', lineHeight: 1.7 }}>{renderInline(line)}</p>)
+  })
+  flushList()
+  return blocks
+}
+
+function renderInline(text) {
+  // Split by **bold** and `code` markers, preserving content.
+  const parts = []
+  const re = /(\*\*[^*]+\*\*|`[^`]+`)/g
+  let lastIdx = 0
+  let m
+  let key = 0
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > lastIdx) parts.push(text.slice(lastIdx, m.index))
+    const tok = m[0]
+    if (tok.startsWith('**')) {
+      parts.push(<strong key={'b' + key++} style={{ fontWeight: 700 }}>{tok.slice(2, -2)}</strong>)
+    } else if (tok.startsWith('`')) {
+      parts.push(<code key={'c' + key++} style={{ background: 'rgba(0,0,0,0.06)', padding: '1px 6px', borderRadius: 4, fontSize: '0.92em', fontFamily: 'monospace' }}>{tok.slice(1, -1)}</code>)
+    }
+    lastIdx = m.index + tok.length
+  }
+  if (lastIdx < text.length) parts.push(text.slice(lastIdx))
+  return parts
+}
+
 const btnBase = { background: '#fff', border: '1.5px solid #ccc', borderRadius: 'var(--roundness)', padding: '8px 16px', fontSize: 14, fontWeight: 600, cursor: 'pointer', color: 'var(--text-secondary, #555)', transition: 'all 0.15s', display: 'inline-flex', alignItems: 'center', gap: 6 }
 const btnPrimary = { ...btnBase, background: 'var(--reyna-accent)', color: '#fff', border: '1.5px solid var(--reyna-accent)', fontWeight: 700 }
 const btnDanger = { ...btnBase, background: '#fef2f2', color: 'var(--error-color)', border: '1.5px solid rgba(220,38,38,0.15)' }
@@ -168,23 +245,48 @@ export default function Search() {
       {/* Search bar */}
       <div style={{ position: 'relative', marginBottom: 28 }}>
         <div style={{ position: 'relative' }}>
-          <Fa icon={mode === 'qa' ? 'fa-graduation-cap' : mode === 'nlp' ? 'fa-comments' : icons.search} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', fontSize: 14, color: 'var(--sub-color)', pointerEvents: 'none' }} />
-          <input ref={inputRef} value={query} onChange={handleChange} onKeyDown={handleKeyDown}
-            onFocus={() => suggestions.length > 0 && mode === 'search' && setShowSuggestions(true)}
-            onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-            placeholder={placeholders[mode]}
-            style={{
-              width: '100%', padding: '14px 14px 14px 40px', fontSize: 14,
-              background: '#fff', border: '1.5px solid #ccc', borderRadius: 'var(--roundness)',
-              color: 'var(--text-color)', outline: 'none', transition: 'border-color 0.15s',
-            }}
-            onFocusCapture={e => e.target.style.borderColor = '#2563eb'}
-            onBlurCapture={e => e.target.style.borderColor = '#ccc'}
-          />
+          <Fa icon={mode === 'qa' ? 'fa-graduation-cap' : mode === 'nlp' ? 'fa-comments' : icons.search} style={{ position: 'absolute', left: 14, top: 18, fontSize: 14, color: 'var(--sub-color)', pointerEvents: 'none' }} />
+          {mode === 'search' ? (
+            <input ref={inputRef} value={query} onChange={handleChange} onKeyDown={handleKeyDown}
+              onFocus={() => suggestions.length > 0 && mode === 'search' && setShowSuggestions(true)}
+              onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+              placeholder={placeholders[mode]}
+              style={{
+                width: '100%', padding: '14px 14px 14px 40px', fontSize: 14,
+                background: '#fff', border: '1.5px solid #ccc', borderRadius: 'var(--roundness)',
+                color: 'var(--text-color)', outline: 'none', transition: 'border-color 0.15s',
+              }}
+              onFocusCapture={e => e.target.style.borderColor = '#2563eb'}
+              onBlurCapture={e => e.target.style.borderColor = '#ccc'}
+            />
+          ) : (
+            <textarea ref={inputRef} value={query} onChange={handleChange}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  if (mode === 'nlp') doNLPSearch(query); else doQA(query)
+                  return
+                }
+                handleKeyDown(e)
+              }}
+              onInput={(e) => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 320) + 'px' }}
+              rows={1}
+              placeholder={placeholders[mode]}
+              style={{
+                width: '100%', padding: '14px 110px 14px 40px', fontSize: 14,
+                background: '#fff', border: '1.5px solid #ccc', borderRadius: 'var(--roundness)',
+                color: 'var(--text-color)', outline: 'none', transition: 'border-color 0.15s',
+                resize: 'none', overflow: 'auto', minHeight: 50, maxHeight: 320,
+                fontFamily: 'inherit', lineHeight: 1.5,
+              }}
+              onFocusCapture={e => e.target.style.borderColor = '#2563eb'}
+              onBlurCapture={e => e.target.style.borderColor = '#ccc'}
+            />
+          )}
           {/* Submit button for NLP/QA modes */}
           {(mode === 'nlp' || mode === 'qa') && (
             <button onClick={() => mode === 'nlp' ? doNLPSearch(query) : doQA(query)}
-              style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', ...btnPrimary, padding: '6px 14px', fontSize: 12 }}>
+              style={{ position: 'absolute', right: 6, top: 9, ...btnPrimary, padding: '6px 14px', fontSize: 12 }}>
               <Fa icon={mode === 'qa' ? 'fa-paper-plane' : icons.search} style={{ fontSize: 10 }} /> {mode === 'qa' ? 'Ask' : 'Search'}
             </button>
           )}
@@ -229,26 +331,26 @@ export default function Search() {
         </div>
       )}
       {mode === 'nlp' && nlpReply && (
-        <div style={{ ...cardStyle, padding: '12px 16px', marginBottom: 16, fontSize: 13, lineHeight: 1.7, color: 'var(--text-color)', whiteSpace: 'pre-line' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+        <div style={{ ...cardStyle, padding: '14px 18px', marginBottom: 16, fontSize: 14, color: 'var(--text-color)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
             <Fa icon="fa-crown" style={{ fontSize: 11, color: 'var(--reyna-accent)' }} />
             <strong style={{ fontSize: 12 }}>Reyna</strong>
           </div>
-          {nlpReply}
+          <div>{renderMarkdown(cleanReply(nlpReply))}</div>
         </div>
       )}
 
       {/* Q&A answer display */}
       {mode === 'qa' && qaAnswer && (
-        <div style={{ ...cardStyle, padding: '16px 20px', marginBottom: 20 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--reyna-accent)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ ...cardStyle, padding: '18px 22px', marginBottom: 20 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--reyna-accent)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
             <Fa icon="fa-crown" style={{ fontSize: 11 }} /> Reyna
           </div>
-          <div style={{ fontSize: 13, lineHeight: 1.8, color: 'var(--text-color)', whiteSpace: 'pre-line' }}>
-            {qaAnswer.answer}
+          <div style={{ fontSize: 14, color: 'var(--text-color)' }}>
+            {renderMarkdown(cleanReply(qaAnswer.answer))}
           </div>
           {qaAnswer.sources.length > 0 && (
-            <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--card-border)', fontSize: 11, color: 'var(--sub-color)' }}>
+            <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--card-border)', fontSize: 11, color: 'var(--sub-color)' }}>
               <Fa icon={icons.file} style={{ fontSize: 9, marginRight: 4 }} />
               Sources: {qaAnswer.sources.join(', ')}
             </div>

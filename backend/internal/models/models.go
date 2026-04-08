@@ -211,9 +211,22 @@ type NLPRetrievalRequest struct {
 }
 
 type NLPRetrievalResponse struct {
-	Files    []File            `json:"files"`
-	Query    NLPParsedQuery    `json:"parsed_query"`
-	Reply    string            `json:"reply"`
+	Files        []File         `json:"files"`
+	DriveMatches []DriveMatch   `json:"drive_matches,omitempty"`
+	Query        NLPParsedQuery `json:"parsed_query"`
+	Reply        string         `json:"reply"`
+}
+
+// DriveMatch represents a file found by walking the user's existing Drive folder
+// tree (rather than the bot-captured DB). Surfaced alongside DB hits in NLP
+// retrieval and Q&A so files organized in Drive before Reyna existed remain
+// findable.
+type DriveMatch struct {
+	FolderName string `json:"folder_name"`
+	FolderID   string `json:"folder_id"`
+	FileName   string `json:"file_name"`
+	FileID     string `json:"file_id"`
+	MimeType   string `json:"mime_type,omitempty"`
 }
 
 type NLPParsedQuery struct {
@@ -233,7 +246,8 @@ type NotesQARequest struct {
 }
 
 type NotesQAResponse struct {
-	Answer     string   `json:"answer"`
-	Sources    []string `json:"sources"` // filenames used
-	Question   string   `json:"question"`
+	Answer       string       `json:"answer"`
+	Sources      []string     `json:"sources"` // filenames used
+	DriveSources []DriveMatch `json:"drive_sources,omitempty"`
+	Question     string       `json:"question"`
 }

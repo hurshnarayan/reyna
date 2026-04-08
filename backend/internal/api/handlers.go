@@ -1472,19 +1472,50 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 	if files == nil {
 		files = []models.File{}
 	}
+	// Defensive: if WHO is set but the strict filter found nothing, retry by sender only
+	if len(files) == 0 && who != "" {
+		fallback, _ := s.store.SearchFilesNLP(groupIDs, who, "", nil, 20)
+		if len(fallback) > 0 {
+			files = fallback
+		}
+	}
 
-	// Build human-readable reply
-	reply := s.buildNLPReply(files, who, what, when)
+	// Also walk the user's existing Drive folder tree for matches that were
+	// never captured by the bot. This is the fix for "Reyna only sees its own
+	// staging table" — older notes already organised in Drive are now searchable.
+	driveMatches := s.collectDriveContext(groupIDs, what, 25)
+	log.Printf("[NLP-RETRIEVE] db_files=%d drive_matches=%d", len(files), len(driveMatches))
+
+	// Build a conversational LLM-generated reply (multi-language, intent-aware).
+	dbView := make([]nlp.RetrievalFile, 0, len(files))
+	for _, f := range files {
+		dbView = append(dbView, nlp.RetrievalFile{
+			Name:     f.FileName,
+			Folder:   f.Subject,
+			Sender:   f.SharedByName,
+			SharedAt: f.CreatedAt.Format("Mon 2006-01-02 15:04 MST"),
+			Summary:  s.store.GetFileExtractedContent([]int64{f.ID})[f.ID],
+		})
+	}
+	driveView := make([]nlp.RetrievalFile, 0, len(driveMatches))
+	for _, m := range driveMatches {
+		driveView = append(driveView, nlp.RetrievalFile{
+			Name:   m.FileName,
+			Folder: m.FolderName,
+		})
+	}
+	reply := s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, dbView, driveView)
 
 	json.NewEncoder(w).Encode(models.NLPRetrievalResponse{
-		Files: files,
-		Query: models.NLPParsedQuery{Who: who, What: what, When: when, Why: why, Raw: req.Query},
-		Reply: reply,
+		Files:        files,
+		DriveMatches: driveMatches,
+		Query:        models.NLPParsedQuery{Who: who, What: what, When: when, Why: why, Raw: req.Query},
+		Reply:        reply,
 	})
 }
 
-func (s *Server) buildNLPReply(files []models.File, who, what, when string) string {
-	if len(files) == 0 {
+func (s *Server) buildNLPReply(files []models.File, driveMatches []models.DriveMatch, who, what, when string) string {
+	if len(files) == 0 && len(driveMatches) == 0 {
 		msg := "No files found"
 		if who != "" {
 			msg += " from " + who
@@ -1496,6 +1527,18 @@ func (s *Server) buildNLPReply(files []models.File, who, what, when string) stri
 			msg += " in that time period"
 		}
 		msg += ".\n\nTry being more specific — I can search by:\n• Person: \"What did Priya share?\"\n• Topic: \"Find compiler design notes\"\n• Time: \"What's new since yesterday?\"\n• Combo: \"Rakesh's quantum mechanics PDF from last week\""
+		return msg
+	}
+
+	if len(files) == 0 && len(driveMatches) > 0 {
+		msg := fmt.Sprintf("Found %d file(s) already in your Drive matching \"%s\":", len(driveMatches), what)
+		for i, m := range driveMatches {
+			if i >= 8 {
+				msg += fmt.Sprintf("\n... and %d more", len(driveMatches)-8)
+				break
+			}
+			msg += fmt.Sprintf("\n• %s — in %s/", m.FileName, m.FolderName)
+		}
 		return msg
 	}
 
@@ -1533,7 +1576,245 @@ func (s *Server) buildNLPReply(files []models.File, who, what, when string) stri
 			msg += " (by " + f.SharedByName + ")"
 		}
 	}
+	if len(driveMatches) > 0 {
+		msg += fmt.Sprintf("\n\nPlus %d match(es) already in your Drive:", len(driveMatches))
+		for i, m := range driveMatches {
+			if i >= 5 {
+				msg += fmt.Sprintf("\n... and %d more", len(driveMatches)-5)
+				break
+			}
+			msg += fmt.Sprintf("\n• %s — in %s/", m.FileName, m.FolderName)
+		}
+	}
 	return msg
+}
+
+// ══════════════════════════════════════════
+// v3: DRIVE FOLDER WALKER (used by NLP retrieval + Q&A)
+// ══════════════════════════════════════════
+
+// folderMatchesWhat returns true if a Drive folder name plausibly matches the
+// "what" of an NLP query. Uses substring + a small abbrev table so that
+// "OS notes" matches "Operating Systems", "compiler" matches "Compiler Design",
+// "dbms" matches "Database Management Systems", etc.
+func folderMatchesWhat(folderName, what string) bool {
+	if what == "" {
+		return false
+	}
+	fn := strings.ToLower(folderName)
+	w := strings.ToLower(strings.TrimSpace(what))
+	if fn == w || strings.Contains(fn, w) || strings.Contains(w, fn) {
+		return true
+	}
+	// token-level overlap: any significant token in `what` appearing in folder name
+	for _, tok := range db.TokenizeWhat(w) {
+		if strings.Contains(fn, tok) {
+			return true
+		}
+	}
+	// abbreviation map
+	abbrevs := map[string][]string{
+		"os":       {"operating system", "operating systems"},
+		"dbms":     {"database", "dbms"},
+		"cn":       {"computer network", "networking"},
+		"daa":      {"design and analysis", "algorithm"},
+		"coa":      {"computer organization", "architecture"},
+		"dsa":      {"data structure", "algorithm"},
+		"caed":     {"computer aided", "engineering drawing", "cad"},
+		"ml":       {"machine learning"},
+		"ai":       {"artificial intelligence"},
+		"oop":      {"object oriented", "object-oriented"},
+		"toc":      {"theory of computation", "automata"},
+		"compiler": {"compiler design", "compilers"},
+		"se":       {"software engineering"},
+		"pyq":      {"previous year", "question paper"},
+	}
+	for short, longs := range abbrevs {
+		if strings.Contains(w, short) {
+			for _, l := range longs {
+				if strings.Contains(fn, l) {
+					return true
+				}
+			}
+		}
+		for _, l := range longs {
+			if strings.Contains(w, l) && strings.Contains(fn, short) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// fileMatchesWhat returns true if a Drive filename plausibly matches `what`.
+func fileMatchesWhat(fileName, what string) bool {
+	if what == "" {
+		return false
+	}
+	fn := strings.ToLower(fileName)
+	w := strings.ToLower(strings.TrimSpace(what))
+	if strings.Contains(fn, w) {
+		return true
+	}
+	for _, tok := range db.TokenizeWhat(w) {
+		if strings.Contains(fn, tok) {
+			return true
+		}
+	}
+	return false
+}
+
+// collectDriveContext walks the user's Drive root (the folder set via
+// "change folder") and returns files matching `what`. It searches:
+//  1. Subfolders whose name matches `what` → returns all files in them
+//  2. Within all other subfolders, files whose name matches `what`
+// Capped at `maxMatches` to avoid huge responses.
+func (s *Server) collectDriveContext(groupIDs []int64, what string, maxMatches int) []models.DriveMatch {
+	if what == "" || len(groupIDs) == 0 {
+		return nil
+	}
+	if maxMatches <= 0 {
+		maxMatches = 25
+	}
+
+	var driveUser *models.User
+	for _, gid := range groupIDs {
+		if u := s.store.FindDriveConnectedUser(gid); u != nil {
+			driveUser = u
+			break
+		}
+	}
+	if driveUser == nil || driveUser.GoogleRefresh == "" || driveUser.DriveRootID == "" {
+		return nil
+	}
+
+	token, err := s.drive.GetValidToken(driveUser.GoogleToken, driveUser.GoogleRefresh, 0)
+	if err != nil {
+		log.Printf("[DRIVE-CTX] token refresh failed: %v", err)
+		return nil
+	}
+
+	subfolders, err := s.drive.ListDriveFolders(token, driveUser.DriveRootID)
+	if err != nil {
+		log.Printf("[DRIVE-CTX] list folders failed: %v", err)
+		return nil
+	}
+
+	var matches []models.DriveMatch
+	// Pass 1: any subfolder whose name matches → take all its files
+	for _, folder := range subfolders {
+		if len(matches) >= maxMatches {
+			break
+		}
+		if !folderMatchesWhat(folder["name"], what) {
+			continue
+		}
+		files, err := s.drive.ListDriveFiles(token, folder["id"])
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			if len(matches) >= maxMatches {
+				break
+			}
+			matches = append(matches, models.DriveMatch{
+				FolderName: folder["name"],
+				FolderID:   folder["id"],
+				FileName:   asString(f["name"]),
+				FileID:     asString(f["id"]),
+				MimeType:   asString(f["mime_type"]),
+			})
+		}
+	}
+
+	// Pass 2: scan files in *non-matching* subfolders for filename hits
+	if len(matches) < maxMatches {
+		for _, folder := range subfolders {
+			if len(matches) >= maxMatches {
+				break
+			}
+			if folderMatchesWhat(folder["name"], what) {
+				continue // already covered in pass 1
+			}
+			files, err := s.drive.ListDriveFiles(token, folder["id"])
+			if err != nil {
+				continue
+			}
+			for _, f := range files {
+				if len(matches) >= maxMatches {
+					break
+				}
+				name := asString(f["name"])
+				if fileMatchesWhat(name, what) {
+					matches = append(matches, models.DriveMatch{
+						FolderName: folder["name"],
+						FolderID:   folder["id"],
+						FileName:   name,
+						FileID:     asString(f["id"]),
+						MimeType:   asString(f["mime_type"]),
+					})
+				}
+			}
+		}
+	}
+
+	log.Printf("[DRIVE-CTX] what=%q → %d match(es) under root %s", what, len(matches), driveUser.DriveRootID)
+	return matches
+}
+
+// downloadDriveMatchesForQA downloads up to `maxFiles` PDFs from the given
+// Drive matches and runs them through the LLM extractor so Q&A can answer
+// from the actual document content. Returns a filename → extracted content
+// map ready to feed into AnswerFromNotes.
+func (s *Server) downloadDriveMatchesForQA(groupIDs []int64, matches []models.DriveMatch, maxFiles int) map[string]string {
+	out := map[string]string{}
+	if len(matches) == 0 || maxFiles <= 0 {
+		return out
+	}
+
+	var driveUser *models.User
+	for _, gid := range groupIDs {
+		if u := s.store.FindDriveConnectedUser(gid); u != nil {
+			driveUser = u
+			break
+		}
+	}
+	if driveUser == nil {
+		return out
+	}
+	token, err := s.drive.GetValidToken(driveUser.GoogleToken, driveUser.GoogleRefresh, 0)
+	if err != nil {
+		return out
+	}
+
+	count := 0
+	for _, m := range matches {
+		if count >= maxFiles {
+			break
+		}
+		if !strings.Contains(m.MimeType, "pdf") {
+			continue
+		}
+		data, err := s.drive.DownloadFromDrive(token, m.FileID)
+		if err != nil {
+			log.Printf("[QA] download %s failed: %v", m.FileName, err)
+			continue
+		}
+		log.Printf("[QA] downloaded %s (%d bytes) from Drive folder %s", m.FileName, len(data), m.FolderName)
+		content, _ := s.classifier.ExtractContent(m.FileName, "application/pdf", int64(len(data)), data)
+		if content != "" {
+			out[m.FolderName+"/"+m.FileName] = content
+			count++
+		}
+	}
+	return out
+}
+
+func asString(v interface{}) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
 }
 
 // ══════════════════════════════════════════
@@ -1580,49 +1861,162 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Search for relevant files by content
-	relevantFiles, _ := s.store.SearchFilesContent(groupIDs, req.Question, 5)
+	// Run the NLP parser to extract topic + sender + time hints from natural
+	// questions. The student may write "explain wien bridge oscillator from
+	// the notes mohit sent today" → who=mohit, what="wien bridge oscillator",
+	// when=today. We use what for content search and pass everything to the
+	// answerer for attribution.
+	who, what, when, _ := s.classifier.ParseNLPQuery(req.Question)
+	if what == "" {
+		what = req.Question
+	}
+	log.Printf("[QA] question=%q → who=%q what=%q when=%q", req.Question, who, what, when)
 
-	// Also try a broader search by filename/subject
-	if len(relevantFiles) == 0 {
-		relevantFiles, _ = s.store.SearchFilesNLP(groupIDs, "", req.Question, nil, 5)
+	// Resolve time window from `when` (same logic as retrieval handler)
+	var sinceTime *time.Time
+	now := time.Now()
+	switch when {
+	case "today":
+		t := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		sinceTime = &t
+	case "yesterday":
+		t := time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, now.Location())
+		sinceTime = &t
+	case "last_week", "this_week":
+		t := now.AddDate(0, 0, -7)
+		sinceTime = &t
+	case "last_month":
+		t := now.AddDate(0, -1, 0)
+		sinceTime = &t
 	}
 
+	// 1. DB hit search — use ALL parsed dimensions (who/what/when) so a question
+	//    like "what did mohit share about oscillators today?" filters by sender
+	//    AND time AND topic, not just topic.
+	relevantFiles, _ := s.store.SearchFilesNLP(groupIDs, who, what, sinceTime, 5)
 	if len(relevantFiles) == 0 {
+		// Loosen: drop the time/who filter and try content-only
+		relevantFiles, _ = s.store.SearchFilesContent(groupIDs, what, 5)
+	}
+	if len(relevantFiles) == 0 {
+		// Last loosening: drop everything but recency
+		relevantFiles, _ = s.store.SearchFilesNLP(groupIDs, "", what, nil, 5)
+	}
+
+	// 2. Drive folder walker — files organised in Drive that the bot never captured.
+	driveMatches := s.collectDriveContext(groupIDs, what, 10)
+
+	// 3. Build QA sources. For the TOP DB hit we always re-extract from the
+	//    saved bytes (full-document mode) so the answer is grounded in the real
+	//    document, not the truncated cached summary. Subsequent hits use cached
+	//    summary to keep cost/latency sane.
+	var qaSources []nlp.QASource
+	var sourceNames []string
+
+	for i, f := range relevantFiles {
+		if i >= 3 {
+			break
+		}
+		var content string
+		if i == 0 {
+			// Top hit: always re-extract the full PDF live
+			if data, derr := s.drive.GetLocalFileData(f.ID); derr == nil && len(data) > 0 {
+				log.Printf("[QA] full-document extract for top hit: %s (%d bytes)", f.FileName, len(data))
+				extracted, summary := s.classifier.ExtractContent(f.FileName, f.MimeType, f.FileSize, data)
+				if extracted != "" {
+					content = extracted
+					_ = s.store.UpdateFileContent(f.ID, extracted, summary)
+				}
+			}
+		}
+		// Fallback / non-top: use cached extracted_content
+		if content == "" {
+			if cached := s.store.GetFileExtractedContent([]int64{f.ID})[f.ID]; cached != "" {
+				content = cached
+			}
+		}
+		// Lazy fallback: cached content empty → try a one-time extract
+		if content == "" {
+			if data, derr := s.drive.GetLocalFileData(f.ID); derr == nil && len(data) > 0 {
+				log.Printf("[QA] lazy-extracting %s (%d bytes)", f.FileName, len(data))
+				extracted, summary := s.classifier.ExtractContent(f.FileName, f.MimeType, f.FileSize, data)
+				if extracted != "" {
+					_ = s.store.UpdateFileContent(f.ID, extracted, summary)
+					content = extracted
+				}
+			}
+		}
+		if content == "" {
+			continue
+		}
+		qaSources = append(qaSources, nlp.QASource{
+			FileName:   f.FileName,
+			Content:    content,
+			SenderName: f.SharedByName,
+			Subject:    f.Subject,
+			SharedAt:   f.CreatedAt,
+		})
+		sourceNames = append(sourceNames, f.FileName)
+	}
+
+	// 4. Drive-only hits: download the top 2 matching PDFs and extract live.
+	if len(qaSources) < 3 {
+		needed := 3 - len(qaSources)
+		if needed > 2 {
+			needed = 2 // hard cap to control cost/latency
+		}
+		driveContent := s.downloadDriveMatchesForQA(groupIDs, driveMatches, needed)
+		for i, m := range driveMatches {
+			if i >= needed {
+				break
+			}
+			content := driveContent[m.FolderName+"/"+m.FileName]
+			if content == "" {
+				continue
+			}
+			qaSources = append(qaSources, nlp.QASource{
+				FileName: m.FolderName + "/" + m.FileName,
+				Content:  content,
+				Subject:  m.FolderName,
+			})
+			sourceNames = append(sourceNames, m.FileName)
+		}
+	}
+
+	if len(qaSources) == 0 {
+		// Last resort: at least mention any drive matches by name
+		if len(driveMatches) > 0 {
+			var hint strings.Builder
+			hint.WriteString("I couldn't read inside any notes for that, but I found these files in your Drive that might be relevant:\n")
+			for i, m := range driveMatches {
+				if i >= 5 {
+					break
+				}
+				hint.WriteString(fmt.Sprintf("• %s — in %s/\n", m.FileName, m.FolderName))
+			}
+			json.NewEncoder(w).Encode(models.NotesQAResponse{
+				Answer:       hint.String(),
+				Sources:      []string{},
+				DriveSources: driveMatches,
+				Question:     req.Question,
+			})
+			return
+		}
 		json.NewEncoder(w).Encode(models.NotesQAResponse{
-			Answer:   "I couldn't find any relevant notes to answer that question. Make sure files have been shared in your groups.",
+			Answer:   "I couldn't find any relevant notes to answer that question. Make sure files have been shared in your groups or organised in your Drive folder.",
 			Sources:  []string{},
 			Question: req.Question,
 		})
 		return
 	}
 
-	// Gather file contents
-	var fileIDs []int64
-	for _, f := range relevantFiles {
-		fileIDs = append(fileIDs, f.ID)
-	}
-	contentMap := s.store.GetFileExtractedContent(fileIDs)
-
-	// Build content for LLM
-	fileContents := make(map[string]string)
-	var sources []string
-	for _, f := range relevantFiles {
-		content := contentMap[f.ID]
-		if content == "" {
-			content = fmt.Sprintf("File: %s, Subject: %s, Size: %d bytes, Shared by: %s",
-				f.FileName, f.Subject, f.FileSize, f.SharedByName)
-		}
-		fileContents[f.FileName] = content
-		sources = append(sources, f.FileName)
-	}
-
-	answer := s.classifier.AnswerFromNotes(req.Question, fileContents)
+	answer := s.classifier.AnswerFromNotes(req.Question, qaSources)
 
 	json.NewEncoder(w).Encode(models.NotesQAResponse{
-		Answer:   answer,
-		Sources:  sources,
-		Question: req.Question,
+		Answer:       answer,
+		Sources:      sourceNames,
+		DriveSources: driveMatches,
+		Question:     req.Question,
 	})
 }
 

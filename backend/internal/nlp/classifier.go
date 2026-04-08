@@ -236,13 +236,18 @@ func (c *Classifier) ClassifyFileWithContent(fileName, mimeType string, fileData
 1. "content": detailed description of topics, concepts, chapters, key terms inside the document (max 800 chars). Read the actual document — do not guess from the filename.
 2. "summary": one-line summary (max 100 chars).
 3. "folder": classify into the best folder from: [%s]
-   - Strongly prefer an existing folder if one fits.
-   - If none fit, invent a clean 2–3 word Title Case folder name based on the document's actual subject.
-   - NEVER return "None", "Unsorted", "Unknown", "Misc", "Other" or any placeholder. Always pick or invent a real subject folder.
-4. "is_new": true if you invented the folder, false if it already exists.
-5. "confidence": 0.0–1.0.
 
-Use the sender, group, and time context as supporting signals (e.g. who tends to share which subject, recent exam season, etc.) but the document content is the primary signal.
+   STRICT folder rules:
+   - Use an existing folder ONLY if the document is unambiguously about that exact subject. "Close enough" or "topically adjacent" is NOT a match. Each university subject is its own folder.
+   - Examples of WRONG matches: putting CAED (Computer Aided Engineering Drawing) under "Engineering Science"; putting DBMS under "Computer Science"; putting Operating Systems under "Computer Networks"; putting a Compiler Design PDF under "Programming". These are DIFFERENT subjects — never lump them.
+   - Examples of CORRECT matches: a Compiler Design lab manual → existing "Compiler Design" folder; a DBMS PYQ → existing "DBMS" folder.
+   - If no existing folder is an exact subject match, INVENT a new clean 2–3 word Title Case folder named after the document's actual subject (e.g. "CAED", "Engineering Drawing", "Compiler Design", "Operating Systems"). Recognise common Indian engineering course codes as their own subject: CAED, ESC, BESC, BCS, BEC, BCSL, etc. — these are distinct subjects, not generic "Engineering".
+   - NEVER return "None", "Unsorted", "Unknown", "Misc", "Other", "General", "Engineering", "Science" or any vague umbrella. Always pick or invent a SPECIFIC subject folder.
+
+4. "is_new": true if you invented the folder, false if it already exists in the list above.
+5. "confidence": 0.0–1.0. Lower confidence (≤0.6) if you had to invent the folder or if the subject is ambiguous.
+
+Use the sender, group, and time context as supporting signals (e.g. who tends to share which subject, recent exam season) but the document content is the primary signal.
 
 Filename: "%s"%s
 
@@ -761,34 +766,227 @@ Respond ONLY with JSON, no other text:
 
 // ── Notes Q&A ──
 
-// AnswerFromNotes takes a question and relevant file content, asks the LLM for an answer
-func (c *Classifier) AnswerFromNotes(question string, fileContents map[string]string) string {
-	if !c.IsEnabled() || len(fileContents) == 0 {
+// QASource describes one piece of context (a file) for Notes Q&A — content
+// plus social/temporal metadata so the LLM can attribute its answer to a
+// specific person and time.
+type QASource struct {
+	FileName   string
+	Content    string
+	SenderName string
+	Subject    string
+	SharedAt   time.Time
+}
+
+// AnswerFromNotes takes a question + structured QA sources and asks the LLM
+// for an attributed answer. Sources include sender name, subject folder, and
+// shared-at timestamp so the answer can say "Mohit shared this PDF this
+// morning — the Wien bridge oscillator works as follows…".
+func (c *Classifier) AnswerFromNotes(question string, sources []QASource) string {
+	if !c.IsEnabled() || len(sources) == 0 {
 		return "I don't have enough content from your notes to answer that. Make sure files have been shared and extracted."
 	}
 
-	// Build context from file contents
 	var context strings.Builder
-	for fileName, content := range fileContents {
-		// Truncate each file's content to avoid token limits
-		if len(content) > 2000 {
-			content = content[:2000] + "..."
+	for i, src := range sources {
+		content := src.Content
+		// Allow much more content per source than before — modern Gemini handles 10k+ tokens easily.
+		if len(content) > 8000 {
+			content = content[:8000] + "..."
 		}
-		context.WriteString(fmt.Sprintf("=== %s ===\n%s\n\n", fileName, content))
+		context.WriteString(fmt.Sprintf("=== SOURCE %d: %s ===\n", i+1, src.FileName))
+		if src.SenderName != "" {
+			context.WriteString(fmt.Sprintf("Shared by: %s\n", src.SenderName))
+		}
+		if src.Subject != "" {
+			context.WriteString(fmt.Sprintf("Folder: %s\n", src.Subject))
+		}
+		if !src.SharedAt.IsZero() {
+			context.WriteString(fmt.Sprintf("Shared at: %s\n", src.SharedAt.Format("Mon 2006-01-02 15:04 MST")))
+		}
+		context.WriteString("Content:\n")
+		context.WriteString(content)
+		context.WriteString("\n\n")
 	}
 
-	prompt := fmt.Sprintf(`You are Reyna, a helpful study assistant. Answer the student's question based ONLY on the provided notes content. Be concise and helpful. If the notes don't contain enough information, say so.
+	prompt := fmt.Sprintf(`You are Reyna — a friendly study assistant living inside a WhatsApp study group. You help students find and understand things from notes their groupmates shared. You answer like a smart friend, not like a dry assistant.
 
-NOTES CONTENT:
+The student may write in ANY language: English, Hindi, Hinglish, Bhojpuri, Tamil, Kannada, Bengali, Marathi, Telugu, Malayalam, mixed-script, slang — anything. Always reply in the SAME language and tone they used. If they wrote Hinglish, reply Hinglish. If they wrote Bhojpuri, reply Bhojpuri.
+
+How to read the question — figure out what they actually want:
+- If they ask to "explain / samjhao / batao" — explain in your own words, structured and clear.
+- If they ask for "exact / verbatim / hubahu / actual definition / quote / drop kar do" — quote the relevant lines from the source word-for-word, in a code block or blockquote.
+- If they ask for a "summary / saar / short me batao" — give a tight bullet summary.
+- If they ask "kisne / who / kaun" or "kab / when" — answer with names/dates from the source metadata.
+- If they ask "kya bheja / what did X share" — list what the person shared with file names + dates.
+- If they're casual ("yo what was that thing about oscillators?") — be casual back.
+
+Source material rules:
+- Use ONLY the source content below. NEVER invent facts not in the sources.
+- ALWAYS cite which source you used. Format: "From %sshared by %s on %s, …" — use the real filename, sender, and shared-at time from the SOURCE blocks.
+- If multiple sources are relevant, weave them together with citations.
+- If the sources truly don't contain the answer, say so honestly and suggest a follow-up they could try (e.g. "I don't see that in Mohit's PDF — try asking about [something close that IS in there]").
+
+Formatting:
+- Use plain text with markdown — short paragraphs, bullets where helpful, **bold** for key terms, > blockquotes for direct quotes from a source.
+- Keep it under ~400 words unless they explicitly asked for full text.
+- Do NOT wrap your reply in any envelope or curly braces. Just write the answer directly.
+
+SOURCE MATERIAL:
 %s
 
-QUESTION: %s
+STUDENT QUESTION: %s
 
-Answer concisely (max 300 words):`, context.String(), question)
+Your answer:`, "", "", "", context.String(), question)
 
-	result, err := c.llm.Complete(prompt, 500)
+	result, err := c.llm.Complete(prompt, 1200)
 	if err != nil {
-		return "Sorry, I couldn't process that question right now. Try again."
+		return "Sorry, I couldn't process that question right now. Try again in a moment."
 	}
-	return strings.TrimSpace(result)
+	return cleanLLMReply(result)
+}
+
+// cleanLLMReply strips any accidental JSON envelope and code-fence wrappers
+// the model may have produced, leaving just the user-facing text.
+func cleanLLMReply(s string) string {
+	s = strings.TrimSpace(s)
+	// Strip ```json ... ``` or ``` ... ``` fences
+	if strings.HasPrefix(s, "```") {
+		s = strings.TrimPrefix(s, "```json")
+		s = strings.TrimPrefix(s, "```")
+		s = strings.TrimSuffix(s, "```")
+		s = strings.TrimSpace(s)
+	}
+	// If the whole thing is a JSON object with an "answer"/"reply"/"text" field,
+	// pull that field out. This is defensive — the prompt asks for plain text but
+	// the model occasionally still wraps.
+	if strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}") {
+		var obj map[string]interface{}
+		if err := json.Unmarshal([]byte(s), &obj); err == nil {
+			for _, key := range []string{"answer", "reply", "response", "text", "output", "result", "message"} {
+				if v, ok := obj[key]; ok {
+					if str, ok := v.(string); ok && str != "" {
+						return strings.TrimSpace(str)
+					}
+				}
+			}
+		}
+	}
+	return s
+}
+
+// GenerateRetrievalReply asks Gemini to write a natural-language summary of
+// retrieval results. This replaces the old template-string buildNLPReply with
+// a conversational, multi-language, intent-aware response. Falls back to a
+// simple template if the LLM call fails.
+func (c *Classifier) GenerateRetrievalReply(rawQuery, who, what, when, why string, files []RetrievalFile, driveMatches []RetrievalFile) string {
+	if !c.IsEnabled() {
+		return fallbackRetrievalReply(rawQuery, files, driveMatches, who, what, when)
+	}
+
+	var ctx strings.Builder
+	if len(files) > 0 {
+		ctx.WriteString("FILES FOUND IN REYNA'S DATABASE (captured from WhatsApp groups):\n")
+		for i, f := range files {
+			if i >= 8 {
+				ctx.WriteString(fmt.Sprintf("...and %d more\n", len(files)-8))
+				break
+			}
+			ctx.WriteString(fmt.Sprintf("- %s | folder: %s | sender: %s | shared: %s | summary: %s\n",
+				f.Name, f.Folder, f.Sender, f.SharedAt, f.Summary))
+		}
+		ctx.WriteString("\n")
+	}
+	if len(driveMatches) > 0 {
+		ctx.WriteString("FILES ALREADY ORGANIZED IN GOOGLE DRIVE (not captured by bot):\n")
+		for i, m := range driveMatches {
+			if i >= 8 {
+				ctx.WriteString(fmt.Sprintf("...and %d more\n", len(driveMatches)-8))
+				break
+			}
+			ctx.WriteString(fmt.Sprintf("- %s | drive folder: %s\n", m.Name, m.Folder))
+		}
+		ctx.WriteString("\n")
+	}
+	if len(files) == 0 && len(driveMatches) == 0 {
+		ctx.WriteString("(no matching files found in database or Drive)\n")
+	}
+
+	prompt := fmt.Sprintf(`You are Reyna — a smart, friendly study assistant inside a WhatsApp study group. The student just searched their notes. Write a natural, conversational reply describing what was found.
+
+The student may write in ANY language (English, Hindi, Hinglish, Bhojpuri, Tamil, etc.) — reply in the SAME language and tone.
+
+Read the original query to understand intent:
+- "find / dhundo / dikhao" → list the files clearly
+- "kya bheja / what did X share" → list with sender + time
+- "do we have / hai kya" → confirm yes/no, then list
+- "what's new / kuch naya" → recency-focused list
+- Activity-check questions → confirm with names + counts
+If results are empty, say so honestly and suggest a different phrasing or topic.
+
+Formatting:
+- Plain text with light markdown — bullets, **bold** for filenames, short paragraphs.
+- Show sender names + relative times ("this morning", "yesterday", "2 days ago") when useful.
+- Mention if a file is from "Drive" vs "shared in WhatsApp".
+- Under 200 words. No envelopes, no curly braces — just write the reply.
+
+ORIGINAL QUERY: %s
+PARSED — who:%s what:%s when:%s why:%s
+
+%s
+Your reply:`, rawQuery, who, what, when, why, ctx.String())
+
+	result, err := c.llm.Complete(prompt, 600)
+	if err != nil || result == "" {
+		return fallbackRetrievalReply(rawQuery, files, driveMatches, who, what, when)
+	}
+	return cleanLLMReply(result)
+}
+
+// RetrievalFile is a flattened view of either a DB file or a Drive match for
+// passing into GenerateRetrievalReply without coupling to models.File.
+type RetrievalFile struct {
+	Name     string
+	Folder   string
+	Sender   string
+	SharedAt string
+	Summary  string
+}
+
+func fallbackRetrievalReply(rawQuery string, files, driveMatches []RetrievalFile, who, what, when string) string {
+	if len(files) == 0 && len(driveMatches) == 0 {
+		msg := "Couldn't find anything matching that"
+		if who != "" {
+			msg += " from " + who
+		}
+		if what != "" {
+			msg += " about \"" + what + "\""
+		}
+		return msg + ". Try rephrasing or being more specific."
+	}
+	var b strings.Builder
+	if len(files) > 0 {
+		b.WriteString(fmt.Sprintf("Found %d file(s) shared in your groups:\n", len(files)))
+		for i, f := range files {
+			if i >= 5 {
+				b.WriteString(fmt.Sprintf("...and %d more\n", len(files)-5))
+				break
+			}
+			b.WriteString(fmt.Sprintf("• **%s** — %s", f.Name, f.Folder))
+			if f.Sender != "" {
+				b.WriteString(" (by " + f.Sender + ")")
+			}
+			b.WriteString("\n")
+		}
+	}
+	if len(driveMatches) > 0 {
+		b.WriteString(fmt.Sprintf("\nPlus %d already in your Drive:\n", len(driveMatches)))
+		for i, m := range driveMatches {
+			if i >= 5 {
+				b.WriteString(fmt.Sprintf("...and %d more\n", len(driveMatches)-5))
+				break
+			}
+			b.WriteString(fmt.Sprintf("• **%s** — in %s/\n", m.Name, m.Folder))
+		}
+	}
+	return b.String()
 }
