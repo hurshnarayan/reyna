@@ -176,6 +176,125 @@ type FileMeta struct {
 	SharedAt    time.Time
 }
 
+// snapToExistingFolder takes the folder name the LLM produced and the list of
+// folders that already exist, and returns the existing folder if it's a near-
+// match (90% token overlap, or one is a strict subset of the other). Stops
+// the LLM from inventing "C Programming Lab" when "C Programming Laboratory"
+// already exists, "Python Programming" vs "Python Programming Lab", etc.
+func snapToExistingFolder(suggestion string, existing []string) string {
+	if suggestion == "" || len(existing) == 0 {
+		return suggestion
+	}
+	suggLower := strings.ToLower(strings.TrimSpace(suggestion))
+	suggTokens := folderTokens(suggLower)
+	if len(suggTokens) == 0 {
+		return suggestion
+	}
+
+	bestExisting := ""
+	bestScore := 0.0
+	for _, ex := range existing {
+		exLower := strings.ToLower(strings.TrimSpace(ex))
+		if exLower == suggLower {
+			return ex // exact match (case-insensitive)
+		}
+		exTokens := folderTokens(exLower)
+		if len(exTokens) == 0 {
+			continue
+		}
+		// Strict subset check: every token of one is in the other → very strong signal
+		if isSubset(suggTokens, exTokens) || isSubset(exTokens, suggTokens) {
+			return ex
+		}
+		// Jaccard similarity over significant tokens
+		score := jaccard(suggTokens, exTokens)
+		if score > bestScore {
+			bestScore = score
+			bestExisting = ex
+		}
+	}
+	// Snap if the best match has >= 60% token overlap. This catches cases like
+	// "Python Programming" vs "Python Programming Modules" (Jaccard ~0.66) or
+	// "DBMS Notes" vs "DBMS" (Jaccard 0.5 → not snapped, but the subset check
+	// above would catch it first).
+	if bestScore >= 0.6 && bestExisting != "" {
+		log.Printf("[FOLDER-SNAP] %q → %q (jaccard=%.2f)", suggestion, bestExisting, bestScore)
+		return bestExisting
+	}
+	return suggestion
+}
+
+// folderTokens splits a folder name into significant lowercase tokens, dropping
+// noise words that don't carry subject identity (notes, notes, lab, etc. are
+// kept because they DO matter — but pure connectives like "the", "and", "of"
+// are dropped).
+func folderTokens(name string) []string {
+	noise := map[string]bool{
+		"the": true, "and": true, "of": true, "for": true, "in": true,
+		"a": true, "an": true, "to": true, "with": true, "&": true,
+	}
+	cleaned := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return ' '
+	}, name)
+	var out []string
+	seen := map[string]bool{}
+	for _, tok := range strings.Fields(cleaned) {
+		if len(tok) < 2 || noise[tok] || seen[tok] {
+			continue
+		}
+		seen[tok] = true
+		out = append(out, tok)
+	}
+	return out
+}
+
+// isSubset returns true if every token of `a` appears in `b`.
+func isSubset(a, b []string) bool {
+	if len(a) == 0 || len(a) > len(b) {
+		return false
+	}
+	bset := map[string]bool{}
+	for _, t := range b {
+		bset[t] = true
+	}
+	for _, t := range a {
+		if !bset[t] {
+			return false
+		}
+	}
+	return true
+}
+
+// jaccard returns the Jaccard similarity (|intersection| / |union|) between
+// two token sets.
+func jaccard(a, b []string) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	aset := map[string]bool{}
+	for _, t := range a {
+		aset[t] = true
+	}
+	bset := map[string]bool{}
+	for _, t := range b {
+		bset[t] = true
+	}
+	intersection := 0
+	for t := range aset {
+		if bset[t] {
+			intersection++
+		}
+	}
+	union := len(aset) + len(bset) - intersection
+	if union == 0 {
+		return 0
+	}
+	return float64(intersection) / float64(union)
+}
+
 // isValidFolder rejects junk folder names the LLM sometimes echoes back from
 // the prompt's empty-list placeholder. Anything matching is treated as "no
 // classification" so the caller falls through to filename-based guessing.
@@ -286,6 +405,14 @@ Respond ONLY with JSON:
 				}
 				result = llm.CleanJSON(result)
 				if jerr := json.Unmarshal([]byte(result), &resp); jerr == nil && isValidFolder(resp.Folder) {
+					// Snap to a near-matching existing folder if one exists
+					// — stops the LLM from inventing "C Programming Lab"
+					// when "C Programming Laboratory" already exists.
+					snapped := snapToExistingFolder(resp.Folder, existingFolders)
+					if snapped != resp.Folder {
+						resp.Folder = snapped
+						resp.IsNew = false
+					}
 					log.Printf("[NLP] Combined extract+classify: %s → %s (%.0f%%) [sender=%s]", fileName, resp.Folder, resp.Confidence*100, meta.SenderName)
 					return resp.Folder, resp.IsNew, resp.Confidence, resp.Content, resp.Summary
 				} else if jerr != nil {
@@ -370,6 +497,12 @@ Respond ONLY with JSON:
 	if !isValidFolder(resp.Folder) {
 		return "", false, 0, ""
 	}
+	// Snap to a near-matching existing folder if one exists.
+	snapped := snapToExistingFolder(resp.Folder, existingFolders)
+	if snapped != resp.Folder {
+		resp.Folder = snapped
+		resp.IsNew = false
+	}
 	return resp.Folder, resp.IsNew, resp.Confidence, resp.Summary
 }
 
@@ -429,6 +562,11 @@ Respond ONLY with a JSON object, no other text:
 
 	if !isValidFolder(resp.Folder) {
 		return guessFolderFromFilename(fileName), true, 0.3
+	}
+	// Snap to a near-matching existing folder if one exists.
+	snapped := snapToExistingFolder(resp.Folder, existingFolders)
+	if snapped != resp.Folder {
+		return snapped, false, resp.Confidence
 	}
 	return resp.Folder, resp.IsNew, resp.Confidence
 }

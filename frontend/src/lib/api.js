@@ -107,8 +107,14 @@ export const api = {
   // v3 — NLP Conversational Retrieval
   nlpRetrieve: (query, groupWaId) => req('/nlp/retrieve', { method: 'POST', body: JSON.stringify({ query, group_wa_id: groupWaId || '' }) }),
 
-  // v3 — Notes Q&A
-  notesQA: (question, groupWaId) => req('/nlp/qa', { method: 'POST', body: JSON.stringify({ question, group_wa_id: groupWaId || '' }) }),
+  // v3 — Notes Q&A (with optional follow-up turn for multi-turn conversations)
+  notesQA: (question, groupWaId, prev) => req('/nlp/qa', { method: 'POST', body: JSON.stringify({
+    question,
+    group_wa_id: groupWaId || '',
+    previous_question: prev?.question || '',
+    previous_answer: prev?.answer || '',
+    previous_sources: prev?.sources || [],
+  }) }),
 
   // v3 — LLM Status
   llmStatus: () => req('/llm/status'),

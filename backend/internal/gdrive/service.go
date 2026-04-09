@@ -244,7 +244,44 @@ func (s *Service) UploadFileToDrive(token, folderID, fileName, mimeType string, 
 	defer resp.Body.Close()
 	var r struct{ ID string `json:"id"` }
 	json.NewDecoder(resp.Body).Decode(&r)
+	if r.ID != "" {
+		// Best-effort: make the file publicly viewable via link so the
+		// bot's "drop a link in chat" feature works without recipients
+		// having to request access. Failures are non-fatal.
+		if err := s.MakeFilePublic(token, r.ID); err != nil {
+			// log via fmt to avoid an extra import
+			fmt.Printf("[DRIVE] make public failed for %s: %v\n", r.ID, err)
+		}
+	}
 	return r.ID, nil
+}
+
+// MakeFilePublic sets a Drive file's permissions so anyone with the link can
+// view it (role=reader, type=anyone). This is what makes the bot-dropped
+// drive.google.com/file/d/{id}/view links work for friends without them
+// needing to request access. Idempotent — calling on an already-public file
+// is harmless.
+func (s *Service) MakeFilePublic(token, fileID string) error {
+	body := []byte(`{"role":"reader","type":"anyone"}`)
+	req, err := http.NewRequest("POST",
+		fmt.Sprintf("https://www.googleapis.com/drive/v3/files/%s/permissions", fileID),
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		raw, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("permissions API %d: %s", resp.StatusCode, string(raw))
+	}
+	return nil
 }
 
 func (s *Service) DownloadFromDrive(token, fileID string) ([]byte, error) {

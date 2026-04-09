@@ -35,25 +35,68 @@ function getDmContext(phone) {
   return dmContext.get(phone) || null;
 }
 
-// botSentIds tracks the message IDs of replies the bot itself sent. When the
-// bot is linked to the user's own WhatsApp account, those replies arrive back
-// in the messages.upsert stream with fromMe=true; we skip them by ID to
-// avoid self-echo loops while still allowing the linked user to actually DM
-// the bot in their own chat.
-const botSentIds = new Set();
-function rememberSentId(id) {
-  if (!id) return;
-  botSentIds.add(id);
-  setTimeout(() => botSentIds.delete(id), 5 * 60 * 1000);
+// hasWakeWord returns true if the message begins with a Reyna wake word.
+// In private DMs Reyna only responds when explicitly addressed (or a recent
+// active session is in progress — see ACTIVE_SESSION_TTL).
+function hasWakeWord(text) {
+  const t = text.toLowerCase().trim();
+  return t.startsWith('reyna') || t.startsWith('@reyna') || t.startsWith('hey reyna');
 }
 
-// dmSend wraps sock.sendMessage so we capture the outgoing message ID. Only
-// used inside handleDM — group replies don't need this because group replies
-// have a different fromMe semantic.
+// activeSessions tracks senders who recently received a reply from Reyna.
+// While a session is active, follow-up messages from that sender are
+// processed WITHOUT requiring the "reyna" wake word — so things like "1",
+// "the second one", "in simpler words", "tell me more" Just Work.
+const ACTIVE_SESSION_TTL = 10 * 60 * 1000; // 10 minutes
+const activeSessions = new Map(); // senderJid → lastReplyTs
+function markSessionActive(jid) { activeSessions.set(jid, Date.now()); }
+function isSessionActive(jid) {
+  const ts = activeSessions.get(jid);
+  if (!ts) return false;
+  if (Date.now() - ts > ACTIVE_SESSION_TTL) {
+    activeSessions.delete(jid);
+    return false;
+  }
+  return true;
+}
+
+// stripWakeWord removes the leading wake word + any trailing punctuation so
+// the rest of the message can be processed as the actual query.
+function stripWakeWord(text) {
+  let t = text.trim();
+  for (const prefix of ['hey reyna,', 'hey reyna', '@reyna,', '@reyna', 'reyna,', 'reyna:', 'reyna']) {
+    if (t.toLowerCase().startsWith(prefix)) {
+      t = t.slice(prefix.length).trim();
+      t = t.replace(/^[,:\-\s]+/, '');
+      return t;
+    }
+  }
+  return t;
+}
+
+// BOT_MARK is an invisible zero-width-space prefix the bot stamps on all
+// outgoing DM text replies. The bot is typically linked to the user's own
+// WhatsApp account, so when our reply echoes back through messages.upsert
+// it arrives with fromMe=true — same as the user typing in their own chat.
+// We can't tell them apart by fromMe alone, so we tag our own outgoing
+// messages with this invisible marker. Anything fromMe that starts with
+// the marker is OUR reply and gets skipped; anything else fromMe is the
+// linked user actually typing and gets processed normally.
+const BOT_MARK = '\u200B';
+function tagOutgoing(payload) {
+  if (payload && typeof payload.text === 'string' && !payload.text.startsWith(BOT_MARK)) {
+    return { ...payload, text: BOT_MARK + payload.text };
+  }
+  return payload;
+}
+function isBotEcho(text) {
+  return typeof text === 'string' && text.startsWith(BOT_MARK);
+}
+
+// dmSend wraps sock.sendMessage and tags the outgoing text with BOT_MARK so
+// the inbound echo of our own reply can be recognised and ignored.
 async function dmSend(sock, chat, payload) {
-  const sent = await sock.sendMessage(chat, payload);
-  if (sent?.key?.id) rememberSentId(sent.key.id);
-  return sent;
+  return sock.sendMessage(chat, tagOutgoing(payload));
 }
 
 // botOwnerPhone is the linked WhatsApp account's phone number — i.e. the
@@ -499,9 +542,31 @@ async function handleDM(sock, msg) {
   const chat = msg.key.remoteJid; // user's @s.whatsapp.net OR @lid JID
   let senderPhone = phoneFromJid(chat);
   const pushName = msg.pushName || '';
-  const text = (msg.message?.conversation || msg.message?.extendedTextMessage?.text || '').trim();
+  let rawText = (msg.message?.conversation || msg.message?.extendedTextMessage?.text || '').trim();
 
-  if (!text) return; // ignore non-text DMs (stickers, status etc.) for now
+  if (!rawText) return; // ignore non-text DMs (stickers, status etc.)
+  // Defensive: skip our own bot echoes that survived the top-level filter
+  if (isBotEcho(rawText)) return;
+
+  // Wake-word gate (with session continuation) — Reyna requires the "reyna"
+  // wake word to START a conversation, but for the next 10 minutes after a
+  // reply, the same sender can send follow-ups WITHOUT the wake word. This
+  // makes "1" / "second one" / "in simpler words" / "tell me more" work
+  // naturally without spamming strangers who randomly DM the linked number.
+  let text = rawText;
+  if (hasWakeWord(rawText)) {
+    text = stripWakeWord(rawText);
+  } else if (!isSessionActive(chat)) {
+    return; // no wake word, no active session → silent ignore
+  }
+  if (!text) {
+    // Bare "reyna" with no content — send a friendly greeting so the user
+    // knows the bot is reachable.
+    await dmSend(sock, chat, {
+      text: '👋 Hey! Ask me anything about your shared notes — I can find files, summarise them, or answer questions.\n\nExample: *reyna find notes by srikar* or *reyna explain wien bridge oscillator*',
+    });
+    return;
+  }
 
   // For @lid (hidden number) JIDs, phoneFromJid may return garbage. Fall back
   // to using the JID itself as the identity key — backend will treat it as
@@ -513,20 +578,11 @@ async function handleDM(sock, msg) {
 
   console.log(`  [DM] ${pushName || senderPhone}: ${text}`);
 
-  // ── INSTANT ACK ──
-  // Let the user know we got the message before we start the (sometimes
-  // slow) backend round-trip. A WhatsApp reaction is faster and quieter
-  // than a text message; fall back to a text "_just a moment..._" if
-  // reactions fail (some chats / older clients reject them).
-  let ackedWithReaction = false;
-  try {
-    await sock.sendMessage(chat, { react: { text: '👀', key: msg.key } });
-    ackedWithReaction = true;
-  } catch {}
-  let typingMsg = null;
-  if (!ackedWithReaction) {
-    typingMsg = await dmSend(sock, chat, { text: '👀 _just a moment..._' });
-  }
+  // ── Visible "thinking" indicator ──
+  // Send a real text message (not just a reaction) so the user clearly sees
+  // Reyna is processing. The thinking message stays in the chat — no edits
+  // or deletions, since Baileys' edit/delete reliability is hit-or-miss.
+  await dmSend(sock, chat, { text: '🔍 _looking through your notes..._' });
 
   // Use the BOT OWNER'S phone for backend group-resolution. The DM sender
   // (a friend) almost certainly isn't a member of the dashboard owner's
@@ -543,7 +599,7 @@ async function handleDM(sock, msg) {
     const url = driveViewUrl(f.drive_file_id);
     if (url) {
       await dmSend(sock, chat, {
-        text: `📎 *${f.file_name}*${f.shared_by_name ? ` — shared by ${f.shared_by_name}` : ''}\n${url}`,
+        text: `📎 *${f.file_name}*${f.shared_by_name ? ` — shared by ${f.shared_by_name}` : ''}\n${url}\n\n_ask me anything about this file — I can summarise, explain, or quote from it._`,
       });
     } else {
       await dmSend(sock, chat, {
@@ -557,6 +613,7 @@ async function handleDM(sock, msg) {
       lastIntent: 'retrieve',
       ts: Date.now(),
     });
+    markSessionActive(chat);
     return;
   }
 
@@ -609,6 +666,7 @@ async function handleDM(sock, msg) {
       lastIntent: 'qa',
       lastQA: { question: text, answer: resp.answer || '', sources: resp.sources || [] },
     });
+    markSessionActive(chat);
     return;
   }
 
@@ -652,6 +710,7 @@ async function handleDM(sock, msg) {
     lastReply: reply,
     lastIntent: 'retrieve',
   });
+  markSessionActive(chat);
 }
 
 // looksLikeFollowup returns true if a message reads like a refinement of a
@@ -700,28 +759,21 @@ async function handleMessage(sock, msg) {
   const chat = msg.key.remoteJid;
   if (!chat) return;
 
-  // Diagnostic — log every incoming message JID + fromMe so we can see
-  // exactly what WhatsApp is delivering. Remove once DM routing is stable.
-  const previewText = (msg.message?.conversation || msg.message?.extendedTextMessage?.text || '').slice(0, 60);
-  if (previewText) {
-    console.log(`  [MSG] chat=${chat} fromMe=${msg.key.fromMe} text=${JSON.stringify(previewText)}`);
-  }
+  const isGroup = chat.endsWith('@g.us');
 
   // ── 1:1 DM branch — Reyna acts as a personal assistant ──
   // Catches both @s.whatsapp.net (canonical phone JIDs) and @lid (hidden /
-  // PN-protected accounts that WhatsApp now uses for many DMs). Anything
-  // that's not a group goes here.
-  // We ALLOW fromMe in DMs because the bot is linked to the user's own
-  // WhatsApp account — when the linked user types in their own "Reyna chat",
-  // every message is technically fromMe. We skip only the bot's own outgoing
-  // replies via the botSentIds set to prevent self-echo loops.
-  const isGroup = chat.endsWith('@g.us');
+  // PN-protected accounts that WhatsApp now uses for many DMs).
+  // We allow fromMe in DMs so the linked user can DM their own bot, but
+  // first we skip self-echoes by checking the BOT_MARK prefix on the text.
   if (!isGroup) {
-    if (msg.key.fromMe && botSentIds.has(msg.key.id)) return; // our own reply, ignore
+    const incoming = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
+    if (msg.key.fromMe && isBotEcho(incoming)) return; // our own reply, ignore
     return handleDM(sock, msg);
   }
 
-  // For groups, the original fromMe filter applies
+  // For groups, fromMe is always skipped (group bots don't reply to themselves
+  // and the linked user shouldn't be replied to in groups).
   if (msg.key.fromMe) return;
 
   const sender = msg.key.participant || chat;

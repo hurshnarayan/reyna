@@ -656,17 +656,38 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 	// v3: Use combined extract+classify for PDFs (collapses Agents 1 & 2)
 	var extractedContent, contentSummary string
 	if subject == "" {
+		// Build the candidate folder list. Two sources, deduped:
+		//   1. Subjects already used in THIS group's DB rows (covers folders
+		//      created in the last few seconds that Drive might not surface
+		//      yet — eventual consistency).
+		//   2. Live subfolders under the user's Drive root.
+		// Both feed the same `existingFolders` list so the LLM (and the
+		// post-LLM snapToExistingFolder normalization) always considers them.
+		seen := map[string]bool{}
 		var existingFolders []string
+		for _, sub := range s.store.DistinctSubjectsForGroup(groupID) {
+			if sub == "" || seen[sub] {
+				continue
+			}
+			seen[sub] = true
+			existingFolders = append(existingFolders, sub)
+		}
 		driveUser := s.store.FindDriveConnectedUser(groupID)
 		if driveUser != nil && driveUser.GoogleRefresh != "" && driveUser.DriveRootID != "" {
 			token, terr := s.drive.GetValidToken(driveUser.GoogleToken, driveUser.GoogleRefresh, 0)
 			if terr == nil {
 				folders, _ := s.drive.ListDriveFolders(token, driveUser.DriveRootID)
 				for _, f := range folders {
-					existingFolders = append(existingFolders, f["name"])
+					name := f["name"]
+					if name == "" || seen[name] {
+						continue
+					}
+					seen[name] = true
+					existingFolders = append(existingFolders, name)
 				}
 			}
 		}
+		log.Printf("[CLASSIFY] candidate folders for group %d: %v", groupID, existingFolders)
 		// Try content-based classify+extract in one LLM call.
 		// PDFs go via inline doc API; DOCX/PPTX/XLSX get text-extracted from
 		// their zip payload first; everything else falls back to filename-only

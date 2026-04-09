@@ -106,10 +106,14 @@ export default function Search() {
   // NLP state
   const [nlpParsed, setNlpParsed] = useState(null)
   const [nlpReply, setNlpReply] = useState('')
-  // Q&A state
-  const [qaAnswer, setQaAnswer] = useState(null)
-  const [qaHistory, setQaHistory] = useState([])
+  // Q&A state — multi-turn conversation. Each turn = { question, answer, sources, ts }.
+  // The newest turn is always at the END so the chat thread reads top-to-bottom.
+  const [qaConversation, setQaConversation] = useState([])
   const [llmStatus, setLlmStatus] = useState(null)
+  const qaEndRef = useRef(null)
+  useEffect(() => {
+    if (qaEndRef.current) qaEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [qaConversation])
 
   const inputRef = useRef(null)
   const debounceRef = useRef(null)
@@ -132,16 +136,64 @@ export default function Search() {
     setLoading(false); notify.hideLoader()
   }
 
+  // doQA appends a new turn to the conversation. If there's a recent prior
+  // turn (within 30 min) AND the new question looks like a follow-up — short,
+  // pronoun-led, refinement words, multi-language follow-up cues — we pass
+  // the previous turn through to the backend so Gemini threads the answer.
+  // Otherwise it's treated as a fresh question.
+  const isQAFollowup = (text) => {
+    const t = text.toLowerCase().trim()
+    if (t.length > 80) return false
+    const cues = [
+      'tell me more', 'more', 'elaborate', 'expand', 'continue', 'go on',
+      'what about', 'and ', 'also ', 'how about', 'what else', 'anything else',
+      'simpler', 'simply', 'in simple', 'asaan', 'easy', 'shorter', 'shorten', 'short me', 'briefly',
+      'longer', 'in detail', 'detailed', 'vistaar', 'aur', 'aur kya', 'kuch aur',
+      'example', 'examples', 'for example', 'udaharan',
+      'why', 'kyu', 'kyun', 'how', 'kaise',
+      'translate', 'in english', 'in hindi',
+      'that ', 'this ', 'it ',
+    ]
+    for (const c of cues) {
+      if (t === c.trim() || t.startsWith(c) || t.includes(' ' + c)) return true
+    }
+    return false
+  }
+
   const doQA = async (q) => {
     if (!q.trim()) return
-    setLoading(true); notify.showLoader(); setQaAnswer(null)
-    const resp = await api.notesQA(q.trim())
-    const entry = { question: q, answer: resp?.answer || 'No answer', sources: resp?.sources || [] }
-    setQaAnswer(entry)
-    setQaHistory(prev => [entry, ...prev])
-    setLoading(false); notify.hideLoader()
+    const question = q.trim()
+    setLoading(true); notify.showLoader()
+    // Decide whether to thread this as a follow-up
+    let prevTurn = null
+    if (qaConversation.length > 0) {
+      const last = qaConversation[qaConversation.length - 1]
+      const fresh = (Date.now() - (last.ts || 0)) < 30 * 60 * 1000
+      if (fresh && isQAFollowup(question)) {
+        prevTurn = { question: last.question, answer: last.answer, sources: last.sources }
+      }
+    }
+    // Optimistic placeholder so the user sees their question land instantly
+    const placeholder = { question, answer: '', sources: [], ts: Date.now(), pending: true }
+    setQaConversation(prev => [...prev, placeholder])
     setQuery('')
+
+    const resp = await api.notesQA(question, '', prevTurn)
+    const entry = {
+      question,
+      answer: resp?.answer || 'No answer',
+      sources: resp?.sources || [],
+      ts: Date.now(),
+    }
+    setQaConversation(prev => {
+      const copy = [...prev]
+      copy[copy.length - 1] = entry
+      return copy
+    })
+    setLoading(false); notify.hideLoader()
   }
+
+  const clearQA = () => { setQaConversation([]); setQuery('') }
 
   const fetchSuggestions = useCallback(async (q) => {
     if (!q.trim() || q.startsWith('/content:')) { setSuggestions([]); return }
@@ -198,7 +250,7 @@ export default function Search() {
   const confirmDelete = (f) => setDeleteTarget(f)
   const doDelete = async () => { if (!deleteTarget) return; setDeleting(true); await api.deleteFile(deleteTarget.id); notify.success(`Deleted ${deleteTarget.file_name}`); setDeleteTarget(null); setDeleting(false); doLiveSearch(query) }
 
-  const switchMode = (m) => { setMode(m); setResults(null); setNlpParsed(null); setNlpReply(''); setQaAnswer(null); setQuery(''); setSuggestions([]); setShowSuggestions(false) }
+  const switchMode = (m) => { setMode(m); setResults(null); setNlpParsed(null); setNlpReply(''); setQaConversation([]); setQuery(''); setSuggestions([]); setShowSuggestions(false) }
 
   const placeholders = {
     search: 'search files by name...',
@@ -245,50 +297,70 @@ export default function Search() {
       {/* Search bar */}
       <div style={{ position: 'relative', marginBottom: 28 }}>
         <div style={{ position: 'relative' }}>
-          <Fa icon={mode === 'qa' ? 'fa-graduation-cap' : mode === 'nlp' ? 'fa-comments' : icons.search} style={{ position: 'absolute', left: 14, top: 18, fontSize: 14, color: 'var(--sub-color)', pointerEvents: 'none' }} />
           {mode === 'search' ? (
-            <input ref={inputRef} value={query} onChange={handleChange} onKeyDown={handleKeyDown}
-              onFocus={() => suggestions.length > 0 && mode === 'search' && setShowSuggestions(true)}
-              onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-              placeholder={placeholders[mode]}
-              style={{
-                width: '100%', padding: '14px 14px 14px 40px', fontSize: 14,
-                background: '#fff', border: '1.5px solid #ccc', borderRadius: 'var(--roundness)',
-                color: 'var(--text-color)', outline: 'none', transition: 'border-color 0.15s',
-              }}
-              onFocusCapture={e => e.target.style.borderColor = '#2563eb'}
-              onBlurCapture={e => e.target.style.borderColor = '#ccc'}
-            />
+            <>
+              <Fa icon={icons.search} style={{ position: 'absolute', left: 18, top: 18, fontSize: 15, color: '#666', pointerEvents: 'none', zIndex: 1 }} />
+              <input ref={inputRef} value={query} onChange={handleChange} onKeyDown={handleKeyDown}
+                onFocus={() => suggestions.length > 0 && mode === 'search' && setShowSuggestions(true)}
+                onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+                placeholder={placeholders[mode]}
+                style={{
+                  width: '100%', padding: '16px 18px 16px 46px', fontSize: 15,
+                  background: '#fff', border: '1.5px solid #ccc', borderRadius: 'var(--roundness)',
+                  color: '#1a1a1a', outline: 'none', transition: 'border-color 0.15s',
+                  fontFamily: 'inherit',
+                }}
+                onFocusCapture={e => e.target.style.borderColor = '#2563eb'}
+                onBlurCapture={e => e.target.style.borderColor = '#ccc'}
+              />
+            </>
           ) : (
-            <textarea ref={inputRef} value={query} onChange={handleChange}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  if (mode === 'nlp') doNLPSearch(query); else doQA(query)
-                  return
-                }
-                handleKeyDown(e)
-              }}
-              onInput={(e) => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 320) + 'px' }}
-              rows={1}
-              placeholder={placeholders[mode]}
-              style={{
-                width: '100%', padding: '14px 110px 14px 40px', fontSize: 14,
-                background: '#fff', border: '1.5px solid #ccc', borderRadius: 'var(--roundness)',
-                color: 'var(--text-color)', outline: 'none', transition: 'border-color 0.15s',
-                resize: 'none', overflow: 'auto', minHeight: 50, maxHeight: 320,
-                fontFamily: 'inherit', lineHeight: 1.5,
-              }}
-              onFocusCapture={e => e.target.style.borderColor = '#2563eb'}
-              onBlurCapture={e => e.target.style.borderColor = '#ccc'}
-            />
-          )}
-          {/* Submit button for NLP/QA modes */}
-          {(mode === 'nlp' || mode === 'qa') && (
-            <button onClick={() => mode === 'nlp' ? doNLPSearch(query) : doQA(query)}
-              style={{ position: 'absolute', right: 6, top: 9, ...btnPrimary, padding: '6px 14px', fontSize: 12 }}>
-              <Fa icon={mode === 'qa' ? 'fa-paper-plane' : icons.search} style={{ fontSize: 10 }} /> {mode === 'qa' ? 'Ask' : 'Search'}
-            </button>
+            <div style={{
+              position: 'relative',
+              display: 'flex', alignItems: 'flex-end', gap: 10,
+              background: '#fff', border: '1.5px solid #ccc', borderRadius: 14,
+              padding: '12px 12px 12px 18px',
+              transition: 'border-color 0.15s',
+            }}
+              onFocusCapture={e => e.currentTarget.style.borderColor = '#2563eb'}
+              onBlurCapture={e => e.currentTarget.style.borderColor = '#ccc'}
+            >
+              <Fa icon={mode === 'qa' ? 'fa-graduation-cap' : 'fa-comments'} style={{ fontSize: 16, color: '#555', marginBottom: 8, flexShrink: 0 }} />
+              <textarea ref={inputRef} value={query} onChange={handleChange}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    if (mode === 'nlp') doNLPSearch(query); else doQA(query)
+                    return
+                  }
+                  handleKeyDown(e)
+                }}
+                onInput={(e) => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 280) + 'px' }}
+                rows={1}
+                placeholder={placeholders[mode]}
+                style={{
+                  flex: 1, minWidth: 0,
+                  padding: '6px 4px', fontSize: 15,
+                  background: 'transparent', border: 'none',
+                  color: '#1a1a1a', outline: 'none',
+                  resize: 'none',
+                  overflowY: 'hidden', // hide scrollbar — height auto-grows up to maxHeight
+                  minHeight: 24, maxHeight: 280,
+                  fontFamily: 'inherit', lineHeight: 1.55,
+                }}
+              />
+              <button onClick={() => mode === 'nlp' ? doNLPSearch(query) : doQA(query)}
+                disabled={!query.trim() || loading}
+                style={{
+                  ...btnPrimary,
+                  padding: '8px 16px', fontSize: 13,
+                  opacity: (!query.trim() || loading) ? 0.5 : 1,
+                  cursor: (!query.trim() || loading) ? 'not-allowed' : 'pointer',
+                  flexShrink: 0, alignSelf: 'flex-end',
+                }}>
+                <Fa icon={mode === 'qa' ? 'fa-paper-plane' : icons.search} style={{ fontSize: 11 }} /> {mode === 'qa' ? 'Ask' : 'Search'}
+              </button>
+            </div>
           )}
           {/* Autocomplete */}
           {showSuggestions && suggestions.length > 0 && mode === 'search' && (
@@ -311,7 +383,9 @@ export default function Search() {
             </div>
           )}
         </div>
-        {loading && <Fa icon={icons.loading} spin style={{ position: 'absolute', right: mode === 'search' ? 14 : 100, top: '50%', transform: 'translateY(-50%)', fontSize: 13, color: 'var(--sub-color)' }} />}
+        {loading && mode === 'search' && (
+          <Fa icon={icons.loading} spin style={{ position: 'absolute', right: 14, top: 18, fontSize: 13, color: 'var(--sub-color)' }} />
+        )}
       </div>
 
       {/* NLP parsed query display */}
@@ -340,35 +414,85 @@ export default function Search() {
         </div>
       )}
 
-      {/* Q&A answer display */}
-      {mode === 'qa' && qaAnswer && (
-        <div style={{ ...cardStyle, padding: '18px 22px', marginBottom: 20 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--reyna-accent)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Fa icon="fa-crown" style={{ fontSize: 11 }} /> Reyna
-          </div>
-          <div style={{ fontSize: 14, color: 'var(--text-color)' }}>
-            {renderMarkdown(cleanReply(qaAnswer.answer))}
-          </div>
-          {qaAnswer.sources.length > 0 && (
-            <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--card-border)', fontSize: 11, color: 'var(--sub-color)' }}>
-              <Fa icon={icons.file} style={{ fontSize: 9, marginRight: 4 }} />
-              Sources: {qaAnswer.sources.join(', ')}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Q&A history */}
-      {mode === 'qa' && qaHistory.length > 1 && (
+      {/* Q&A — multi-turn conversation thread */}
+      {mode === 'qa' && qaConversation.length > 0 && (
         <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--sub-color)', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 8 }}>Previous questions</div>
-          {qaHistory.slice(1, 4).map((h, i) => (
-            <div key={i} style={{ ...cardStyle, padding: '10px 14px', marginBottom: 6, fontSize: 12, cursor: 'pointer' }}
-              onClick={() => { setQuery(h.question); setQaAnswer(h) }}>
-              <strong>{h.question}</strong>
-              <div style={{ color: 'var(--sub-color)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.answer.slice(0, 100)}...</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--sub-color)', letterSpacing: 1, textTransform: 'uppercase' }}>
+              Conversation
+            </div>
+            <button onClick={clearQA} style={{
+              ...btnBase, fontSize: 11, padding: '4px 12px', color: 'var(--sub-color)',
+            }}>
+              <Fa icon="fa-arrow-rotate-left" style={{ fontSize: 9 }} /> new conversation
+            </button>
+          </div>
+          {qaConversation.map((turn, i) => (
+            <div key={i} style={{ marginBottom: 14 }}>
+              {/* user question bubble */}
+              <div style={{
+                background: 'rgba(37,211,102,0.10)',
+                border: '1px solid rgba(37,211,102,0.25)',
+                borderRadius: 14, padding: '10px 16px', marginBottom: 8,
+                maxWidth: '85%', marginLeft: 'auto',
+                fontSize: 14, color: '#1a1a1a', lineHeight: 1.55,
+                whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+              }}>
+                {turn.question}
+              </div>
+              {/* reyna answer bubble */}
+              <div style={{ ...cardStyle, padding: '14px 18px', maxWidth: '92%' }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--reyna-accent)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Fa icon="fa-crown" style={{ fontSize: 11 }} /> Reyna
+                </div>
+                {turn.pending ? (
+                  <div style={{ fontSize: 13, color: 'var(--sub-color)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Fa icon={icons.loading} spin style={{ fontSize: 12 }} /> thinking…
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 14, color: 'var(--text-color)' }}>
+                      {renderMarkdown(cleanReply(turn.answer))}
+                    </div>
+                    {turn.sources && turn.sources.length > 0 && (
+                      <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--card-border)', fontSize: 11, color: 'var(--sub-color)' }}>
+                        <Fa icon={icons.file} style={{ fontSize: 9, marginRight: 4 }} />
+                        sources: {turn.sources.join(', ')}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
           ))}
+          {/* Follow-up call-to-action — clearly tells the user they can keep asking */}
+          {qaConversation.length > 0 && !qaConversation[qaConversation.length - 1].pending && (
+            <div style={{
+              display: 'flex', gap: 8, marginTop: 4, marginBottom: 8, flexWrap: 'wrap',
+              alignItems: 'center',
+            }}>
+              <span style={{ fontSize: 11, color: 'var(--sub-color)', marginRight: 4 }}>
+                ask a follow-up:
+              </span>
+              {['tell me more', 'in simpler words', 'give an example', 'why?'].map(s => (
+                <button key={s} onClick={() => { setQuery(s); inputRef.current?.focus(); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+                  style={{
+                    padding: '4px 10px', background: '#fff', border: '1px solid #ddd',
+                    borderRadius: 14, fontSize: 11, cursor: 'pointer',
+                    color: '#555', fontWeight: 500,
+                  }}>{s}</button>
+              ))}
+              <button onClick={() => { inputRef.current?.focus(); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+                style={{
+                  padding: '4px 10px', background: 'var(--reyna-accent)', border: '1px solid var(--reyna-accent)',
+                  borderRadius: 14, fontSize: 11, cursor: 'pointer',
+                  color: '#fff', fontWeight: 600, marginLeft: 'auto',
+                }}>
+                <Fa icon="fa-arrow-up" style={{ fontSize: 9 }} /> ask another question
+              </button>
+            </div>
+          )}
+          <div ref={qaEndRef} />
         </div>
       )}
 

@@ -1043,6 +1043,33 @@ func (s *Store) UpdateFileDriveID(fileID int64, driveFileID, driveFolderID strin
 	return err
 }
 
+// DistinctSubjectsForGroup returns every distinct subject (folder name) that
+// has ever been used by files in this group. Used as the local-truth source
+// for the classifier's "existing folders" list, so a file uploaded right
+// after another similar one sees the just-created folder even if Drive's
+// API hasn't surfaced it yet.
+func (s *Store) DistinctSubjectsForGroup(groupID int64) []string {
+	if groupID == 0 {
+		return nil
+	}
+	rows, err := s.db.Query(
+		`SELECT DISTINCT subject FROM files WHERE group_id=? AND subject != '' AND status != 'deleted_in_drive'`,
+		groupID,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err == nil && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // FindFileByHash returns the most recent file in the group whose content hash
 // matches. Used for byte-identical duplicate detection on bot upload.
 func (s *Store) FindFileByHash(groupID int64, hash string) *models.File {
