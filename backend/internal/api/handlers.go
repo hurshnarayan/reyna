@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/reyna-bot/reyna-backend/internal/auth"
@@ -22,12 +23,22 @@ import (
 )
 
 type Server struct {
-	cfg        *config.Config
-	store      *db.Store
-	drive      *gdrive.Service
-	reyna      *reyna.Reyna
-	classifier *nlp.Classifier
-	mux        *http.ServeMux
+	cfg         *config.Config
+	store       *db.Store
+	drive       *gdrive.Service
+	reyna       *reyna.Reyna
+	classifier  *nlp.Classifier
+	mux         *http.ServeMux
+	uploadLocks sync.Map // groupID(int64) → *sync.Mutex — serializes bot uploads per-group to prevent race-condition duplicates
+}
+
+// uploadLockFor returns the per-group mutex used to serialize bot uploads.
+// Without this, six identical bot uploads arriving in the same millisecond
+// all pass the FindFileByHash check before any of them inserts, defeating
+// hash-based dedup.
+func (s *Server) uploadLockFor(groupID int64) *sync.Mutex {
+	mu, _ := s.uploadLocks.LoadOrStore(groupID, &sync.Mutex{})
+	return mu.(*sync.Mutex)
 }
 
 // looksLikePhoneOrLID checks if a string looks like a phone number or WhatsApp LID
@@ -598,6 +609,15 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 	if group != nil { s.store.AddGroupMember(group.ID, user.ID, userPhone, "member") }
 	groupID := int64(0)
 	if group != nil { groupID = group.ID }
+
+	// ── Per-group serialization lock ──
+	// Without this, simultaneous uploads of byte-identical files all pass the
+	// dedup check before any of them inserts, leading to N copies of the same
+	// file landing in the staging area. The lock makes the check + insert
+	// atomic for one group at a time.
+	uploadMu := s.uploadLockFor(groupID)
+	uploadMu.Lock()
+	defer uploadMu.Unlock()
 
 	// ── Dedup check: same hash already in this group? ──
 	if existing := s.store.FindFileByHash(groupID, contentHash); existing != nil {

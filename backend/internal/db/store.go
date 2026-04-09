@@ -131,6 +131,10 @@ func (s *Store) migrate() error {
 		`ALTER TABLE files ADD COLUMN content_hash TEXT DEFAULT ''`,
 		`CREATE INDEX IF NOT EXISTS idx_files_hash ON files(group_id, content_hash)`,
 		`CREATE INDEX IF NOT EXISTS idx_files_drive_id ON files(drive_file_id)`,
+		// Partial unique index — defense in depth against duplicate inserts
+		// even if the in-process upload mutex ever misses a race. Excludes
+		// rows with empty content_hash so historical rows aren't affected.
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_files_hash_unique ON files(group_id, content_hash) WHERE content_hash != ''`,
 	}
 	for _, m := range migrations {
 		s.db.Exec(m) // ignore errors if columns already exist
