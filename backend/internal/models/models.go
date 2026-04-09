@@ -246,9 +246,12 @@ type NLPParsedQuery struct {
 // ── Notes Q&A ──
 
 type NotesQARequest struct {
-	Question  string `json:"question"`
-	GroupWAID string `json:"group_wa_id"`
-	UserPhone string `json:"user_phone"`
+	Question         string   `json:"question"`
+	GroupWAID        string   `json:"group_wa_id"`
+	UserPhone        string   `json:"user_phone"`
+	PreviousQuestion string   `json:"previous_question,omitempty"`
+	PreviousAnswer   string   `json:"previous_answer,omitempty"`
+	PreviousSources  []string `json:"previous_sources,omitempty"`
 }
 
 type NotesQAResponse struct {

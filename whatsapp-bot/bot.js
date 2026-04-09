@@ -17,6 +17,97 @@ let enabledGroups = new Set();   // WA group JIDs that Reyna is active in
 let groupModes = new Map();      // groupJid → "auto" | "reaction"
 const groupFiles = new Map();    // groupJid → Map<msgId, fileInfo>
 
+// dmContext caches per-user conversation state for private DM follow-ups.
+// Keyed by senderPhone. Stores the most recent search results so messages
+// like "the second one", "send me that wien bridge file", "what about the
+// PYQ?" can resolve back to a concrete file without re-querying the LLM.
+const dmContext = new Map(); // senderPhone → { lastQuery, lastFiles, lastReply, ts }
+
+function setDmContext(phone, ctx) {
+  dmContext.set(phone, { ...ctx, ts: Date.now() });
+  // Auto-expire after 30 minutes
+  setTimeout(() => {
+    const c = dmContext.get(phone);
+    if (c && c.ts === ctx.ts) dmContext.delete(phone);
+  }, 30 * 60 * 1000);
+}
+function getDmContext(phone) {
+  return dmContext.get(phone) || null;
+}
+
+// botSentIds tracks the message IDs of replies the bot itself sent. When the
+// bot is linked to the user's own WhatsApp account, those replies arrive back
+// in the messages.upsert stream with fromMe=true; we skip them by ID to
+// avoid self-echo loops while still allowing the linked user to actually DM
+// the bot in their own chat.
+const botSentIds = new Set();
+function rememberSentId(id) {
+  if (!id) return;
+  botSentIds.add(id);
+  setTimeout(() => botSentIds.delete(id), 5 * 60 * 1000);
+}
+
+// dmSend wraps sock.sendMessage so we capture the outgoing message ID. Only
+// used inside handleDM — group replies don't need this because group replies
+// have a different fromMe semantic.
+async function dmSend(sock, chat, payload) {
+  const sent = await sock.sendMessage(chat, payload);
+  if (sent?.key?.id) rememberSentId(sent.key.id);
+  return sent;
+}
+
+// botOwnerPhone is the linked WhatsApp account's phone number — i.e. the
+// dashboard owner. We use this as the `user_phone` field in backend calls
+// from DMs so retrieval scopes to the OWNER'S groups, not the random DM
+// sender's groups (a friend who DMs the bot has no group membership).
+let botOwnerPhone = '';
+function setBotOwnerPhone(p) {
+  botOwnerPhone = p;
+  console.log(`  Bot owner phone: ${p}`);
+}
+
+function driveViewUrl(driveFileId) {
+  if (!driveFileId || driveFileId.startsWith('local_') || driveFileId.startsWith('meta_')) return null;
+  return `https://drive.google.com/file/d/${driveFileId}/view`;
+}
+
+// formatFilesForReply turns an array of file objects into a numbered markdown
+// list with Drive links. Used in DM responses so the user can click straight
+// through to the file.
+function formatFilesForReply(files, max = 5) {
+  if (!files || files.length === 0) return '';
+  const lines = [];
+  const slice = files.slice(0, max);
+  slice.forEach((f, i) => {
+    const url = driveViewUrl(f.drive_file_id);
+    const num = i + 1;
+    const sender = f.shared_by_name ? ` (by ${f.shared_by_name})` : '';
+    if (url) {
+      lines.push(`${num}. *${f.file_name}*${sender}\n   ${url}`);
+    } else {
+      lines.push(`${num}. *${f.file_name}*${sender}`);
+    }
+  });
+  if (files.length > max) lines.push(`...and ${files.length - max} more`);
+  return lines.join('\n');
+}
+
+// detectFollowupIndex parses messages like "send me the second one", "1",
+// "the third", "first" → returns a 0-based index, or -1 if not a follow-up.
+function detectFollowupIndex(text) {
+  const t = text.toLowerCase().trim().replace(/[?.,!]/g, '');
+  const wordMap = { first: 0, '1st': 0, one: 0, second: 1, '2nd': 1, two: 1,
+                    third: 2, '3rd': 2, three: 2, fourth: 3, '4th': 3, four: 3,
+                    fifth: 4, '5th': 4, five: 4 };
+  // Just a number
+  const num = parseInt(t, 10);
+  if (!isNaN(num) && num >= 1 && num <= 9) return num - 1;
+  for (const [w, idx] of Object.entries(wordMap)) {
+    if (t === w || t.includes(`the ${w}`) || t.includes(`${w} one`) || t.startsWith(w + ' ')) return idx;
+  }
+  return -1;
+}
+
 // ─── Backend API ───
 
 async function sendCommand(groupJid, command, userPhone, userName, extra) {
@@ -79,12 +170,18 @@ async function nlpRetrieve(groupJid, userPhone, query) {
   }
 }
 
-async function notesQA(groupJid, userPhone, question) {
+async function notesQA(groupJid, userPhone, question, prevTurn) {
   try {
+    const body = { question, group_wa_id: groupJid, user_phone: userPhone };
+    if (prevTurn && prevTurn.question && prevTurn.answer) {
+      body.previous_question = prevTurn.question;
+      body.previous_answer = prevTurn.answer;
+      if (prevTurn.sources) body.previous_sources = prevTurn.sources;
+    }
     const res = await fetch(`${BACKEND_URL}/api/nlp/qa`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, group_wa_id: groupJid, user_phone: userPhone }),
+      body: JSON.stringify(body),
     });
     return await res.json();
   } catch (err) {
@@ -229,8 +326,39 @@ function detectIntent(message) {
     if (stripped.includes(p)) return { intent: 'remove', query: stripped };
   }
 
+  // ── Q&A patterns FIRST — questions about content of notes ──
+  // Must be checked BEFORE bare academic terms, otherwise "summarize module 5
+  // notes" matches "module" and gets routed to keyword search.
+  const qaPatterns = [
+    'summarize', 'summarise', 'summary', 'summary of',
+    'explain', 'samjhao', 'samjha', 'batao', 'samjhaiye',
+    'what does', 'what is', 'what are', 'what was',
+    'tell me about', 'tell me', 'describe', 'define', 'definition',
+    'how does', 'how do', 'how is', 'why does', 'why is',
+    'compare', 'difference between', 'derive', 'derivation', 'prove',
+    'what did the teacher', 'what chapter', 'from our notes', 'from the notes',
+    'according to', 'kya hai', 'kya bata', 'meaning of',
+  ];
+  for (const p of qaPatterns) {
+    if (stripped.includes(p)) return { intent: 'qa', query: stripped };
+  }
+
+  // ── NLP retrieval patterns — questions about WHO shared WHAT WHEN ──
+  // Must also be BEFORE academic-term fallback so "notes shared by rakesh"
+  // routes to NLP retrieval, not legacy keyword search.
+  const nlpPatterns = [
+    'what did', 'who shared', 'who uploaded', 'has anyone shared',
+    'do we have', 'is there', "what's new", 'whats new',
+    'anything about', 'any files about', 'any notes',
+    'files from', 'shared by', 'sent by', 'uploaded by',
+    'kisne', 'kab bheja', 'kya bheja', 'aaj kya', 'kal kya',
+  ];
+  for (const p of nlpPatterns) {
+    if (stripped.includes(p)) return { intent: 'nlp_retrieve', query: stripped };
+  }
+
   // SEARCH / FIND
-  for (const p of ['find', 'search', 'look for', 'where is', 'get me', 'show me', 'do you have', 'send me', 'need']) {
+  for (const p of ['find', 'search', 'look for', 'where is', 'get me', 'show me', 'do you have', 'send me', 'drop me', 'need', 'dhundo', 'dikhao', 'bhejo']) {
     if (stripped.includes(p)) {
       const idx = stripped.indexOf(p);
       let query = stripped.slice(idx + p.length).trim().replace(/["'?.,!]/g, '');
@@ -238,7 +366,7 @@ function detectIntent(message) {
     }
   }
 
-  // Bare academic terms → search
+  // Bare academic terms → search (last-resort, only if nothing else matched)
   for (const t of ['notes', 'pyq', 'paper', 'assignment', 'module', 'unit', 'lab', 'slides', 'pdf', 'exam']) {
     if (stripped.includes(t)) return { intent: 'search', query: stripped };
   }
@@ -256,23 +384,6 @@ function detectIntent(message) {
   // HELP
   for (const p of ['help', 'how to', 'how do', 'what can you', 'commands', 'guide']) {
     if (stripped.includes(p)) return { intent: 'help', query: '' };
-  }
-
-  // Q&A patterns — questions about content of notes
-  const qaPatterns = ['summarize', 'explain', 'what does', 'what is', 'tell me about',
-    'what did the teacher', 'what are the', 'describe', 'define',
-    'how does', 'why does', 'compare', 'difference between',
-    'what chapter', 'from our notes', 'from the notes', 'according to'];
-  for (const p of qaPatterns) {
-    if (stripped.includes(p)) return { intent: 'qa', query: stripped };
-  }
-
-  // NLP retrieval patterns — questions about WHO shared WHAT WHEN
-  const nlpPatterns = ['what did', 'who shared', 'who uploaded', 'has anyone shared',
-    'do we have', 'is there', "what's new", 'anything about', 'any files about',
-    'files from', 'shared by'];
-  for (const p of nlpPatterns) {
-    if (stripped.includes(p)) return { intent: 'nlp_retrieve', query: stripped };
   }
 
   return { intent: 'unknown', query: '' };
@@ -382,11 +493,235 @@ async function preloadSyncedGroups() {
   }
 }
 
+// ─── DM Handler — private chat, personal assistant mode ───
+
+async function handleDM(sock, msg) {
+  const chat = msg.key.remoteJid; // user's @s.whatsapp.net OR @lid JID
+  let senderPhone = phoneFromJid(chat);
+  const pushName = msg.pushName || '';
+  const text = (msg.message?.conversation || msg.message?.extendedTextMessage?.text || '').trim();
+
+  if (!text) return; // ignore non-text DMs (stickers, status etc.) for now
+
+  // For @lid (hidden number) JIDs, phoneFromJid may return garbage. Fall back
+  // to using the JID itself as the identity key — backend will treat it as
+  // an opaque user phone and resolve groups via the phone-fallback path.
+  if (!isRealPhoneNumber(senderPhone)) {
+    senderPhone = chat.split('@')[0]; // use raw JID-local part as the key
+    console.log(`  [DM] non-phone JID, using "${senderPhone}" as key`);
+  }
+
+  console.log(`  [DM] ${pushName || senderPhone}: ${text}`);
+
+  // ── INSTANT ACK ──
+  // Let the user know we got the message before we start the (sometimes
+  // slow) backend round-trip. A WhatsApp reaction is faster and quieter
+  // than a text message; fall back to a text "_just a moment..._" if
+  // reactions fail (some chats / older clients reject them).
+  let ackedWithReaction = false;
+  try {
+    await sock.sendMessage(chat, { react: { text: '👀', key: msg.key } });
+    ackedWithReaction = true;
+  } catch {}
+  let typingMsg = null;
+  if (!ackedWithReaction) {
+    typingMsg = await dmSend(sock, chat, { text: '👀 _just a moment..._' });
+  }
+
+  // Use the BOT OWNER'S phone for backend group-resolution. The DM sender
+  // (a friend) almost certainly isn't a member of the dashboard owner's
+  // groups, so retrieval scoped by the friend's phone returns nothing.
+  // dmContext / follow-ups stay keyed by sender so each conversation is
+  // independent.
+  const backendPhone = botOwnerPhone || senderPhone;
+
+  // ── 1. Follow-up: pick a file by index from previous results ──
+  const prev = getDmContext(senderPhone);
+  const followIdx = detectFollowupIndex(text);
+  if (prev && prev.lastFiles && prev.lastFiles.length > 0 && followIdx >= 0 && followIdx < prev.lastFiles.length) {
+    const f = prev.lastFiles[followIdx];
+    const url = driveViewUrl(f.drive_file_id);
+    if (url) {
+      await dmSend(sock, chat, {
+        text: `📎 *${f.file_name}*${f.shared_by_name ? ` — shared by ${f.shared_by_name}` : ''}\n${url}`,
+      });
+    } else {
+      await dmSend(sock, chat, {
+        text: `Found *${f.file_name}* but it's not pushed to Drive yet — check your dashboard staging area.`,
+      });
+    }
+    // Remember the focused file so subsequent free-form questions Q&A about it
+    setDmContext(senderPhone, {
+      ...prev,
+      lastFile: f,
+      lastIntent: 'retrieve',
+      ts: Date.now(),
+    });
+    return;
+  }
+
+  // ── 2. Q&A intent detection (with looser follow-up support) ──
+  // ANY message that looks like a question routes to Q&A — and if there's
+  // a recent prev turn (Q&A or retrieve), we thread it through as context
+  // so follow-ups about the previously dropped file work naturally.
+  const qaIntent = looksLikeQA(text);
+  const hasFreshContext = prev && (Date.now() - prev.ts) < 30 * 60 * 1000;
+  const isFollowupTurn = hasFreshContext && looksLikeFollowup(text);
+  if (qaIntent || isFollowupTurn) {
+    let prevTurn = null;
+    if (hasFreshContext && (isFollowupTurn || qaIntent)) {
+      // Build the prev-turn context from whichever shape the last interaction
+      // produced — Q&A turn (lastQA) OR retrieve turn (lastFile, lastReply).
+      if (prev.lastQA && prev.lastQA.question) {
+        prevTurn = {
+          question: prev.lastQA.question,
+          answer: prev.lastQA.answer,
+          sources: prev.lastQA.sources || [],
+        };
+      } else if (prev.lastFile) {
+        // Synthesize a "previous turn" out of the file we just dropped so
+        // Gemini knows the user is asking about THAT file.
+        prevTurn = {
+          question: prev.lastQuery || `looking at ${prev.lastFile.file_name}`,
+          answer: `I shared the file *${prev.lastFile.file_name}*${prev.lastFile.shared_by_name ? ` (by ${prev.lastFile.shared_by_name})` : ''}.`,
+          sources: [prev.lastFile.file_name],
+        };
+      } else if (prev.lastQuery) {
+        prevTurn = {
+          question: prev.lastQuery,
+          answer: prev.lastReply || '',
+          sources: [],
+        };
+      }
+      if (prevTurn) console.log(`  [DM] Q&A with prev context — prev question="${prevTurn.question}"`);
+    }
+    const resp = await notesQA('', backendPhone, text, prevTurn);
+    let answer = resp.answer || "I couldn't find anything to answer that.";
+    if (resp.sources && resp.sources.length > 0) {
+      answer += `\n\n📎 _sources: ${resp.sources.slice(0, 3).join(', ')}_`;
+    }
+    await dmSend(sock, chat, { text: answer });
+    setDmContext(senderPhone, {
+      lastQuery: text,
+      lastFiles: [],
+      lastFile: prev?.lastFile || null, // keep file context across Q&A turns
+      lastReply: answer,
+      lastIntent: 'qa',
+      lastQA: { question: text, answer: resp.answer || '', sources: resp.sources || [] },
+    });
+    return;
+  }
+
+  // ── 3. Default: NLP retrieval ──
+  const resp = await nlpRetrieve('', backendPhone, text);
+  const files = resp.files || [];
+  const driveMatches = resp.drive_matches || [];
+
+  let reply = resp.reply || '';
+  let focusedFile = null;
+
+  if (files.length === 1) {
+    // Exactly one match → drop the link immediately
+    const f = files[0];
+    focusedFile = f;
+    const url = driveViewUrl(f.drive_file_id);
+    if (url) {
+      reply += `\n\n📎 *${f.file_name}*\n${url}\n\n_ask me anything about this file — I can summarise, explain, or quote from it._`;
+    } else {
+      reply += `\n\n📎 *${f.file_name}* (still in staging — check your dashboard)`;
+    }
+  } else if (files.length > 1) {
+    reply += `\n\n${formatFilesForReply(files, 5)}\n\n_reply with a number (e.g. "1") to get the link, or ask a question about any of these._`;
+  } else if (driveMatches.length > 0) {
+    const lines = driveMatches.slice(0, 5).map((m, i) => {
+      const url = driveViewUrl(m.file_id);
+      return `${i + 1}. *${m.file_name}* — in ${m.folder_name}/${url ? '\n   ' + url : ''}`;
+    });
+    reply += `\n\n${lines.join('\n')}`;
+  }
+
+  if (!reply) reply = "I couldn't find anything matching that. Try rephrasing or being more specific.";
+
+  await dmSend(sock, chat, { text: reply });
+
+  // Cache files + focused file for follow-up resolution
+  setDmContext(senderPhone, {
+    lastQuery: text,
+    lastFiles: files,
+    lastFile: focusedFile,
+    lastReply: reply,
+    lastIntent: 'retrieve',
+  });
+}
+
+// looksLikeFollowup returns true if a message reads like a refinement of a
+// previous Q&A turn rather than a fresh question. Used by the DM handler to
+// decide whether to thread the conversation through to the backend.
+function looksLikeFollowup(text) {
+  const t = text.toLowerCase().trim();
+  if (t.length < 60) {
+    // short messages after a Q&A are usually refinements
+    const cues = [
+      'tell me more', 'more', 'elaborate', 'expand', 'continue', 'go on',
+      'what about', 'and ', 'also ', 'how about', 'aur ', 'aur kya',
+      'what else', 'anything else', 'kuch aur', 'aage', 'next',
+      'simpler', 'simply', 'simpler words', 'in simple', 'asaan', 'easy',
+      'example', 'examples', 'for example', 'udaharan',
+      'why', 'kyu', 'kyun', 'how', 'kaise',
+      'shorter', 'shorten', 'short me', 'in short', 'briefly',
+      'longer', 'detail', 'in detail', 'detailed', 'vistaar',
+      'translate', 'in english', 'in hindi',
+      'that ', 'this ', 'it ', // pronoun-led short followups
+    ];
+    for (const c of cues) if (t.startsWith(c) || t.includes(' ' + c) || t === c.trim()) return true;
+  }
+  return false;
+}
+
+// looksLikeQA returns true for messages that read like questions about notes
+// content rather than simple file lookups.
+function looksLikeQA(text) {
+  const t = text.toLowerCase();
+  const cues = [
+    'explain', 'samjhao', 'samjhaa', 'batao', 'kya hai', 'what is', 'what are',
+    'how does', 'how do', 'why does', 'why is', 'why are', 'define', 'definition',
+    'summarize', 'summary', 'describe', 'tell me about', 'difference between',
+    'compare', 'derive', 'derivation', 'prove', 'theorem',
+  ];
+  for (const c of cues) {
+    if (t.includes(c)) return true;
+  }
+  return false;
+}
+
 // ─── Message Handler ───
 
 async function handleMessage(sock, msg) {
   const chat = msg.key.remoteJid;
-  if (!chat?.endsWith('@g.us')) return;
+  if (!chat) return;
+
+  // Diagnostic — log every incoming message JID + fromMe so we can see
+  // exactly what WhatsApp is delivering. Remove once DM routing is stable.
+  const previewText = (msg.message?.conversation || msg.message?.extendedTextMessage?.text || '').slice(0, 60);
+  if (previewText) {
+    console.log(`  [MSG] chat=${chat} fromMe=${msg.key.fromMe} text=${JSON.stringify(previewText)}`);
+  }
+
+  // ── 1:1 DM branch — Reyna acts as a personal assistant ──
+  // Catches both @s.whatsapp.net (canonical phone JIDs) and @lid (hidden /
+  // PN-protected accounts that WhatsApp now uses for many DMs). Anything
+  // that's not a group goes here.
+  // We ALLOW fromMe in DMs because the bot is linked to the user's own
+  // WhatsApp account — when the linked user types in their own "Reyna chat",
+  // every message is technically fromMe. We skip only the bot's own outgoing
+  // replies via the botSentIds set to prevent self-echo loops.
+  const isGroup = chat.endsWith('@g.us');
+  if (!isGroup) {
+    if (msg.key.fromMe && botSentIds.has(msg.key.id)) return; // our own reply, ignore
+    return handleDM(sock, msg);
+  }
+
+  // For groups, the original fromMe filter applies
   if (msg.key.fromMe) return;
 
   const sender = msg.key.participant || chat;
@@ -593,13 +928,6 @@ async function handleMessage(sock, msg) {
       return;
     }
 
-    case 'search': {
-      const resp = await sendCommand(chat, `/reyna find ${query}`, senderPhone, pushName);
-      // Brief response in group (search results benefit everyone)
-      await sock.sendMessage(chat, { text: `*Reyna:* ${resp.reply}` });
-      return;
-    }
-
     case 'history': {
       const resp = await sendCommand(chat, '/reyna log', senderPhone, pushName);
       await sock.sendMessage(chat, { text: `*Reyna:* ${resp.reply}` });
@@ -618,8 +946,9 @@ async function handleMessage(sock, msg) {
     }
 
     case 'help': {
-      const resp = await sendCommand(chat, '/reyna help', senderPhone, pushName);
-      await sock.sendMessage(chat, { text: `*Reyna:* ${resp.reply}` });
+      await sock.sendMessage(chat, {
+        text: '*Reyna:* In groups I handle file capture only — share files (or react 📌), and say "reyna save / push / status".\n\n💬 For search, retrieval, and Q&A, DM me directly. No wake word needed there.',
+      });
       return;
     }
 
@@ -629,34 +958,21 @@ async function handleMessage(sock, msg) {
       return;
     }
 
-    case 'nlp_retrieve': {
-      const resp = await nlpRetrieve(chat, senderPhone, query);
-      await sock.sendMessage(chat, { text: `*Reyna:* ${resp.reply || 'No results found.'}` });
-      return;
-    }
-
+    // Search / NLP retrieval / Q&A are intentionally NOT handled in groups —
+    // they would clutter group chat. Tell the user to DM Reyna instead.
+    case 'search':
+    case 'nlp_retrieve':
     case 'qa': {
-      // Show typing indicator
-      await sock.sendMessage(chat, { text: '*Reyna:* 🔍 Searching your notes...' });
-      const resp = await notesQA(chat, senderPhone, query);
-      let qaReply = resp.answer || 'Could not find an answer.';
-      if (resp.sources && resp.sources.length > 0) {
-        qaReply += '\n\n📎 Sources: ' + resp.sources.join(', ');
-      }
-      await sock.sendMessage(chat, { text: `*Reyna:* ${qaReply}` });
+      await sock.sendMessage(chat, {
+        text: '*Reyna:* For search and Q&A, DM me directly — keeps the group clean. 💬',
+      });
       return;
     }
 
     default: {
-      // Try NLP retrieval as fallback for unrecognized queries
-      const nlpResp = await nlpRetrieve(chat, senderPhone, text);
-      if (nlpResp.files && nlpResp.files.length > 0) {
-        await sock.sendMessage(chat, { text: `*Reyna:* ${nlpResp.reply}` });
-      } else {
-        await sock.sendMessage(chat, {
-          text: '*Reyna:* I didn\'t understand that. Say "reyna help" to see what I can do.',
-        });
-      }
+      await sock.sendMessage(chat, {
+        text: '*Reyna:* I only handle file capture in groups (share files, react 📌, "reyna save / push / status"). For search and Q&A, DM me directly. 💬',
+      });
       return;
     }
   }
@@ -740,6 +1056,20 @@ async function startBot() {
       qrcode.generate(qr, { small: true });
     }
     if (connection === 'open') {
+      // Capture the linked WhatsApp account's phone number — used as the
+      // owner phone for all DM-mode backend calls (retrieval, Q&A) so the
+      // search is scoped to the dashboard owner's groups, not the friend's.
+      try {
+        const ownerJid = sock.user?.id || '';
+        const ownerPhone = phoneFromJid(ownerJid);
+        if (isRealPhoneNumber(ownerPhone)) {
+          setBotOwnerPhone(ownerPhone);
+        } else {
+          console.log(`  Could not resolve bot owner phone from JID ${ownerJid}`);
+        }
+      } catch (e) {
+        console.log(`  Bot owner phone resolution failed: ${e.message}`);
+      }
       console.log('\n  ┌──────────────────────────────────────────┐');
       console.log('  │  Reyna Bot — Connected                   │');
       console.log('  │                                          │');

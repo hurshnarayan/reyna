@@ -220,7 +220,25 @@ func (c *Classifier) ClassifyFileWithContent(fileName, mimeType string, fileData
 		return match, false, conf, "", ""
 	}
 
-	// Tier 2: Combined LLM call — extract + classify in one shot
+	// Tier 2a: Office docs (DOCX/PPTX/XLSX) — extract text from the zipped XML
+	// payload, then send the extracted text to Gemini for classification. This
+	// is the fix for "PPTX files all get scattered into different folders"
+	// because filename-only guessing can't tell that Py_Module_3, Py_Module_4
+	// and Py_Module_5 are all the same subject.
+	if c.IsEnabled() && len(fileData) > 0 && IsOfficeDoc(mimeType) {
+		extracted, err := ExtractOfficeText(fileData, mimeType, 30*1024)
+		if err == nil && len(extracted) > 100 {
+			folder, isNew, conf, summary := c.classifyFromExtractedText(fileName, mimeType, extracted, existingFolders, meta)
+			if folder != "" {
+				log.Printf("[NLP] Office content classify: %s → %s (%.0f%%) [sender=%s]", fileName, folder, conf*100, meta.SenderName)
+				return folder, isNew, conf, extracted, summary
+			}
+		} else if err != nil {
+			log.Printf("[NLP] Office text extract failed for %s: %v", fileName, err)
+		}
+	}
+
+	// Tier 2b: PDFs — combined LLM call with the file as inline doc block
 	if c.IsEnabled() && len(fileData) > 0 && strings.Contains(mimeType, "pdf") {
 		foldersStr := "(no existing folders — pick a descriptive new one)"
 		if len(existingFolders) > 0 {
@@ -286,6 +304,88 @@ Respond ONLY with JSON:
 	// Fallback to separate classification (filename-based)
 	folder, isNew, confidence = c.ClassifyFile(fileName, existingFolders)
 	return folder, isNew, confidence, "", ""
+}
+
+// classifyFromExtractedText runs the same content-based classification as the
+// PDF inline-doc path but uses pre-extracted text (e.g. from a DOCX/PPTX/XLSX
+// that we unzipped ourselves). Returns ("", false, 0, "") on failure so the
+// caller can fall through to filename-only classification.
+func (c *Classifier) classifyFromExtractedText(fileName, mimeType, extractedText string, existingFolders []string, meta FileMeta) (folder string, isNew bool, confidence float64, summary string) {
+	if !c.IsEnabled() || extractedText == "" {
+		return "", false, 0, ""
+	}
+	foldersStr := "(no existing folders — pick a descriptive new one)"
+	if len(existingFolders) > 0 {
+		foldersStr = strings.Join(existingFolders, ", ")
+	}
+	metaBlock := formatMetaForPrompt(meta)
+	if metaBlock != "" {
+		metaBlock = "\nContext:\n" + metaBlock + "\n"
+	}
+	// Cap text fed to the LLM
+	if len(extractedText) > 12000 {
+		extractedText = extractedText[:12000] + "..."
+	}
+
+	prompt := fmt.Sprintf(`You are a document analysis and classification agent for a university study group's shared file system. The document is a %s — its full text content (extracted from the file) is provided below. Analyze it and return:
+1. "summary": one-line summary of what the document is actually about (max 100 chars). Use the CONTENT, not the filename.
+2. "folder": classify into the best folder from: [%s]
+
+   STRICT folder rules:
+   - Use an existing folder ONLY if the document is unambiguously about that exact subject. "Close enough" is NOT a match.
+   - Multiple files about the same subject MUST end up in the same folder. If you previously created "Python Programming" and a similar file arrives, use "Python Programming" again — do NOT invent "Python Modules" or "Programming Modules" as a separate folder.
+   - Examples of WRONG matches: putting CAED under "Engineering Science"; putting DBMS under "Computer Science"; splitting "Python Module 3" and "Python Module 4" into different folders. These belong together.
+   - If no existing folder is an exact subject match, INVENT a clean 2-3 word Title Case folder named after the actual subject. Recognise Indian engineering course codes (CAED, ESC, BESC, BCS, BEC, BCSL, BPLC) as their own subjects.
+   - NEVER return "None", "Unsorted", "Unknown", "Misc", "Other", "General", "Engineering", "Science", "Programming Modules", "Modules" or any vague umbrella. Always pick a SPECIFIC subject folder.
+
+3. "is_new": true if you invented the folder, false if it already exists.
+4. "confidence": 0.0-1.0.
+
+Use sender/group/time context as supporting signals but the document content is the primary signal.
+
+Filename: "%s"%s
+
+DOCUMENT CONTENT:
+%s
+
+Respond ONLY with JSON:
+{"summary": "...", "folder": "FolderName", "is_new": true/false, "confidence": 0.0-1.0}`, mimeTypeLabel(mimeType), foldersStr, fileName, metaBlock, extractedText)
+
+	result, err := c.llm.Complete(prompt, 800)
+	if err != nil {
+		log.Printf("[NLP] classifyFromExtractedText error for %s: %v", fileName, err)
+		return "", false, 0, ""
+	}
+	var resp struct {
+		Summary    string  `json:"summary"`
+		Folder     string  `json:"folder"`
+		IsNew      bool    `json:"is_new"`
+		Confidence float64 `json:"confidence"`
+	}
+	result = llm.CleanJSON(result)
+	if err := json.Unmarshal([]byte(result), &resp); err != nil {
+		log.Printf("[NLP] classifyFromExtractedText parse error for %s: %v (raw: %.150s)", fileName, err, result)
+		return "", false, 0, ""
+	}
+	if !isValidFolder(resp.Folder) {
+		return "", false, 0, ""
+	}
+	return resp.Folder, resp.IsNew, resp.Confidence, resp.Summary
+}
+
+func mimeTypeLabel(mimeType string) string {
+	switch {
+	case strings.Contains(mimeType, "wordprocessingml"), strings.HasSuffix(mimeType, "docx"):
+		return "Microsoft Word document (.docx)"
+	case strings.Contains(mimeType, "presentationml"), strings.HasSuffix(mimeType, "pptx"):
+		return "Microsoft PowerPoint presentation (.pptx)"
+	case strings.Contains(mimeType, "spreadsheetml"), strings.HasSuffix(mimeType, "xlsx"):
+		return "Microsoft Excel spreadsheet (.xlsx)"
+	case strings.Contains(mimeType, "pdf"):
+		return "PDF document"
+	default:
+		return "document"
+	}
 }
 
 // llmClassifyFile uses the configured LLM to classify a file into a folder
@@ -777,11 +877,26 @@ type QASource struct {
 	SharedAt   time.Time
 }
 
+// QAFollowup carries the previous turn of a multi-turn Q&A conversation.
+// Used to thread refinement questions ("tell me more", "explain that part",
+// "in simpler words") through to Gemini with the prior context attached.
+type QAFollowup struct {
+	PrevQuestion string
+	PrevAnswer   string
+	PrevSources  []string
+}
+
 // AnswerFromNotes takes a question + structured QA sources and asks the LLM
 // for an attributed answer. Sources include sender name, subject folder, and
 // shared-at timestamp so the answer can say "Mohit shared this PDF this
 // morning — the Wien bridge oscillator works as follows…".
 func (c *Classifier) AnswerFromNotes(question string, sources []QASource) string {
+	return c.AnswerFromNotesWithContext(question, sources, nil)
+}
+
+// AnswerFromNotesWithContext is the multi-turn variant. If `prev` is non-nil
+// the prompt includes the previous question/answer so Gemini can build on it.
+func (c *Classifier) AnswerFromNotesWithContext(question string, sources []QASource, prev *QAFollowup) string {
 	if !c.IsEnabled() || len(sources) == 0 {
 		return "I don't have enough content from your notes to answer that. Make sure files have been shared and extracted."
 	}
@@ -823,6 +938,11 @@ CRITICAL LANGUAGE RULE:
 CRITICAL TIME RULE:
 - Each source has a "Shared at:" line with the exact pre-computed time. Use it verbatim. NEVER compute relative time yourself, NEVER hallucinate "yesterday" or "2 days ago".
 
+CONVERSATION CONTEXT:
+- If a "PREVIOUS TURN" block appears below, this is a follow-up to an earlier question. Build on the previous answer — don't repeat its full content. Refine, expand, simplify, or add detail as the new question asks.
+- Pronouns like "it", "that", "this", "the formula" refer to things from the previous turn — resolve them from there.
+- If the new question clearly changes topic, treat it as fresh and ignore the previous turn.
+
 How to read the question — figure out what they actually want:
 - If they ask to "explain / samjhao / batao" — explain in your own words, structured and clear.
 - If they ask for "exact / verbatim / hubahu / actual definition / quote / drop kar do" — quote the relevant lines from the source word-for-word, in a code block or blockquote.
@@ -844,16 +964,34 @@ Formatting:
 
 SOURCE MATERIAL:
 %s
-
+%s
 STUDENT QUESTION: %s
 
-Your answer:`, "", "", "", context.String(), question)
+Your answer:`, "", "", "", context.String(), formatQAPrev(prev), question)
 
 	result, err := c.llm.Complete(prompt, 1200)
 	if err != nil {
 		return "Sorry, I couldn't process that question right now. Try again in a moment."
 	}
 	return cleanLLMReply(result)
+}
+
+// formatQAPrev renders the previous Q&A turn as a context block, or empty
+// string if there's no prior turn. The block is wedged between the source
+// material and the student question in the prompt.
+func formatQAPrev(prev *QAFollowup) string {
+	if prev == nil || prev.PrevQuestion == "" || prev.PrevAnswer == "" {
+		return ""
+	}
+	prevAns := prev.PrevAnswer
+	if len(prevAns) > 1500 {
+		prevAns = prevAns[:1500] + "..."
+	}
+	srcLine := ""
+	if len(prev.PrevSources) > 0 {
+		srcLine = "\nPrevious answer cited: " + strings.Join(prev.PrevSources, ", ")
+	}
+	return fmt.Sprintf("\n\nPREVIOUS TURN (this is a follow-up — build on it, don't restart):\nQ: %s\nA: %s%s\n", prev.PrevQuestion, prevAns, srcLine)
 }
 
 // MatchesQuery sends a PDF (or image) to Gemini along with the user's

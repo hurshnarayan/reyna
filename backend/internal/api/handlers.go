@@ -667,7 +667,10 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		// Try combined extract+classify in one LLM call (PDF only)
+		// Try content-based classify+extract in one LLM call.
+		// PDFs go via inline doc API; DOCX/PPTX/XLSX get text-extracted from
+		// their zip payload first; everything else falls back to filename-only
+		// classification.
 		groupName := ""
 		if group != nil {
 			groupName = group.Name
@@ -678,7 +681,7 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 			GroupName:   groupName,
 			SharedAt:    time.Now(),
 		}
-		if strings.Contains(mimeType, "pdf") && len(fileBytes) > 0 {
+		if len(fileBytes) > 0 && (strings.Contains(mimeType, "pdf") || nlp.IsOfficeDoc(mimeType)) {
 			subject, _, _, extractedContent, contentSummary = s.classifier.ClassifyFileWithContent(fileName, mimeType, fileBytes, existingFolders, fmeta)
 		} else {
 			subject, _, _ = s.classifier.ClassifyFile(fileName, existingFolders)
@@ -2296,7 +2299,16 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	answer := s.classifier.AnswerFromNotes(req.Question, qaSources)
+	var prev *nlp.QAFollowup
+	if req.PreviousQuestion != "" && req.PreviousAnswer != "" {
+		prev = &nlp.QAFollowup{
+			PrevQuestion: req.PreviousQuestion,
+			PrevAnswer:   req.PreviousAnswer,
+			PrevSources:  req.PreviousSources,
+		}
+		log.Printf("[QA] follow-up turn — prev question=%q", req.PreviousQuestion)
+	}
+	answer := s.classifier.AnswerFromNotesWithContext(req.Question, qaSources, prev)
 
 	json.NewEncoder(w).Encode(models.NotesQAResponse{
 		Answer:       answer,
