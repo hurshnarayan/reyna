@@ -810,7 +810,18 @@ func (c *Classifier) AnswerFromNotes(question string, sources []QASource) string
 
 	prompt := fmt.Sprintf(`You are Reyna — a friendly study assistant living inside a WhatsApp study group. You help students find and understand things from notes their groupmates shared. You answer like a smart friend, not like a dry assistant.
 
-The student may write in ANY language: English, Hindi, Hinglish, Bhojpuri, Tamil, Kannada, Bengali, Marathi, Telugu, Malayalam, mixed-script, slang — anything. Always reply in the SAME language and tone they used. If they wrote Hinglish, reply Hinglish. If they wrote Bhojpuri, reply Bhojpuri.
+CRITICAL LANGUAGE RULE:
+- Detect the language of the QUESTION ITSELF, not the sender names. "rakesh" / "mohit" / "priya" are proper nouns and DO NOT indicate Hindi.
+- English question → English answer ONLY.
+- Hindi (Devanagari) → Hindi answer.
+- Hinglish (Hindi in Roman script like "kya", "hai", "kal", "bheja") → Hinglish answer.
+- Bhojpuri / Tamil / Bengali / Marathi / Kannada / Telugu / Malayalam → reply in that language.
+- "explain oscillators sent by mohit" is ENGLISH. Reply in English.
+- "mohit ne oscillators ke baare me kya bheja" is HINGLISH. Reply in Hinglish.
+- Match tone: casual query → casual reply; formal query → formal reply.
+
+CRITICAL TIME RULE:
+- Each source has a "Shared at:" line with the exact pre-computed time. Use it verbatim. NEVER compute relative time yourself, NEVER hallucinate "yesterday" or "2 days ago".
 
 How to read the question — figure out what they actually want:
 - If they ask to "explain / samjhao / batao" — explain in your own words, structured and clear.
@@ -843,6 +854,90 @@ Your answer:`, "", "", "", context.String(), question)
 		return "Sorry, I couldn't process that question right now. Try again in a moment."
 	}
 	return cleanLLMReply(result)
+}
+
+// MatchesQuery sends a PDF (or image) to Gemini along with the user's
+// natural-language query and asks "does this document match what they're
+// looking for?". Returns (matched, confidence). Used for deep content
+// retrieval — when metadata search fails or the user gives content cues
+// like "the PDF with the wien bridge diagram".
+func (c *Classifier) MatchesQuery(query, fileName, mimeType string, fileData []byte) (bool, float64) {
+	if !c.IsEnabled() || len(fileData) == 0 {
+		return false, 0
+	}
+	// Skip files too big for inline doc API
+	if len(fileData) > 14*1024*1024 {
+		return false, 0
+	}
+	prompt := fmt.Sprintf(`You are Reyna's content retrieval agent. The student is searching their study notes with this natural-language query:
+
+QUERY: "%s"
+
+The attached document's filename is: "%s"
+
+Read the document and determine: does this document satisfy what the student is looking for? Consider:
+- Specific topics, concepts, or terms mentioned in the query
+- Visual cues ("diagram of...", "the figure showing...", "the chart with...")
+- Document type ("the PYQ paper", "the lab manual", "the assignment")
+- Vague but real recall ("the one about Coulomb's law", "had R1 R2 R3 in a circuit")
+- Multi-language queries — interpret intent regardless of language
+
+Respond ONLY with JSON:
+{"matches": true/false, "confidence": 0.0-1.0, "snippet": "1-2 sentence reason / quoted excerpt"}`, query, fileName)
+
+	result, err := c.llm.CompleteWithDoc(prompt, fileData, mimeType, 400)
+	if err != nil {
+		log.Printf("[MATCH] CompleteWithDoc error for %s: %v", fileName, err)
+		return false, 0
+	}
+	var resp struct {
+		Matches    bool    `json:"matches"`
+		Confidence float64 `json:"confidence"`
+		Snippet    string  `json:"snippet"`
+	}
+	result = llm.CleanJSON(result)
+	if err := json.Unmarshal([]byte(result), &resp); err != nil {
+		log.Printf("[MATCH] parse error for %s: %v (raw: %.150s)", fileName, err, result)
+		return false, 0
+	}
+	return resp.Matches, resp.Confidence
+}
+
+// MatchesQueryText is the text-only fallback when we can't send the file
+// inline (DOCX, large files). Operates on the cached extracted_content.
+func (c *Classifier) MatchesQueryText(query, fileName, content string) (bool, float64) {
+	if !c.IsEnabled() || content == "" {
+		return false, 0
+	}
+	if len(content) > 8000 {
+		content = content[:8000]
+	}
+	prompt := fmt.Sprintf(`You are Reyna's content retrieval agent. The student is searching their study notes with this natural-language query:
+
+QUERY: "%s"
+
+Filename: "%s"
+Document summary/content (cached):
+%s
+
+Does this document satisfy what the student is asking for? Consider topics, concepts, recall hints in any language.
+
+Respond ONLY with JSON:
+{"matches": true/false, "confidence": 0.0-1.0, "snippet": "1-2 sentence reason"}`, query, fileName, content)
+
+	result, err := c.llm.Complete(prompt, 400)
+	if err != nil {
+		return false, 0
+	}
+	var resp struct {
+		Matches    bool    `json:"matches"`
+		Confidence float64 `json:"confidence"`
+	}
+	result = llm.CleanJSON(result)
+	if err := json.Unmarshal([]byte(result), &resp); err != nil {
+		return false, 0
+	}
+	return resp.Matches, resp.Confidence
 }
 
 // cleanLLMReply strips any accidental JSON envelope and code-fence wrappers
@@ -913,7 +1008,15 @@ func (c *Classifier) GenerateRetrievalReply(rawQuery, who, what, when, why strin
 
 	prompt := fmt.Sprintf(`You are Reyna — a smart, friendly study assistant inside a WhatsApp study group. The student just searched their notes. Write a natural, conversational reply describing what was found.
 
-The student may write in ANY language (English, Hindi, Hinglish, Bhojpuri, Tamil, etc.) — reply in the SAME language and tone.
+CRITICAL LANGUAGE RULE — read this twice:
+- Detect the language of the QUERY ITSELF (not the sender names — "rakesh" or "mohit" are proper nouns and do NOT indicate Hindi).
+- If the query is written in English, reply ONLY in English.
+- If the query is written in Hindi (Devanagari), reply in Hindi.
+- If the query is written in Hinglish (Hindi words in Roman script like "kya bheja", "kal", "hain"), reply in Hinglish.
+- If the query is in Bhojpuri / Tamil / Bengali / Marathi / Kannada / Telugu / Malayalam, reply in that language.
+- Match the tone too — casual query → casual reply; formal query → formal reply.
+- A query like "rakesh shared notes or what?" is ENGLISH. Reply in English.
+- A query like "rakesh ne kya bheja?" is HINGLISH. Reply in Hinglish.
 
 Read the original query to understand intent:
 - "find / dhundo / dikhao" → list the files clearly
@@ -923,9 +1026,13 @@ Read the original query to understand intent:
 - Activity-check questions → confirm with names + counts
 If results are empty, say so honestly and suggest a different phrasing or topic.
 
+CRITICAL TIME RULE:
+- The "shared:" line in each file's metadata below is the GROUND TRUTH — it already contains the relative time AND the absolute time. Use it VERBATIM.
+- NEVER compute or guess relative times yourself ("2 days ago", "this morning"). NEVER override what's written.
+- If the metadata says "5 minute(s) ago", say "5 minutes ago" — not "today" or "earlier".
+
 Formatting:
 - Plain text with light markdown — bullets, **bold** for filenames, short paragraphs.
-- Show sender names + relative times ("this morning", "yesterday", "2 days ago") when useful.
 - Mention if a file is from "Drive" vs "shared in WhatsApp".
 - Under 200 words. No envelopes, no curly braces — just write the reply.
 

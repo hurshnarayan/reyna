@@ -128,6 +128,9 @@ func (s *Store) migrate() error {
 	migrations := []string{
 		`ALTER TABLE files ADD COLUMN extracted_content TEXT DEFAULT ''`,
 		`ALTER TABLE files ADD COLUMN content_summary TEXT DEFAULT ''`,
+		`ALTER TABLE files ADD COLUMN content_hash TEXT DEFAULT ''`,
+		`CREATE INDEX IF NOT EXISTS idx_files_hash ON files(group_id, content_hash)`,
+		`CREATE INDEX IF NOT EXISTS idx_files_drive_id ON files(drive_file_id)`,
 	}
 	for _, m := range migrations {
 		s.db.Exec(m) // ignore errors if columns already exist
@@ -368,10 +371,10 @@ func (s *Store) AddFile(f *models.File) (*models.File, error) {
 
 	res, err := s.db.Exec(
 		`INSERT INTO files (group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
-		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, content_hash)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		f.GroupID, f.UserID, f.SharedByPhone, f.SharedByName, f.FileName, f.FileSize,
-		f.MimeType, f.DriveFileID, f.DriveFolderID, f.Subject, f.Tags, f.Version, f.ParentFileID, f.WAMessageID, f.Status,
+		f.MimeType, f.DriveFileID, f.DriveFolderID, f.Subject, f.Tags, f.Version, f.ParentFileID, f.WAMessageID, f.Status, f.ContentHash,
 	)
 	if err != nil {
 		return nil, err
@@ -1036,6 +1039,104 @@ func (s *Store) UpdateFileDriveID(fileID int64, driveFileID, driveFolderID strin
 	return err
 }
 
+// FindFileByHash returns the most recent file in the group whose content hash
+// matches. Used for byte-identical duplicate detection on bot upload.
+func (s *Store) FindFileByHash(groupID int64, hash string) *models.File {
+	if hash == "" {
+		return nil
+	}
+	f := &models.File{}
+	err := s.db.QueryRow(
+		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
+		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
+		 FROM files WHERE group_id=? AND content_hash=? AND status != 'deleted_in_drive'
+		 ORDER BY created_at DESC LIMIT 1`,
+		groupID, hash,
+	).Scan(&f.ID, &f.GroupID, &f.UserID, &f.SharedByPhone, &f.SharedByName, &f.FileName, &f.FileSize,
+		&f.MimeType, &f.DriveFileID, &f.DriveFolderID, &f.Subject, &f.Tags, &f.Version, &f.ParentFileID, &f.WAMessageID, &f.Status, &f.CreatedAt)
+	if err != nil {
+		return nil
+	}
+	return f
+}
+
+// LatestVersionByName returns the highest existing version number for a file
+// of the given name in the group, or 0 if none exists. Used to compute the
+// next version when an updated copy of a same-named file is uploaded.
+func (s *Store) LatestVersionByName(groupID int64, fileName string) int {
+	var v int
+	err := s.db.QueryRow(
+		`SELECT COALESCE(MAX(version), 0) FROM files WHERE group_id=? AND file_name=?`,
+		groupID, fileName,
+	).Scan(&v)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+// EnrichDriveMatches takes raw Drive walker results and fills in WHO/WHEN
+// metadata from the Reyna DB by matching on drive_file_id. Files captured by
+// the bot AND organised in Drive carry full sender/time info; pure Drive-native
+// files (organised before Reyna) keep empty sender fields.
+func (s *Store) EnrichDriveMatches(matches []models.DriveMatch) []models.DriveMatch {
+	if len(matches) == 0 {
+		return matches
+	}
+	// Build a set of drive_file_ids to look up in one query
+	driveIDs := make([]string, 0, len(matches))
+	idx := make(map[string]int)
+	for i, m := range matches {
+		if m.FileID == "" {
+			continue
+		}
+		driveIDs = append(driveIDs, m.FileID)
+		idx[m.FileID] = i
+	}
+	if len(driveIDs) == 0 {
+		return matches
+	}
+	// Build placeholder list
+	placeholders := strings.Repeat("?,", len(driveIDs))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]interface{}, len(driveIDs))
+	for i, id := range driveIDs {
+		args[i] = id
+	}
+	rows, err := s.db.Query(
+		`SELECT id, drive_file_id, shared_by_name, shared_by_phone, created_at
+		 FROM files WHERE drive_file_id IN (`+placeholders+`)`,
+		args...,
+	)
+	if err != nil {
+		return matches
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var dbID int64
+		var driveID, name, phone string
+		var createdAt time.Time
+		if err := rows.Scan(&dbID, &driveID, &name, &phone, &createdAt); err != nil {
+			continue
+		}
+		i, ok := idx[driveID]
+		if !ok {
+			continue
+		}
+		matches[i].DBFileID = dbID
+		matches[i].SenderName = name
+		matches[i].SharedAt = createdAt
+		_ = phone
+	}
+	return matches
+}
+
+// MarkFileDeletedInDrive flips a row's status so it stops appearing in
+// retrieval/Q&A results without losing the historical record.
+func (s *Store) MarkFileDeletedInDrive(fileID int64) {
+	s.db.Exec(`UPDATE files SET status='deleted_in_drive' WHERE id=?`, fileID)
+}
+
 // FindDriveConnectedUser finds any user in a group who has Google Drive connected
 func (s *Store) FindDriveConnectedUser(groupID int64) *models.User {
 	u := &models.User{}
@@ -1092,7 +1193,12 @@ func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *ti
 	// Use a LEFT JOIN on users so we can match WHO against the user record's
 	// name/phone too — handles cases where shared_by_name was empty at upload
 	// time but the sender's user record has a real name.
-	conditions := []string{"f.group_id IN (" + placeholders + ")"}
+	// Filter out ghost rows (status='deleted_in_drive') so retrieval never
+	// surfaces files that no longer exist in the user's Drive.
+	conditions := []string{
+		"f.group_id IN (" + placeholders + ")",
+		"f.status != 'deleted_in_drive'",
+	}
 
 	// WHO filter — broad: match against the file's stored sender fields OR the
 	// joined user record's name/phone. Also tokenize multi-word names so
@@ -1155,16 +1261,54 @@ func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *ti
 		}
 	}
 	args = append(args, interface{}(limit))
+	// SQLite parses bare numeric expressions in ORDER BY as column ordinals.
+	// `ORDER BY (0) DESC` blows up with "1st ORDER BY term out of range".
+	// Only emit the rank expression when it's a real CASE sum.
+	orderBy := "f.created_at DESC"
+	if rankExpr != "0" {
+		orderBy = "(" + rankExpr + ") DESC, f.created_at DESC"
+	}
 	query := fmt.Sprintf(
 		`SELECT f.id, f.group_id, f.user_id, f.shared_by_phone, f.shared_by_name, f.file_name, f.file_size,
 		  f.mime_type, f.drive_file_id, f.drive_folder_id, f.subject, f.tags, f.version, f.parent_file_id, f.wa_message_id, f.status, f.created_at
 		 FROM files f LEFT JOIN users u ON u.id = f.user_id
-		 WHERE %s ORDER BY (%s) DESC, f.created_at DESC LIMIT ?`,
-		strings.Join(conditions, " AND "), rankExpr,
+		 WHERE %s ORDER BY %s LIMIT ?`,
+		strings.Join(conditions, " AND "), orderBy,
 	)
 
 	log.Printf("[SQL-NLP] who=%q what=%q tokens=%v sql=%s args=%v", who, what, tokens, query, args)
+	// Diagnostic dump
+	if dbg, derr := s.db.Query(`SELECT id, group_id, user_id, shared_by_name, shared_by_phone, file_name, status FROM files WHERE group_id IN (`+placeholders+`)`, func() []interface{} {
+		out := make([]interface{}, len(groupIDs))
+		for i, g := range groupIDs {
+			out[i] = g
+		}
+		return out
+	}()...); derr == nil {
+		defer dbg.Close()
+		for dbg.Next() {
+			var id, gid, uid int64
+			var name, phone, fname, status string
+			if err := dbg.Scan(&id, &gid, &uid, &name, &phone, &fname, &status); err == nil {
+				log.Printf("[DB-DUMP] id=%d gid=%d uid=%d name=%q phone=%q file=%q status=%q", id, gid, uid, name, phone, fname, status)
+			}
+		}
+	}
+	// Minimal probe: does a simple WHERE on shared_by_name match?
+	if who != "" {
+		var n int
+		probeArgs := []interface{}{}
+		for _, g := range groupIDs {
+			probeArgs = append(probeArgs, g)
+		}
+		probeArgs = append(probeArgs, "%"+strings.ToLower(who)+"%")
+		s.db.QueryRow(`SELECT COUNT(*) FROM files WHERE group_id IN (`+placeholders+`) AND LOWER(shared_by_name) LIKE ?`, probeArgs...).Scan(&n)
+		log.Printf("[DB-PROBE] simple WHERE LOWER(shared_by_name) LIKE '%%%s%%' → %d row(s)", strings.ToLower(who), n)
+	}
 	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		log.Printf("[SQL-NLP] query error: %v", err)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1187,7 +1331,10 @@ func (s *Store) SearchFilesContent(groupIDs []int64, query string, limit int) ([
 	tokens := TokenizeWhat(query)
 	// Drop the "extracted_content != ''" hard requirement — for Q&A we may want
 	// to lazy-extract files that the bot captured but failed to extract earlier.
-	conds := []string{"group_id IN (" + placeholders + ")"}
+	conds := []string{
+		"group_id IN (" + placeholders + ")",
+		"status != 'deleted_in_drive'",
+	}
 	rankExpr := "0"
 	if len(tokens) > 0 {
 		var orParts []string
@@ -1207,12 +1354,16 @@ func (s *Store) SearchFilesContent(groupIDs []int64, query string, limit int) ([
 		}
 	}
 	args = append(args, interface{}(limit))
+	orderBy := "created_at DESC"
+	if rankExpr != "0" {
+		orderBy = "(" + rankExpr + ") DESC, created_at DESC"
+	}
 	q := fmt.Sprintf(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
 		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
 		 FROM files WHERE %s
-		 ORDER BY (%s) DESC, created_at DESC LIMIT ?`,
-		strings.Join(conds, " AND "), rankExpr,
+		 ORDER BY %s LIMIT ?`,
+		strings.Join(conds, " AND "), orderBy,
 	)
 	rows, err := s.db.Query(q, args...)
 	if err != nil {

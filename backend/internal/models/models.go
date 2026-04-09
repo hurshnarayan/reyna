@@ -62,9 +62,10 @@ type File struct {
 	Version       int       `json:"version"`
 	ParentFileID  int64     `json:"parent_file_id"`
 	WAMessageID      string    `json:"wa_message_id"`
-	Status           string    `json:"status"` // "staged" | "committed"
+	Status           string    `json:"status"` // "staged" | "committed" | "deleted_in_drive"
 	ExtractedContent string    `json:"extracted_content,omitempty"`
 	ContentSummary   string    `json:"content_summary,omitempty"`
+	ContentHash      string    `json:"content_hash,omitempty"`
 	CreatedAt        time.Time `json:"created_at"`
 }
 
@@ -220,13 +221,18 @@ type NLPRetrievalResponse struct {
 // DriveMatch represents a file found by walking the user's existing Drive folder
 // tree (rather than the bot-captured DB). Surfaced alongside DB hits in NLP
 // retrieval and Q&A so files organized in Drive before Reyna existed remain
-// findable.
+// findable. Enriched from the Reyna DB by drive_file_id when possible — so
+// files that were captured by the bot AND organised in Drive carry full
+// WHO/WHEN metadata even when surfaced via the Drive walker.
 type DriveMatch struct {
-	FolderName string `json:"folder_name"`
-	FolderID   string `json:"folder_id"`
-	FileName   string `json:"file_name"`
-	FileID     string `json:"file_id"`
-	MimeType   string `json:"mime_type,omitempty"`
+	FolderName string    `json:"folder_name"`
+	FolderID   string    `json:"folder_id"`
+	FileName   string    `json:"file_name"`
+	FileID     string    `json:"file_id"`
+	MimeType   string    `json:"mime_type,omitempty"`
+	SenderName string    `json:"sender_name,omitempty"`
+	SharedAt   time.Time `json:"shared_at,omitempty"`
+	DBFileID   int64     `json:"db_file_id,omitempty"`
 }
 
 type NLPParsedQuery struct {

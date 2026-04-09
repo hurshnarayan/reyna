@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -564,6 +566,18 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 	if fileSize == 0 { fileSize = int64(len(fileBytes)) }
 	log.Printf("📤 Bot upload: %s (%d bytes) from %s (phone=%s)", fileName, len(fileBytes), userName, userPhone)
 
+	// ── Content-hash duplicate detection ──
+	// Compute SHA-256 of the file bytes BEFORE we do anything expensive. If
+	// this exact file already exists in the same WhatsApp group, dismiss the
+	// upload as a duplicate (don't classify, don't extract, don't push to
+	// Drive). Same hash + different filename → still a duplicate. Same name
+	// + different hash → genuine update, save as v2.
+	hashSum := sha256.Sum256(fileBytes)
+	contentHash := hex.EncodeToString(hashSum[:])
+	log.Printf("🔑 hash=%s for %s", contentHash[:12], fileName)
+
+	// We need the group resolved before the dedup check. Resolve the user +
+	// group here, then run the dedup check, then continue with classification.
 	sharedByName := userName // preserve original name (pushName from WhatsApp)
 	// For the user record, use pushName if available, otherwise phone
 	userRecordName := userName
@@ -584,6 +598,39 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 	if group != nil { s.store.AddGroupMember(group.ID, user.ID, userPhone, "member") }
 	groupID := int64(0)
 	if group != nil { groupID = group.ID }
+
+	// ── Dedup check: same hash already in this group? ──
+	if existing := s.store.FindFileByHash(groupID, contentHash); existing != nil {
+		log.Printf("♻️  Duplicate ignored: %s (matches existing %q, id=%d)", fileName, existing.FileName, existing.ID)
+		reply := fmt.Sprintf("Already saved as **%s** — no duplicate created.", existing.FileName)
+		if existing.FileName != fileName {
+			reply = fmt.Sprintf("This file is already saved as **%s** (uploaded earlier). Skipping duplicate.", existing.FileName)
+		}
+		s.store.LogActivity(groupID, user.ID, "duplicate_ignored", "/reyna add "+fileName, "duplicate")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"reply":     reply,
+			"file_id":   existing.ID,
+			"status":    "duplicate",
+			"duplicate": true,
+		})
+		return
+	}
+
+	// ── Same filename, different hash → versioned update ──
+	// AddFile already auto-bumps version if a row with the same group_id +
+	// file_name exists, but we want the *Drive* filename to also reflect the
+	// version so users see hii.v2.pdf, not three "hii.pdf" copies.
+	versionedName := fileName
+	if existingVer := s.store.LatestVersionByName(groupID, fileName); existingVer >= 1 {
+		ext := ""
+		base := fileName
+		if dot := strings.LastIndex(fileName, "."); dot > 0 {
+			base = fileName[:dot]
+			ext = fileName[dot:]
+		}
+		versionedName = fmt.Sprintf("%s.v%d%s", base, existingVer+1, ext)
+		log.Printf("📝 New version detected for %s — uploading as %s", fileName, versionedName)
+	}
 
 	// NLP classification if subject not provided
 	// v3: Use combined extract+classify for PDFs (collapses Agents 1 & 2)
@@ -619,10 +666,13 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[NLP] Classified %s → %s", fileName, subject)
 	}
 
-	// Save locally
-	localID, folderID, _ := s.drive.SmartUpload("", "", user.ID, subject, fileName, mimeType, fileBytes)
+	// Save locally — note we use the *original* fileName for the local store
+	// but the *versioned* filename when staging the row, so the eventual Drive
+	// upload uses the versioned name (e.g. hii.v2.pdf) while we still know the
+	// canonical name for matching.
+	localID, folderID, _ := s.drive.SmartUpload("", "", user.ID, subject, versionedName, mimeType, fileBytes)
 	// Save raw bytes for later Drive upload on commit
-	dbFile := &models.File{GroupID: groupID, UserID: user.ID, SharedByPhone: userPhone, SharedByName: sharedByName, FileName: fileName, FileSize: fileSize, MimeType: mimeType, Subject: subject, DriveFileID: localID, DriveFolderID: folderID, Status: "staged"}
+	dbFile := &models.File{GroupID: groupID, UserID: user.ID, SharedByPhone: userPhone, SharedByName: sharedByName, FileName: versionedName, FileSize: fileSize, MimeType: mimeType, Subject: subject, DriveFileID: localID, DriveFolderID: folderID, Status: "staged", ContentHash: contentHash}
 	saved, err := s.store.AddFile(dbFile)
 	if err != nil { log.Printf("❌ DB: %v", err); http.Error(w, `{"error":"db save failed"}`, 500); return }
 
@@ -1484,24 +1534,65 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 	// never captured by the bot. This is the fix for "Reyna only sees its own
 	// staging table" — older notes already organised in Drive are now searchable.
 	driveMatches := s.collectDriveContext(groupIDs, what, 25)
-	log.Printf("[NLP-RETRIEVE] db_files=%d drive_matches=%d", len(files), len(driveMatches))
+	// If WHO was specified, drop Drive matches that can't be attributed.
+	if who != "" {
+		driveMatches = filterDriveMatchesByWho(driveMatches, who)
+	}
+	log.Printf("[NLP-RETRIEVE] db_files=%d drive_matches=%d (after metadata pass)", len(files), len(driveMatches))
+
+	// ── Deep content retrieval (Fix 3 from earlier) ──
+	// If metadata search returned nothing, OR the query has specific content
+	// cues that metadata can't catch ("the diagram with R1 R2", "the page
+	// mentioning Wien bridge"), send candidate PDFs to Gemini and ask which
+	// ones actually match. Cost: ~₹0.05 per candidate, capped at 5.
+	if len(files) == 0 || hasContentCues(req.Query) {
+		log.Printf("[NLP-RETRIEVE] triggering deep content retrieval")
+		deepHits := s.deepContentRetrieve(groupIDs, req.Query, who, sinceTime, 5)
+		if len(deepHits) > 0 {
+			// Merge: deep hits take priority, then add metadata hits not already present
+			seen := map[int64]bool{}
+			merged := make([]models.File, 0, len(deepHits)+len(files))
+			for _, f := range deepHits {
+				if !seen[f.ID] {
+					merged = append(merged, f)
+					seen[f.ID] = true
+				}
+			}
+			for _, f := range files {
+				if !seen[f.ID] {
+					merged = append(merged, f)
+					seen[f.ID] = true
+				}
+			}
+			files = merged
+			log.Printf("[NLP-RETRIEVE] after deep retrieve: db_files=%d", len(files))
+		}
+	}
 
 	// Build a conversational LLM-generated reply (multi-language, intent-aware).
+	// We pre-compute the time strings so the LLM can't hallucinate "2 days ago"
+	// when the file was actually shared 2 minutes ago. All times are in IST.
 	dbView := make([]nlp.RetrievalFile, 0, len(files))
 	for _, f := range files {
 		dbView = append(dbView, nlp.RetrievalFile{
 			Name:     f.FileName,
 			Folder:   f.Subject,
 			Sender:   f.SharedByName,
-			SharedAt: f.CreatedAt.Format("Mon 2006-01-02 15:04 MST"),
+			SharedAt: formatSharedAt(f.CreatedAt),
 			Summary:  s.store.GetFileExtractedContent([]int64{f.ID})[f.ID],
 		})
 	}
 	driveView := make([]nlp.RetrievalFile, 0, len(driveMatches))
 	for _, m := range driveMatches {
+		shared := ""
+		if !m.SharedAt.IsZero() {
+			shared = formatSharedAt(m.SharedAt)
+		}
 		driveView = append(driveView, nlp.RetrievalFile{
-			Name:   m.FileName,
-			Folder: m.FolderName,
+			Name:     m.FileName,
+			Folder:   m.FolderName,
+			Sender:   m.SenderName,
+			SharedAt: shared,
 		})
 	}
 	reply := s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, dbView, driveView)
@@ -1758,8 +1849,183 @@ func (s *Server) collectDriveContext(groupIDs []int64, what string, maxMatches i
 		}
 	}
 
-	log.Printf("[DRIVE-CTX] what=%q → %d match(es) under root %s", what, len(matches), driveUser.DriveRootID)
+	// Enrich each Drive match with WHO/WHEN metadata from Reyna's DB by
+	// joining on drive_file_id. Files captured by the bot AND organised in
+	// Drive get full sender + shared-at info; pure Drive-natives stay empty.
+	matches = s.store.EnrichDriveMatches(matches)
+	log.Printf("[DRIVE-CTX] what=%q → %d match(es) under root %s (enriched)", what, len(matches), driveUser.DriveRootID)
 	return matches
+}
+
+// istLocation is the timezone Reyna displays times in. Hardcoded IST so the
+// hackathon demo doesn't depend on server locale. If you ever need a per-user
+// timezone, store it on the user record and look it up here.
+var istLocation = func() *time.Location {
+	loc, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		// Fallback: hardcoded +05:30 offset
+		return time.FixedZone("IST", 5*3600+30*60)
+	}
+	return loc
+}()
+
+// formatSharedAt returns a precomputed "X minutes ago, on Mon DD HH:MM IST"
+// string. We pre-compute this and feed it to the LLM rather than letting the
+// LLM compute relative time itself — otherwise it hallucinates ("2 days ago"
+// when the file was 2 minutes ago).
+func formatSharedAt(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	now := time.Now()
+	delta := now.Sub(t)
+	var rel string
+	switch {
+	case delta < 60*time.Second:
+		rel = "just now"
+	case delta < 60*time.Minute:
+		rel = fmt.Sprintf("%d minute(s) ago", int(delta.Minutes()))
+	case delta < 24*time.Hour:
+		rel = fmt.Sprintf("%d hour(s) ago", int(delta.Hours()))
+	case delta < 7*24*time.Hour:
+		rel = fmt.Sprintf("%d day(s) ago", int(delta.Hours()/24))
+	default:
+		rel = fmt.Sprintf("%d day(s) ago", int(delta.Hours()/24))
+	}
+	return fmt.Sprintf("%s (on %s)", rel, t.In(istLocation).Format("Mon Jan 2 15:04 IST"))
+}
+
+// hasContentCues returns true if the query mentions something specific that
+// metadata search can't easily catch — diagrams, figures, equations, tables,
+// page references, "the one about X", multi-line recall, etc. When true, we
+// trigger deep content retrieval even if metadata search found something,
+// because the user is clearly asking for content-level matching.
+func hasContentCues(query string) bool {
+	q := strings.ToLower(query)
+	cues := []string{
+		"diagram", "figure", "chart", "graph", "table", "image", "picture",
+		"equation", "formula", "theorem", "lemma", "proof", "derivation",
+		"the one with", "the one about", "the one that", "the page",
+		"page ", "section ", "chapter ", "module ", "unit ",
+		"mentioning", "mentions", "talks about", "explains", "discusses",
+		"contains", "shows", "depicts", "labelled", "labeled",
+		"r1", "r2", "r3", "fig.", "fig ",
+	}
+	for _, c := range cues {
+		if strings.Contains(q, c) {
+			return true
+		}
+	}
+	// Long descriptive query (>10 words) usually means specific recall
+	if len(strings.Fields(query)) > 10 {
+		return true
+	}
+	return false
+}
+
+// deepContentRetrieve does an expensive but accurate AI-powered search:
+// for each candidate file (ranked by metadata + recency), it sends the
+// actual PDF bytes to Gemini and asks "does this document match the user's
+// natural-language description?". Used when metadata search fails or when
+// the query contains specific content cues ("the PDF with the wien bridge
+// diagram", "the one mentioning Coulomb's law").
+//
+// Cost: ~₹0.05 per candidate. Capped at 5 candidates per query.
+// Latency: ~3-5s per candidate, sequential.
+func (s *Server) deepContentRetrieve(groupIDs []int64, rawQuery string, who string, sinceTime *time.Time, maxCandidates int) []models.File {
+	if maxCandidates <= 0 {
+		maxCandidates = 5
+	}
+	// Pull candidate pool: WHO + WHEN filter only, no WHAT (we're going to
+	// let Gemini decide WHAT). If WHO is empty, get the most recent files.
+	candidates, _ := s.store.SearchFilesNLP(groupIDs, who, "", sinceTime, maxCandidates*2)
+	if len(candidates) == 0 && who != "" {
+		// Drop the WHO filter — maybe the user misspelled the sender
+		candidates, _ = s.store.SearchFilesNLP(groupIDs, "", "", sinceTime, maxCandidates*2)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	log.Printf("[DEEP-RETRIEVE] %d candidate(s) for query=%q", len(candidates), rawQuery)
+
+	// Cap candidates we actually send to Gemini
+	if len(candidates) > maxCandidates {
+		candidates = candidates[:maxCandidates]
+	}
+
+	type scored struct {
+		file  models.File
+		score float64
+	}
+	var hits []scored
+	for _, f := range candidates {
+		// Only PDFs/images can be sent as inline doc blocks; for others, fall
+		// back to the cached extracted_content textual match.
+		canSendAsDoc := strings.Contains(f.MimeType, "pdf") || strings.Contains(f.MimeType, "image")
+
+		var matched bool
+		var confidence float64
+
+		if canSendAsDoc {
+			data, derr := s.drive.GetLocalFileData(f.ID)
+			if derr != nil || len(data) == 0 {
+				log.Printf("[DEEP-RETRIEVE] skip %s — no local bytes", f.FileName)
+				continue
+			}
+			matched, confidence = s.classifier.MatchesQuery(rawQuery, f.FileName, f.MimeType, data)
+		} else {
+			// Text-mode: feed cached content to the matcher
+			content := s.store.GetFileExtractedContent([]int64{f.ID})[f.ID]
+			if content == "" {
+				continue
+			}
+			matched, confidence = s.classifier.MatchesQueryText(rawQuery, f.FileName, content)
+		}
+		if matched && confidence >= 0.3 {
+			log.Printf("[DEEP-RETRIEVE] HIT %s (confidence=%.0f%%)", f.FileName, confidence*100)
+			hits = append(hits, scored{f, confidence})
+		} else {
+			log.Printf("[DEEP-RETRIEVE] miss %s (confidence=%.0f%%)", f.FileName, confidence*100)
+		}
+	}
+
+	// Sort by confidence DESC
+	for i := 1; i < len(hits); i++ {
+		for j := i; j > 0 && hits[j-1].score < hits[j].score; j-- {
+			hits[j-1], hits[j] = hits[j], hits[j-1]
+		}
+	}
+	out := make([]models.File, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, h.file)
+	}
+	return out
+}
+
+// filterDriveMatchesByWho drops Drive matches whose enriched sender doesn't
+// contain `who`. Pure Drive-native files (no sender info from the DB) are
+// dropped when WHO is set, since they can't be attributed.
+func filterDriveMatchesByWho(matches []models.DriveMatch, who string) []models.DriveMatch {
+	if who == "" {
+		return matches
+	}
+	whoLower := strings.ToLower(strings.TrimSpace(who))
+	first := whoLower
+	if fields := strings.Fields(whoLower); len(fields) > 0 {
+		first = fields[0]
+	}
+	out := matches[:0]
+	for _, m := range matches {
+		name := strings.ToLower(m.SenderName)
+		if name == "" {
+			continue
+		}
+		if strings.Contains(name, whoLower) || strings.Contains(name, first) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // downloadDriveMatchesForQA downloads up to `maxFiles` PDFs from the given
@@ -1954,7 +2220,7 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 			Content:    content,
 			SenderName: f.SharedByName,
 			Subject:    f.Subject,
-			SharedAt:   f.CreatedAt,
+			SharedAt:   f.CreatedAt.In(istLocation),
 		})
 		sourceNames = append(sourceNames, f.FileName)
 	}
