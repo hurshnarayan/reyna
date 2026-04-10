@@ -1,4 +1,4 @@
-package db
+package repository
 
 import (
 	"database/sql"
@@ -8,7 +8,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/reyna-bot/reyna-backend/internal/models"
+	"github.com/reyna-bot/reyna-backend/internal/model"
 )
 
 type Store struct {
@@ -145,7 +145,7 @@ func (s *Store) migrate() error {
 
 // ── User Operations ──
 
-func (s *Store) UpsertUser(phone, name string) (*models.User, error) {
+func (s *Store) UpsertUser(phone, name string) (*model.User, error) {
 	// Clean the name: don't store phone numbers or LIDs as names
 	cleanName := name
 	if isAllDigitsOrPlus(cleanName) {
@@ -175,8 +175,8 @@ func isAllDigitsOrPlus(s string) bool {
 	return true
 }
 
-func (s *Store) GetUserByPhone(phone string) (*models.User, error) {
-	u := &models.User{}
+func (s *Store) GetUserByPhone(phone string) (*model.User, error) {
+	u := &model.User{}
 	err := s.db.QueryRow(
 		`SELECT id, phone, name, email, google_token, google_refresh, drive_root_id, created_at, updated_at FROM users WHERE phone=?`,
 		phone,
@@ -187,8 +187,8 @@ func (s *Store) GetUserByPhone(phone string) (*models.User, error) {
 	return u, nil
 }
 
-func (s *Store) GetUserByID(id int64) (*models.User, error) {
-	u := &models.User{}
+func (s *Store) GetUserByID(id int64) (*model.User, error) {
+	u := &model.User{}
 	err := s.db.QueryRow(
 		`SELECT id, phone, name, email, google_token, google_refresh, drive_root_id, created_at, updated_at FROM users WHERE id=?`,
 		id,
@@ -214,7 +214,7 @@ func (s *Store) UpdateUserGoogleExpiry(userID int64, expiresAt int64) error {
 
 // ── Group Operations ──
 
-func (s *Store) UpsertGroup(waID, name string, createdBy int64) (*models.Group, error) {
+func (s *Store) UpsertGroup(waID, name string, createdBy int64) (*model.Group, error) {
 	_, err := s.db.Exec(
 		`INSERT INTO groups_ (wa_id, name, created_by, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
 		 ON CONFLICT(wa_id) DO UPDATE SET name=excluded.name, updated_at=CURRENT_TIMESTAMP`,
@@ -226,8 +226,8 @@ func (s *Store) UpsertGroup(waID, name string, createdBy int64) (*models.Group, 
 	return s.GetGroupByWAID(waID)
 }
 
-func (s *Store) GetGroupByWAID(waID string) (*models.Group, error) {
-	g := &models.Group{}
+func (s *Store) GetGroupByWAID(waID string) (*model.Group, error) {
+	g := &model.Group{}
 	err := s.db.QueryRow(
 		`SELECT id, wa_id, name, member_count, created_by, created_at, updated_at FROM groups_ WHERE wa_id=?`,
 		waID,
@@ -254,7 +254,7 @@ func (s *Store) UpdateGroupName(groupID int64, name string) error {
 	return err
 }
 
-func (s *Store) GetAllGroups() ([]models.Group, error) {
+func (s *Store) GetAllGroups() ([]model.Group, error) {
 	rows, err := s.db.Query(
 		`SELECT id, wa_id, name, member_count, created_by, created_at, updated_at FROM groups_ ORDER BY name ASC`,
 	)
@@ -262,16 +262,16 @@ func (s *Store) GetAllGroups() ([]models.Group, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var groups []models.Group
+	var groups []model.Group
 	for rows.Next() {
-		var g models.Group
+		var g model.Group
 		rows.Scan(&g.ID, &g.WAID, &g.Name, &g.MemberCount, &g.CreatedBy, &g.CreatedAt, &g.UpdatedAt)
 		groups = append(groups, g)
 	}
 	return groups, nil
 }
 
-func (s *Store) GetUserGroups(userID int64) ([]models.Group, error) {
+func (s *Store) GetUserGroups(userID int64) ([]model.Group, error) {
 	rows, err := s.db.Query(
 		`SELECT g.id, g.wa_id, g.name, g.member_count, g.created_by, g.created_at, g.updated_at
 		 FROM groups_ g JOIN group_members gm ON g.id = gm.group_id WHERE gm.user_id=? ORDER BY g.updated_at DESC`,
@@ -281,9 +281,9 @@ func (s *Store) GetUserGroups(userID int64) ([]models.Group, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var groups []models.Group
+	var groups []model.Group
 	for rows.Next() {
-		var g models.Group
+		var g model.Group
 		rows.Scan(&g.ID, &g.WAID, &g.Name, &g.MemberCount, &g.CreatedBy, &g.CreatedAt, &g.UpdatedAt)
 		groups = append(groups, g)
 	}
@@ -354,7 +354,7 @@ func (s *Store) AutoLinkUserToGroups(userID int64, phone string) {
 
 // ── File Operations ──
 
-func (s *Store) AddFile(f *models.File) (*models.File, error) {
+func (s *Store) AddFile(f *model.File) (*model.File, error) {
 	var existingID int64
 	var existingVersion int
 	err := s.db.QueryRow(
@@ -451,7 +451,7 @@ func (s *Store) RemoveAllStaged(groupID int64) (int64, error) {
 }
 
 // GetStagedFiles returns all staged (uncommitted) files in a group
-func (s *Store) GetStagedFiles(groupID int64) ([]models.File, error) {
+func (s *Store) GetStagedFiles(groupID int64) ([]model.File, error) {
 	rows, err := s.db.Query(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
 		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
@@ -472,7 +472,7 @@ func (s *Store) CountStagedFiles(groupID int64) int {
 	return c
 }
 
-func (s *Store) FindFiles(groupID int64, query string) ([]models.File, error) {
+func (s *Store) FindFiles(groupID int64, query string) ([]model.File, error) {
 	rows, err := s.db.Query(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
 		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
@@ -487,7 +487,7 @@ func (s *Store) FindFiles(groupID int64, query string) ([]models.File, error) {
 	return scanFiles(rows)
 }
 
-func (s *Store) GetGroupFiles(groupID int64, limit int) ([]models.File, error) {
+func (s *Store) GetGroupFiles(groupID int64, limit int) ([]model.File, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -504,7 +504,7 @@ func (s *Store) GetGroupFiles(groupID int64, limit int) ([]models.File, error) {
 	return scanFiles(rows)
 }
 
-func (s *Store) GetUserFiles(userID int64, limit int) ([]models.File, error) {
+func (s *Store) GetUserFiles(userID int64, limit int) ([]model.File, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -521,7 +521,7 @@ func (s *Store) GetUserFiles(userID int64, limit int) ([]models.File, error) {
 	return scanFiles(rows)
 }
 
-func (s *Store) GetFileVersions(fileID int64) ([]models.FileVersion, error) {
+func (s *Store) GetFileVersions(fileID int64) ([]model.FileVersion, error) {
 	// Get the original file name, find all versions
 	var fileName string
 	var groupID int64
@@ -536,9 +536,9 @@ func (s *Store) GetFileVersions(fileID int64) ([]models.FileVersion, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var versions []models.FileVersion
+	var versions []model.FileVersion
 	for rows.Next() {
-		var v models.FileVersion
+		var v model.FileVersion
 		rows.Scan(&v.ID, &v.Version, &v.DriveFileID, &v.FileSize, &v.ChangedBy, &v.CreatedAt)
 		v.FileID = fileID
 		versions = append(versions, v)
@@ -558,7 +558,7 @@ func (s *Store) CountUserFiles(userID int64) int {
 	return c
 }
 
-func (s *Store) GetNewFilesSince(groupID int64, since time.Time) ([]models.File, error) {
+func (s *Store) GetNewFilesSince(groupID int64, since time.Time) ([]model.File, error) {
 	rows, err := s.db.Query(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
 		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
@@ -574,8 +574,8 @@ func (s *Store) GetNewFilesSince(groupID int64, since time.Time) ([]models.File,
 
 // ── Dashboard Stats ──
 
-func (s *Store) GetDashboardStats(userID int64) (*models.DashboardStats, error) {
-	stats := &models.DashboardStats{
+func (s *Store) GetDashboardStats(userID int64) (*model.DashboardStats, error) {
+	stats := &model.DashboardStats{
 		SubjectBreak: make(map[string]int),
 	}
 
@@ -624,7 +624,7 @@ func (s *Store) GetDashboardStats(userID int64) (*models.DashboardStats, error) 
 	)
 	if contribRows != nil {
 		for contribRows.Next() {
-			var c models.Contributor
+			var c model.Contributor
 			contribRows.Scan(&c.Name, &c.Phone, &c.Count)
 			stats.TopContributors = append(stats.TopContributors, c)
 		}
@@ -670,7 +670,7 @@ func (s *Store) GetUserGroupIDs(userID int64) []int64 {
 }
 
 // GetGroupsFiles returns files from multiple groups
-func (s *Store) GetGroupsFiles(groupIDs []int64, limit int) ([]models.File, error) {
+func (s *Store) GetGroupsFiles(groupIDs []int64, limit int) ([]model.File, error) {
 	if len(groupIDs) == 0 {
 		return nil, nil
 	}
@@ -714,7 +714,7 @@ func (s *Store) LogActivity(groupID, userID int64, action, command, result strin
 	)
 }
 
-func (s *Store) GetActivityLog(groupID int64, limit int) ([]models.ActivityLog, error) {
+func (s *Store) GetActivityLog(groupID int64, limit int) ([]model.ActivityLog, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -727,9 +727,9 @@ func (s *Store) GetActivityLog(groupID int64, limit int) ([]models.ActivityLog, 
 		return nil, err
 	}
 	defer rows.Close()
-	var logs []models.ActivityLog
+	var logs []model.ActivityLog
 	for rows.Next() {
-		var l models.ActivityLog
+		var l model.ActivityLog
 		rows.Scan(&l.ID, &l.GroupID, &l.UserID, &l.Action, &l.Command, &l.Result, &l.CreatedAt)
 		logs = append(logs, l)
 	}
@@ -738,8 +738,8 @@ func (s *Store) GetActivityLog(groupID int64, limit int) ([]models.ActivityLog, 
 
 // ── File Delete ──
 
-func (s *Store) GetFileByID(fileID int64) (*models.File, error) {
-	f := &models.File{}
+func (s *Store) GetFileByID(fileID int64) (*model.File, error) {
+	f := &model.File{}
 	err := s.db.QueryRow(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
 		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
@@ -794,7 +794,7 @@ func (s *Store) SuggestFiles(groupIDs []int64, prefix string, limit int) []strin
 }
 
 // FindFilesStrict uses stricter matching - filename must contain the query as a word boundary
-func (s *Store) FindFilesStrict(groupIDs []int64, query string, limit int) ([]models.File, error) {
+func (s *Store) FindFilesStrict(groupIDs []int64, query string, limit int) ([]model.File, error) {
 	if len(groupIDs) == 0 {
 		return nil, nil
 	}
@@ -819,8 +819,8 @@ func (s *Store) FindFilesStrict(groupIDs []int64, query string, limit int) ([]mo
 }
 
 // FileExistsInGroup checks if a file with the given name exists committed in a group
-func (s *Store) FileExistsInGroup(groupID int64, fileName string) (*models.File, bool) {
-	f := &models.File{}
+func (s *Store) FileExistsInGroup(groupID int64, fileName string) (*model.File, bool) {
+	f := &model.File{}
 	err := s.db.QueryRow(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
 		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
@@ -877,8 +877,8 @@ func (s *Store) CountWaitlist() int {
 
 // ── Group Settings ──
 
-func (s *Store) GetGroupSettings(groupID int64) *models.GroupSettings {
-	gs := &models.GroupSettings{GroupID: groupID, Enabled: false, TrackingMode: "auto", AutoCommitHours: 24, ReactionEmoji: "📌"}
+func (s *Store) GetGroupSettings(groupID int64) *model.GroupSettings {
+	gs := &model.GroupSettings{GroupID: groupID, Enabled: false, TrackingMode: "auto", AutoCommitHours: 24, ReactionEmoji: "📌"}
 	err := s.db.QueryRow(
 		`SELECT group_id, enabled, tracking_mode, auto_commit_hours, reaction_emoji FROM group_settings WHERE group_id=?`,
 		groupID,
@@ -889,7 +889,7 @@ func (s *Store) GetGroupSettings(groupID int64) *models.GroupSettings {
 	return gs
 }
 
-func (s *Store) UpsertGroupSettings(gs *models.GroupSettings) error {
+func (s *Store) UpsertGroupSettings(gs *model.GroupSettings) error {
 	_, err := s.db.Exec(
 		`INSERT INTO group_settings (group_id, enabled, tracking_mode, auto_commit_hours, reaction_emoji)
 		 VALUES (?, ?, ?, ?, ?)
@@ -943,7 +943,7 @@ func (s *Store) GetAllEnabledGroupWAIDs() []string {
 
 // ── Sortable File Queries ──
 
-func (s *Store) GetFilesWithSorting(groupIDs []int64, sortBy, sortOrder string, limit int) ([]models.File, error) {
+func (s *Store) GetFilesWithSorting(groupIDs []int64, sortBy, sortOrder string, limit int) ([]model.File, error) {
 	if len(groupIDs) == 0 {
 		return nil, nil
 	}
@@ -988,7 +988,7 @@ func (s *Store) GetFilesWithSorting(groupIDs []int64, sortBy, sortOrder string, 
 
 // ── Auto-Commit Queries ──
 
-func (s *Store) GetStagedFilesOlderThan(hours int) ([]models.File, error) {
+func (s *Store) GetStagedFilesOlderThan(hours int) ([]model.File, error) {
 	rows, err := s.db.Query(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
 		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
@@ -1003,7 +1003,7 @@ func (s *Store) GetStagedFilesOlderThan(hours int) ([]models.File, error) {
 	return scanFiles(rows)
 }
 
-func (s *Store) GetStagedFilesByGroupID(groupID int64) ([]models.File, error) {
+func (s *Store) GetStagedFilesByGroupID(groupID int64) ([]model.File, error) {
 	rows, err := s.db.Query(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
 		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
@@ -1019,10 +1019,10 @@ func (s *Store) GetStagedFilesByGroupID(groupID int64) ([]models.File, error) {
 
 // ── Helpers ──
 
-func scanFiles(rows *sql.Rows) ([]models.File, error) {
-	var files []models.File
+func scanFiles(rows *sql.Rows) ([]model.File, error) {
+	var files []model.File
 	for rows.Next() {
-		var f models.File
+		var f model.File
 		err := rows.Scan(&f.ID, &f.GroupID, &f.UserID, &f.SharedByPhone, &f.SharedByName,
 			&f.FileName, &f.FileSize, &f.MimeType, &f.DriveFileID, &f.DriveFolderID,
 			&f.Subject, &f.Tags, &f.Version, &f.ParentFileID, &f.WAMessageID, &f.Status, &f.CreatedAt)
@@ -1072,11 +1072,11 @@ func (s *Store) DistinctSubjectsForGroup(groupID int64) []string {
 
 // FindFileByHash returns the most recent file in the group whose content hash
 // matches. Used for byte-identical duplicate detection on bot upload.
-func (s *Store) FindFileByHash(groupID int64, hash string) *models.File {
+func (s *Store) FindFileByHash(groupID int64, hash string) *model.File {
 	if hash == "" {
 		return nil
 	}
-	f := &models.File{}
+	f := &model.File{}
 	err := s.db.QueryRow(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
 		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
@@ -1110,7 +1110,7 @@ func (s *Store) LatestVersionByName(groupID int64, fileName string) int {
 // metadata from the Reyna DB by matching on drive_file_id. Files captured by
 // the bot AND organised in Drive carry full sender/time info; pure Drive-native
 // files (organised before Reyna) keep empty sender fields.
-func (s *Store) EnrichDriveMatches(matches []models.DriveMatch) []models.DriveMatch {
+func (s *Store) EnrichDriveMatches(matches []model.DriveMatch) []model.DriveMatch {
 	if len(matches) == 0 {
 		return matches
 	}
@@ -1169,8 +1169,8 @@ func (s *Store) MarkFileDeletedInDrive(fileID int64) {
 }
 
 // FindDriveConnectedUser finds any user in a group who has Google Drive connected
-func (s *Store) FindDriveConnectedUser(groupID int64) *models.User {
-	u := &models.User{}
+func (s *Store) FindDriveConnectedUser(groupID int64) *model.User {
+	u := &model.User{}
 	err := s.db.QueryRow(
 		`SELECT u.id, u.phone, u.name, u.email, u.google_token, u.google_refresh, u.drive_root_id, u.created_at, u.updated_at
 		 FROM users u JOIN group_members gm ON u.id = gm.user_id
@@ -1212,7 +1212,7 @@ func (s *Store) GetFileContent(fileID int64) (string, string) {
 // ── NLP Conversational Retrieval ──
 
 // SearchFilesNLP searches files by sender, content, filename, subject, and time window
-func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *time.Time, limit int) ([]models.File, error) {
+func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *time.Time, limit int) ([]model.File, error) {
 	if len(groupIDs) == 0 {
 		return nil, nil
 	}
@@ -1351,7 +1351,7 @@ func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *ti
 // Tokenized — every significant word in `query` must appear somewhere in
 // the file's content/filename/subject/summary. Files with empty extracted
 // content are excluded so the caller can fall back to live extraction.
-func (s *Store) SearchFilesContent(groupIDs []int64, query string, limit int) ([]models.File, error) {
+func (s *Store) SearchFilesContent(groupIDs []int64, query string, limit int) ([]model.File, error) {
 	if len(groupIDs) == 0 {
 		return nil, nil
 	}

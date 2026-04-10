@@ -6,19 +6,19 @@ Thumbs.db
 *~
 
 # ── Backend (Go) ──
-backend/reyna-server
-backend/server
-backend/*.db
-backend/*.db-shm
-backend/*.db-wal
-backend/drive_storage/
-backend/bin/
-backend/tmp/
+reyna-server
+server
+*.db
+*.db-shm
+*.db-wal
+drive_storage/
+bin/
+tmp/
 *.test
 *.out
 coverage.txt
 
-# ── Other frontend variants/backups — ignore everything except `frontend/` ──
+# ── Other frontend variants/backups — ignore everything except `web/` ──
 /frontend.old/
 /frontend_lusion/
 /frontend_serika_dark_inter/
@@ -34,21 +34,21 @@ coverage.txt
 /frontend-*/
 /frontend.*/
 
-# ── Frontend (React + Vite) ── keep `frontend/` itself, ignore build trash
-frontend/node_modules/
-frontend/dist/
-frontend/build/
-frontend/.vite/
-frontend/.cache/
-frontend/.parcel-cache/
-frontend/.next/
-frontend/.turbo/
-frontend/coverage/
-frontend/src_backup/
-frontend/*.local
-frontend/*.tsbuildinfo
-frontend/stats.html
-frontend/.eslintcache
+# ── Frontend (React + Vite) ── keep `web/` itself, ignore build trash
+web/node_modules/
+web/dist/
+web/build/
+web/.vite/
+web/.cache/
+web/.parcel-cache/
+web/.next/
+web/.turbo/
+web/coverage/
+web/src_backup/
+web/*.local
+web/*.tsbuildinfo
+web/stats.html
+web/.eslintcache
 
 # ── WhatsApp Bot (Node.js) ──
 whatsapp-bot/node_modules/

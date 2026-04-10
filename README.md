@@ -33,69 +33,19 @@
 
 ---
 
-## 🛑 Read this first
+## 🛑 Before you scroll: read this
 
 > ### Reyna is **not** an LLM wrapper.
 > Out of **7 processing stages** in the pipeline, **only ONE** involves an LLM call.
 > The other six are real, hand-built systems: cryptographic deduplication, zip-archive parsing, ranked SQL retrieval, fuzzy folder normalization, multilingual stopword tokenization, and Drive permission management.
 >
-> If you've seen "AI projects" that are 50 lines of `openai.chat.completions.create()` — **this is the opposite of that**.
+> If you've seen "AI projects" that are 50 lines of `openai.chat.completions.create()` — **this is the opposite of that**. Keep scrolling — the proof is in the very next section, before the features, before anything else.
 
 <br/>
 
-## 🎯 The problem (in one image)
+## 🧠 The 7-stage pipeline — the part most "AI projects" don't have
 
-```
-╭─────────────────────────────────────────────────────────────────╮
-│                                                                 │
-│   "Bro send that PYQ again?"                                    │
-│   "Which Mod 5 notes are the latest?"                           │
-│   "Anyone has the wien bridge oscillator pdf?"                  │
-│   "Wait, who shared the lab manual on tuesday?"                 │
-│                                                                 │
-│   ↑ Every group chat in India, every single day.                │
-│                                                                 │
-╰─────────────────────────────────────────────────────────────────╯
-```
-
-2 billion WhatsApp users. Zero file management. PDFs scroll past, lab manuals vanish under 200 unread messages, and "send me that file again" becomes the daily ritual. Drive folders, if they exist at all, are messy and unmaintained because **nobody has time to file every PDF by hand.**
-
-So nobody does.
-
----
-
-## ✨ What Reyna actually does
-
-```
-╭─────────────────────────────────────────────────────────────────╮
-│                                                                 │
-│   Someone shares a file in your WhatsApp study group.           │
-│                                                                 │
-│      ↓  Reyna sees it instantly.                                │
-│      ↓  Reyna reads what's inside (not just the filename).      │
-│      ↓  Reyna figures out which subject it belongs to.          │
-│      ↓  Reyna files it in your Google Drive — auto-versioned.   │
-│      ↓  Reyna remembers WHO sent it and WHEN.                   │
-│                                                                 │
-│   2 hours later, you DM Reyna:                                  │
-│      "what did mohit share about oscillators today?"            │
-│                                                                 │
-│   Reyna replies with the file link AND an answer from inside    │
-│   the document, in the same language you asked.                 │
-│                                                                 │
-│   You ask "in simpler words?" → she refines.                    │
-│   You ask "and the formula?" → she pulls it from the same PDF.  │
-│                                                                 │
-╰─────────────────────────────────────────────────────────────────╯
-```
-
-**That's the entire loop. Capture → understand → organise → retrieve → answer. Hands-off. Multilingual. In one bot.**
-
----
-
-## 🧠 The 7-stage pipeline (the part that gets dismissed as "just an API call")
-
-Every file that lands in Reyna goes through **seven** distinct processing stages before it hits your Drive. Six of them never touch an LLM. Here they are:
+Every file that lands in Reyna goes through **seven** distinct processing stages before it hits your Drive. Six of them never touch an LLM at all. **This is the engineering work that makes Reyna a product, not a demo.**
 
 <table>
 <tr>
@@ -167,6 +117,60 @@ Every stat on the Reyna dashboard is calculated from a real SQL aggregation quer
 | ⏱️ Activity over time | `SELECT date(created_at), COUNT(*) FROM files GROUP BY date(created_at)` |
 
 All in `backend/internal/db/store.go:GetDashboardStats`.
+
+---
+
+> #### Now that you know what's actually inside, here's what it does for the user 👇
+
+---
+
+## 🎯 The problem (in one image)
+
+```
+╭─────────────────────────────────────────────────────────────────╮
+│                                                                 │
+│   "Bro send that PYQ again?"                                    │
+│   "Which Mod 5 notes are the latest?"                           │
+│   "Anyone has the wien bridge oscillator pdf?"                  │
+│   "Wait, who shared the lab manual on tuesday?"                 │
+│                                                                 │
+│   ↑ Every group chat in India, every single day.                │
+│                                                                 │
+╰─────────────────────────────────────────────────────────────────╯
+```
+
+2 billion WhatsApp users. Zero file management. PDFs scroll past, lab manuals vanish under 200 unread messages, and "send me that file again" becomes the daily ritual. Drive folders, if they exist at all, are messy and unmaintained because **nobody has time to file every PDF by hand.**
+
+So nobody does.
+
+---
+
+## ✨ What Reyna actually does
+
+```
+╭─────────────────────────────────────────────────────────────────╮
+│                                                                 │
+│   Someone shares a file in your WhatsApp study group.           │
+│                                                                 │
+│      ↓  Reyna sees it instantly.                                │
+│      ↓  Reyna reads what's inside (not just the filename).      │
+│      ↓  Reyna figures out which subject it belongs to.          │
+│      ↓  Reyna files it in your Google Drive — auto-versioned.   │
+│      ↓  Reyna remembers WHO sent it and WHEN.                   │
+│                                                                 │
+│   2 hours later, you DM Reyna:                                  │
+│      "what did mohit share about oscillators today?"            │
+│                                                                 │
+│   Reyna replies with the file link AND an answer from inside    │
+│   the document, in the same language you asked.                 │
+│                                                                 │
+│   You ask "in simpler words?" → she refines.                    │
+│   You ask "and the formula?" → she pulls it from the same PDF.  │
+│                                                                 │
+╰─────────────────────────────────────────────────────────────────╯
+```
+
+**That's the entire loop. Capture → understand → organise → retrieve → answer. Hands-off. Multilingual. In one bot.**
 
 ---
 
@@ -288,34 +292,48 @@ Open a DM with the Reyna number, type `reyna find srikar's python notes`, and:
 
 ## 📁 Repository layout
 
+Standard Go project layout — `cmd/` for entry points, `internal/` for the application packages, `web/` for the React frontend, the WhatsApp bot as a sibling Node project at the root.
+
 ```
 reyna/
-├── backend/                 # Go server — 7-stage pipeline
-│   ├── cmd/server/         # Entry point
-│   └── internal/
-│       ├── api/            # HTTP handlers (bot upload, NLP retrieve, Q&A)
-│       ├── auth/           # JWT
-│       ├── config/         # Env loader
-│       ├── db/             # SQLite store + tokenizer + ranked search SQL
-│       ├── gdrive/         # Drive API v3 + OAuth + auto-public links
-│       ├── llm/            # Provider-agnostic LLM iface (Gemini/Claude/Grok/OpenAI)
-│       ├── models/         # Domain types
-│       ├── nlp/            # Classifier + extractor + folder snap + multi-turn QA
-│       └── reyna/          # Bot reply generation
-├── frontend/                # React + Vite dashboard (1.2k LOC, no UI lib)
+├── cmd/
+│   └── server/
+│       └── main.go              # Backend entry point — wires DB, drive, LLM, HTTP mux
+│
+├── internal/                    # Go application packages — the 7-stage pipeline
+│   ├── api/                     # HTTP layer — bot upload, NLP retrieve, Q&A handlers
+│   ├── service/                 # Business logic layer (placeholder — see README)
+│   ├── repository/              # SQLite store · tokenizer · ranked SQL retrieval
+│   ├── model/                   # Shared domain types (User, File, DriveMatch, …)
+│   ├── middleware/              # HTTP middleware (placeholder — auth lives in internal/auth for now)
+│   ├── auth/                    # JWT issue + validate
+│   ├── config/                  # .env loader
+│   ├── nlp/                     # Classifier · folder snap · tokenizer · office text extractor
+│   ├── reyna/                   # Bot reply / personality generation
+│   └── integrations/            # External services
+│       ├── gdrive/              # Drive API v3 · OAuth · auto-public link permissions
+│       └── llm/                 # Provider-agnostic LLM iface (Gemini · Claude · Grok · OpenAI)
+│
+├── web/                         # React + Vite dashboard (1.2k LOC, no UI library)
 │   ├── src/
-│   │   ├── pages/          # Landing · Dashboard · Files · Search · Settings
-│   │   ├── components/     # Icons · notifications
-│   │   └── lib/            # API client
+│   │   ├── pages/               # Landing · Dashboard · Files · Search · Settings
+│   │   ├── components/          # Icons · notifications
+│   │   └── lib/                 # API client
+│   ├── public/
 │   └── package.json
-├── whatsapp-bot/            # Baileys Node bot
-│   ├── bot.js              # Wake-word DM gate · session continuation · follow-ups
+│
+├── whatsapp-bot/                # Baileys Node bot — separate runtime
+│   ├── bot.js                   # Wake-word DM gate · session continuation · follow-ups
 │   └── package.json
-├── docs/
-│   ├── demo.mp4            # ← drop your screen recording here
-│   └── demo.tape           # ← vhs script to regenerate the demo (optional)
-├── .env.example             # Environment template
-├── Makefile                 # Build / run helpers
+│
+├── configs/                     # Future YAML/TOML configs (currently empty)
+├── scripts/                     # Helper scripts (dev, deploy, db backup)
+├── docs/                        # Demo assets (drop demo.mp4 here)
+│
+├── go.mod
+├── go.sum
+├── .env.example                 # Environment template
+├── Makefile                     # Build / run helpers
 └── README.md
 ```
 
@@ -342,7 +360,6 @@ cp .env.example .env
 ### 2. Backend
 
 ```bash
-cd backend
 go run ./cmd/server/
 # → :8080
 ```
@@ -350,7 +367,7 @@ go run ./cmd/server/
 ### 3. Frontend
 
 ```bash
-cd frontend
+cd web
 npm install
 npm run dev
 # → :5173
@@ -385,21 +402,6 @@ node bot.js
 | **Frontend** | React 19 + Vite 8 · no component library · 1.2k LOC | Hand-rolled markdown renderer, conversational chat thread, auto-grow textareas |
 | **Bot** | Node.js · [Baileys](https://github.com/WhiskeySockets/Baileys) · in-memory session store | WhatsApp Web protocol, no Twilio fees, runs anywhere |
 | **Auth** | JWT (HS256) | Stateless, simple, no session table |
-
----
-
-## 🎬 Recording your own demo GIF
-
-If you want to regenerate the demo asset, the easiest way is [vhs](https://github.com/charmbracelet/vhs) (terminal-recording-as-code from Charm). A starter `.tape` file lives at [`docs/demo.tape`](docs/demo.tape):
-
-```bash
-brew install vhs
-cd reyna
-vhs docs/demo.tape
-# → outputs docs/demo.gif
-```
-
-For a real WhatsApp-side recording, use macOS QuickTime → screen recording → save as `docs/demo.mp4`. The video tag in this README will pick it up automatically.
 
 ---
 

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/reyna-bot/reyna-backend/internal/llm"
+	"github.com/reyna-bot/reyna-backend/internal/integrations/llm"
 )
 
 // geminiInlineMaxBytes is the safe ceiling for inline base64-encoded file data
@@ -1326,7 +1326,7 @@ Your reply:`, rawQuery, who, what, when, why, ctx.String())
 }
 
 // RetrievalFile is a flattened view of either a DB file or a Drive match for
-// passing into GenerateRetrievalReply without coupling to models.File.
+// passing into GenerateRetrievalReply without coupling to model.File.
 type RetrievalFile struct {
 	Name     string
 	Folder   string

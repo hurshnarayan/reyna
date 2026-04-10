@@ -15,16 +15,16 @@ import (
 
 	"github.com/reyna-bot/reyna-backend/internal/auth"
 	"github.com/reyna-bot/reyna-backend/internal/config"
-	"github.com/reyna-bot/reyna-backend/internal/db"
-	"github.com/reyna-bot/reyna-backend/internal/gdrive"
-	"github.com/reyna-bot/reyna-backend/internal/models"
+	"github.com/reyna-bot/reyna-backend/internal/repository"
+	"github.com/reyna-bot/reyna-backend/internal/integrations/gdrive"
+	"github.com/reyna-bot/reyna-backend/internal/model"
 	"github.com/reyna-bot/reyna-backend/internal/nlp"
 	"github.com/reyna-bot/reyna-backend/internal/reyna"
 )
 
 type Server struct {
 	cfg         *config.Config
-	store       *db.Store
+	store       *repository.Store
 	drive       *gdrive.Service
 	reyna       *reyna.Reyna
 	classifier  *nlp.Classifier
@@ -62,7 +62,7 @@ func looksLikePhoneOrLID(s string) bool {
 	return false
 }
 
-func NewServer(cfg *config.Config, store *db.Store, drive *gdrive.Service, classifier *nlp.Classifier) *Server {
+func NewServer(cfg *config.Config, store *repository.Store, drive *gdrive.Service, classifier *nlp.Classifier) *Server {
 	s := &Server{cfg: cfg, store: store, drive: drive, reyna: reyna.New(), classifier: classifier, mux: http.NewServeMux()}
 	s.routes()
 	return s
@@ -153,19 +153,19 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if err != nil { http.Error(w, `{"error":"registration failed"}`, 500); return }
 	s.store.AutoLinkUserToGroups(user.ID, req.Phone)
 	token, _ := auth.GenerateToken(user.ID, s.cfg.JWTSecret)
-	json.NewEncoder(w).Encode(models.AuthResponse{Token: token, User: user})
+	json.NewEncoder(w).Encode(model.AuthResponse{Token: token, User: user})
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
-	var req models.LoginRequest
+	var req model.LoginRequest
 	json.NewDecoder(r.Body).Decode(&req)
 	if req.Phone == "" { http.Error(w, `{"error":"phone required"}`, 400); return }
 	user, err := s.store.GetUserByPhone(req.Phone)
 	if err != nil { http.Error(w, `{"error":"user not found, register first"}`, 404); return }
 	s.store.AutoLinkUserToGroups(user.ID, req.Phone)
 	token, _ := auth.GenerateToken(user.ID, s.cfg.JWTSecret)
-	json.NewEncoder(w).Encode(models.AuthResponse{Token: token, User: user})
+	json.NewEncoder(w).Encode(model.AuthResponse{Token: token, User: user})
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -217,7 +217,7 @@ func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	groups, _ := s.store.GetUserGroups(uid)
-	if groups == nil { groups = []models.Group{} }
+	if groups == nil { groups = []model.Group{} }
 	json.NewEncoder(w).Encode(groups)
 }
 
@@ -238,7 +238,7 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		gids = s.store.GetUserGroupIDs(uid)
 	}
 
-	var files []models.File
+	var files []model.File
 	if sortBy != "" {
 		// Use sortable query
 		targetGids := gids
@@ -256,7 +256,7 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		if len(gids) > 0 { files, _ = s.store.GetGroupsFiles(gids, limit) }
 		if len(files) == 0 { files, _ = s.store.GetUserFiles(uid, limit) }
 	}
-	if files == nil { files = []models.File{} }
+	if files == nil { files = []model.File{} }
 	json.NewEncoder(w).Encode(files)
 }
 
@@ -264,14 +264,14 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleFileVersions(w http.ResponseWriter, r *http.Request) {
 	fid, _ := strconv.ParseInt(r.URL.Query().Get("file_id"), 10, 64)
 	versions, _ := s.store.GetFileVersions(fid)
-	if versions == nil { versions = []models.FileVersion{} }
+	if versions == nil { versions = []model.FileVersion{} }
 	json.NewEncoder(w).Encode(versions)
 }
 
 func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
 	uid := auth.GetUserID(r)
-	var req models.AddFileRequest
+	var req model.AddFileRequest
 	json.NewDecoder(r.Body).Decode(&req)
 	group, err := s.store.GetGroupByWAID(req.GroupWAID)
 	if err != nil { http.Error(w, `{"error":"group not found"}`, 404); return }
@@ -285,7 +285,7 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	}
 	fileData := []byte(req.FileData)
 	driveID, folderID, _ := s.drive.SmartUpload(accessToken, driveRootID, uid, req.Subject, req.FileName, req.MimeType, fileData)
-	file := &models.File{GroupID: group.ID, UserID: uid, SharedByPhone: req.SharedByPhone, SharedByName: req.SharedByName, FileName: req.FileName, FileSize: req.FileSize, MimeType: req.MimeType, DriveFileID: driveID, DriveFolderID: folderID, Subject: req.Subject, WAMessageID: req.WAMessageID}
+	file := &model.File{GroupID: group.ID, UserID: uid, SharedByPhone: req.SharedByPhone, SharedByName: req.SharedByName, FileName: req.FileName, FileSize: req.FileSize, MimeType: req.MimeType, DriveFileID: driveID, DriveFolderID: folderID, Subject: req.Subject, WAMessageID: req.WAMessageID}
 	saved, _ := s.store.AddFile(file)
 	json.NewEncoder(w).Encode(saved)
 }
@@ -293,7 +293,7 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 	gid, _ := strconv.ParseInt(r.URL.Query().Get("group_id"), 10, 64)
 	logs, _ := s.store.GetActivityLog(gid, 50)
-	if logs == nil { logs = []models.ActivityLog{} }
+	if logs == nil { logs = []model.ActivityLog{} }
 	json.NewEncoder(w).Encode(logs)
 }
 
@@ -303,7 +303,7 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleBotCommand(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
-	var req models.CommandRequest
+	var req model.CommandRequest
 	json.NewDecoder(r.Body).Decode(&req)
 
 	action, args := s.reyna.ProcessCommand(req.Command)
@@ -317,7 +317,7 @@ func (s *Server) handleBotCommand(w http.ResponseWriter, r *http.Request) {
 	groupID := int64(0)
 	if group != nil { groupID = group.ID }
 
-	resp := models.CommandResponse{}
+	resp := model.CommandResponse{}
 
 	switch action {
 	case "add":
@@ -338,7 +338,7 @@ func (s *Server) handleBotCommand(w http.ResponseWriter, r *http.Request) {
 		if fileName == "" { fileName = "unknown_file" }
 		subject := req.Subject
 		if folderFlag != "" { subject = folderFlag }
-		file := &models.File{GroupID: groupID, UserID: user.ID, SharedByPhone: req.UserPhone, SharedByName: req.UserName, FileName: fileName, FileSize: req.FileSize, MimeType: req.MimeType, Subject: subject, DriveFileID: fmt.Sprintf("meta_%d", time.Now().UnixNano()), Status: "staged"}
+		file := &model.File{GroupID: groupID, UserID: user.ID, SharedByPhone: req.UserPhone, SharedByName: req.UserName, FileName: fileName, FileSize: req.FileSize, MimeType: req.MimeType, Subject: subject, DriveFileID: fmt.Sprintf("meta_%d", time.Now().UnixNano()), Status: "staged"}
 		saved, _ := s.store.AddFile(file)
 		total := s.store.CountGroupFiles(groupID)
 		v := 1; if saved != nil { v = saved.Version }
@@ -467,7 +467,7 @@ func (s *Server) handleBotCommand(w http.ResponseWriter, r *http.Request) {
 
 	case "staged":
 		staged, _ := s.store.GetStagedFiles(groupID)
-		if staged == nil { staged = []models.File{} }
+		if staged == nil { staged = []model.File{} }
 		resp.Files = staged
 		resp.Reply = s.reyna.StagedResponse(staged)
 
@@ -482,7 +482,7 @@ func (s *Server) handleBotCommand(w http.ResponseWriter, r *http.Request) {
 			query = strings.TrimSpace(strings.Replace(query, "-a ", "", 1))
 		}
 		files, _ := s.store.FindFiles(groupID, query)
-		if files == nil { files = []models.File{} }
+		if files == nil { files = []model.File{} }
 		resp.Files = files
 		if showAuthor {
 			resp.Reply = s.reyna.FindWithAuthorResponse(query, files)
@@ -492,7 +492,7 @@ func (s *Server) handleBotCommand(w http.ResponseWriter, r *http.Request) {
 
 	case "log":
 		files, _ := s.store.GetGroupFiles(groupID, 10)
-		if files == nil { files = []models.File{} }
+		if files == nil { files = []model.File{} }
 		total := s.store.CountGroupFiles(groupID)
 		resp.Files = files; resp.LogCount = total
 		resp.Reply = s.reyna.LogResponse(files, total)
@@ -716,7 +716,7 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 	// canonical name for matching.
 	localID, folderID, _ := s.drive.SmartUpload("", "", user.ID, subject, versionedName, mimeType, fileBytes)
 	// Save raw bytes for later Drive upload on commit
-	dbFile := &models.File{GroupID: groupID, UserID: user.ID, SharedByPhone: userPhone, SharedByName: sharedByName, FileName: versionedName, FileSize: fileSize, MimeType: mimeType, Subject: subject, DriveFileID: localID, DriveFolderID: folderID, Status: "staged", ContentHash: contentHash}
+	dbFile := &model.File{GroupID: groupID, UserID: user.ID, SharedByPhone: userPhone, SharedByName: sharedByName, FileName: versionedName, FileSize: fileSize, MimeType: mimeType, Subject: subject, DriveFileID: localID, DriveFolderID: folderID, Status: "staged", ContentHash: contentHash}
 	saved, err := s.store.AddFile(dbFile)
 	if err != nil { log.Printf("❌ DB: %v", err); http.Error(w, `{"error":"db save failed"}`, 500); return }
 
@@ -749,7 +749,7 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 // ── Waitlist ──
 func (s *Server) handleWaitlist(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
-		var req models.WaitlistRequest
+		var req model.WaitlistRequest
 		json.NewDecoder(r.Body).Decode(&req)
 		s.store.AddWaitlist(strings.TrimSpace(req.Contact))
 		count := s.store.CountWaitlist()
@@ -996,9 +996,9 @@ func (s *Server) handleSearchFiles(w http.ResponseWriter, r *http.Request) {
 	// Check for /content: prefix for content search
 	if strings.HasPrefix(q, "/content:") {
 		contentQuery := strings.TrimSpace(strings.TrimPrefix(q, "/content:"))
-		if contentQuery == "" { json.NewEncoder(w).Encode([]models.File{}); return }
+		if contentQuery == "" { json.NewEncoder(w).Encode([]model.File{}); return }
 		// Search inside file contents from local storage
-		var matches []models.File
+		var matches []model.File
 		for _, gid := range gids {
 			allFiles, _ := s.store.GetGroupFiles(gid, 500)
 			for _, f := range allFiles {
@@ -1014,14 +1014,14 @@ func (s *Server) handleSearchFiles(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		if matches == nil { matches = []models.File{} }
+		if matches == nil { matches = []model.File{} }
 		json.NewEncoder(w).Encode(matches)
 		return
 	}
 
 	// Strict filename search
 	files, _ := s.store.FindFilesStrict(gids, q, 20)
-	if files == nil { files = []models.File{} }
+	if files == nil { files = []model.File{} }
 	json.NewEncoder(w).Encode(files)
 }
 
@@ -1361,7 +1361,7 @@ func (s *Server) handleBotReaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req models.ReactionRequest
+	var req model.ReactionRequest
 	json.NewDecoder(r.Body).Decode(&req)
 
 	if req.FileName == "" {
@@ -1398,7 +1398,7 @@ func (s *Server) handleBotReaction(w http.ResponseWriter, r *http.Request) {
 	subject, _, _ := s.classifier.ClassifyFile(req.FileName, existingFolders)
 	log.Printf("[REACTION] File=%s classified as=%s by NLP", req.FileName, subject)
 
-	file := &models.File{
+	file := &model.File{
 		GroupID:       groupID,
 		UserID:        user.ID,
 		SharedByPhone: req.UserPhone,
@@ -1501,7 +1501,7 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"method not allowed"}`, 405)
 		return
 	}
-	var req models.NLPRetrievalRequest
+	var req model.NLPRetrievalRequest
 	json.NewDecoder(r.Body).Decode(&req)
 	if req.Query == "" {
 		http.Error(w, `{"error":"query required"}`, 400)
@@ -1564,7 +1564,7 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 
 	files, _ := s.store.SearchFilesNLP(groupIDs, who, what, sinceTime, 20)
 	if files == nil {
-		files = []models.File{}
+		files = []model.File{}
 	}
 	// Defensive: if WHO is set but the strict filter found nothing, retry by sender only
 	if len(files) == 0 && who != "" {
@@ -1595,7 +1595,7 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 		if len(deepHits) > 0 {
 			// Merge: deep hits take priority, then add metadata hits not already present
 			seen := map[int64]bool{}
-			merged := make([]models.File, 0, len(deepHits)+len(files))
+			merged := make([]model.File, 0, len(deepHits)+len(files))
 			for _, f := range deepHits {
 				if !seen[f.ID] {
 					merged = append(merged, f)
@@ -1641,15 +1641,15 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 	}
 	reply := s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, dbView, driveView)
 
-	json.NewEncoder(w).Encode(models.NLPRetrievalResponse{
+	json.NewEncoder(w).Encode(model.NLPRetrievalResponse{
 		Files:        files,
 		DriveMatches: driveMatches,
-		Query:        models.NLPParsedQuery{Who: who, What: what, When: when, Why: why, Raw: req.Query},
+		Query:        model.NLPParsedQuery{Who: who, What: what, When: when, Why: why, Raw: req.Query},
 		Reply:        reply,
 	})
 }
 
-func (s *Server) buildNLPReply(files []models.File, driveMatches []models.DriveMatch, who, what, when string) string {
+func (s *Server) buildNLPReply(files []model.File, driveMatches []model.DriveMatch, who, what, when string) string {
 	if len(files) == 0 && len(driveMatches) == 0 {
 		msg := "No files found"
 		if who != "" {
@@ -1742,7 +1742,7 @@ func folderMatchesWhat(folderName, what string) bool {
 		return true
 	}
 	// token-level overlap: any significant token in `what` appearing in folder name
-	for _, tok := range db.TokenizeWhat(w) {
+	for _, tok := range repository.TokenizeWhat(w) {
 		if strings.Contains(fn, tok) {
 			return true
 		}
@@ -1791,7 +1791,7 @@ func fileMatchesWhat(fileName, what string) bool {
 	if strings.Contains(fn, w) {
 		return true
 	}
-	for _, tok := range db.TokenizeWhat(w) {
+	for _, tok := range repository.TokenizeWhat(w) {
 		if strings.Contains(fn, tok) {
 			return true
 		}
@@ -1804,7 +1804,7 @@ func fileMatchesWhat(fileName, what string) bool {
 //  1. Subfolders whose name matches `what` → returns all files in them
 //  2. Within all other subfolders, files whose name matches `what`
 // Capped at `maxMatches` to avoid huge responses.
-func (s *Server) collectDriveContext(groupIDs []int64, what string, maxMatches int) []models.DriveMatch {
+func (s *Server) collectDriveContext(groupIDs []int64, what string, maxMatches int) []model.DriveMatch {
 	if what == "" || len(groupIDs) == 0 {
 		return nil
 	}
@@ -1812,7 +1812,7 @@ func (s *Server) collectDriveContext(groupIDs []int64, what string, maxMatches i
 		maxMatches = 25
 	}
 
-	var driveUser *models.User
+	var driveUser *model.User
 	for _, gid := range groupIDs {
 		if u := s.store.FindDriveConnectedUser(gid); u != nil {
 			driveUser = u
@@ -1835,7 +1835,7 @@ func (s *Server) collectDriveContext(groupIDs []int64, what string, maxMatches i
 		return nil
 	}
 
-	var matches []models.DriveMatch
+	var matches []model.DriveMatch
 	// Pass 1: any subfolder whose name matches → take all its files
 	for _, folder := range subfolders {
 		if len(matches) >= maxMatches {
@@ -1852,7 +1852,7 @@ func (s *Server) collectDriveContext(groupIDs []int64, what string, maxMatches i
 			if len(matches) >= maxMatches {
 				break
 			}
-			matches = append(matches, models.DriveMatch{
+			matches = append(matches, model.DriveMatch{
 				FolderName: folder["name"],
 				FolderID:   folder["id"],
 				FileName:   asString(f["name"]),
@@ -1881,7 +1881,7 @@ func (s *Server) collectDriveContext(groupIDs []int64, what string, maxMatches i
 				}
 				name := asString(f["name"])
 				if fileMatchesWhat(name, what) {
-					matches = append(matches, models.DriveMatch{
+					matches = append(matches, model.DriveMatch{
 						FolderName: folder["name"],
 						FolderID:   folder["id"],
 						FileName:   name,
@@ -1976,7 +1976,7 @@ func hasContentCues(query string) bool {
 //
 // Cost: ~₹0.05 per candidate. Capped at 5 candidates per query.
 // Latency: ~3-5s per candidate, sequential.
-func (s *Server) deepContentRetrieve(groupIDs []int64, rawQuery string, who string, sinceTime *time.Time, maxCandidates int) []models.File {
+func (s *Server) deepContentRetrieve(groupIDs []int64, rawQuery string, who string, sinceTime *time.Time, maxCandidates int) []model.File {
 	if maxCandidates <= 0 {
 		maxCandidates = 5
 	}
@@ -1999,7 +1999,7 @@ func (s *Server) deepContentRetrieve(groupIDs []int64, rawQuery string, who stri
 	}
 
 	type scored struct {
-		file  models.File
+		file  model.File
 		score float64
 	}
 	var hits []scored
@@ -2040,7 +2040,7 @@ func (s *Server) deepContentRetrieve(groupIDs []int64, rawQuery string, who stri
 			hits[j-1], hits[j] = hits[j], hits[j-1]
 		}
 	}
-	out := make([]models.File, 0, len(hits))
+	out := make([]model.File, 0, len(hits))
 	for _, h := range hits {
 		out = append(out, h.file)
 	}
@@ -2050,7 +2050,7 @@ func (s *Server) deepContentRetrieve(groupIDs []int64, rawQuery string, who stri
 // filterDriveMatchesByWho drops Drive matches whose enriched sender doesn't
 // contain `who`. Pure Drive-native files (no sender info from the DB) are
 // dropped when WHO is set, since they can't be attributed.
-func filterDriveMatchesByWho(matches []models.DriveMatch, who string) []models.DriveMatch {
+func filterDriveMatchesByWho(matches []model.DriveMatch, who string) []model.DriveMatch {
 	if who == "" {
 		return matches
 	}
@@ -2076,13 +2076,13 @@ func filterDriveMatchesByWho(matches []models.DriveMatch, who string) []models.D
 // Drive matches and runs them through the LLM extractor so Q&A can answer
 // from the actual document content. Returns a filename → extracted content
 // map ready to feed into AnswerFromNotes.
-func (s *Server) downloadDriveMatchesForQA(groupIDs []int64, matches []models.DriveMatch, maxFiles int) map[string]string {
+func (s *Server) downloadDriveMatchesForQA(groupIDs []int64, matches []model.DriveMatch, maxFiles int) map[string]string {
 	out := map[string]string{}
 	if len(matches) == 0 || maxFiles <= 0 {
 		return out
 	}
 
-	var driveUser *models.User
+	var driveUser *model.User
 	for _, gid := range groupIDs {
 		if u := s.store.FindDriveConnectedUser(gid); u != nil {
 			driveUser = u
@@ -2136,7 +2136,7 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"method not allowed"}`, 405)
 		return
 	}
-	var req models.NotesQARequest
+	var req model.NotesQARequest
 	json.NewDecoder(r.Body).Decode(&req)
 	if req.Question == "" {
 		http.Error(w, `{"error":"question required"}`, 400)
@@ -2304,7 +2304,7 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 				}
 				hint.WriteString(fmt.Sprintf("• %s — in %s/\n", m.FileName, m.FolderName))
 			}
-			json.NewEncoder(w).Encode(models.NotesQAResponse{
+			json.NewEncoder(w).Encode(model.NotesQAResponse{
 				Answer:       hint.String(),
 				Sources:      []string{},
 				DriveSources: driveMatches,
@@ -2312,7 +2312,7 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		json.NewEncoder(w).Encode(models.NotesQAResponse{
+		json.NewEncoder(w).Encode(model.NotesQAResponse{
 			Answer:   "I couldn't find any relevant notes to answer that question. Make sure files have been shared in your groups or organised in your Drive folder.",
 			Sources:  []string{},
 			Question: req.Question,
@@ -2331,7 +2331,7 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 	}
 	answer := s.classifier.AnswerFromNotesWithContext(req.Question, qaSources, prev)
 
-	json.NewEncoder(w).Encode(models.NotesQAResponse{
+	json.NewEncoder(w).Encode(model.NotesQAResponse{
 		Answer:       answer,
 		Sources:      sourceNames,
 		DriveSources: driveMatches,

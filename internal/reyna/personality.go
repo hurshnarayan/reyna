@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/reyna-bot/reyna-backend/internal/models"
+	"github.com/reyna-bot/reyna-backend/internal/model"
 )
 
 // Reyna is the response engine for the bot — professional, English-only
@@ -117,7 +117,7 @@ func (r *Reyna) RmNotFoundResponse(fileName string) string {
 
 // ── Staged Response ──
 
-func (r *Reyna) StagedResponse(files []models.File) string {
+func (r *Reyna) StagedResponse(files []model.File) string {
 	if len(files) == 0 {
 		return "No files staged. Share documents in the group, then stage them."
 	}
@@ -140,7 +140,7 @@ func (r *Reyna) StagedResponse(files []models.File) string {
 
 // ── Find / Search Responses ──
 
-func (r *Reyna) FindResponse(query string, files []models.File) string {
+func (r *Reyna) FindResponse(query string, files []model.File) string {
 	if len(files) == 0 {
 		return fmt.Sprintf("No files found for \"%s\".", query)
 	}
@@ -156,7 +156,7 @@ func (r *Reyna) FindResponse(query string, files []models.File) string {
 	return result
 }
 
-func (r *Reyna) FindWithAuthorResponse(query string, files []models.File) string {
+func (r *Reyna) FindWithAuthorResponse(query string, files []model.File) string {
 	if len(files) == 0 {
 		return r.FindResponse(query, files)
 	}
@@ -179,7 +179,7 @@ func (r *Reyna) FindWithAuthorResponse(query string, files []models.File) string
 
 // ── Log / History Responses ──
 
-func (r *Reyna) LogResponse(files []models.File, total int) string {
+func (r *Reyna) LogResponse(files []model.File, total int) string {
 	if total == 0 {
 		return "No files in the repository yet."
 	}
@@ -196,7 +196,7 @@ func (r *Reyna) LogResponse(files []models.File, total int) string {
 
 // ── Status Responses ──
 
-func (r *Reyna) StatusResponse(newFiles []models.File, total int) string {
+func (r *Reyna) StatusResponse(newFiles []model.File, total int) string {
 	if len(newFiles) == 0 {
 		return fmt.Sprintf("No new files. %d file(s) total in the repository.", total)
 	}
@@ -218,7 +218,7 @@ func (r *Reyna) StatusResponse(newFiles []models.File, total int) string {
 	return result
 }
 
-func (r *Reyna) StatusResponseGit(staged []models.File, untracked []string, committed int, total int) string {
+func (r *Reyna) StatusResponseGit(staged []model.File, untracked []string, committed int, total int) string {
 	if len(staged) == 0 && len(untracked) == 0 && total > 0 {
 		return fmt.Sprintf("All clear. %d file(s) committed. Nothing pending.", total)
 	}

@@ -221,199 +221,6 @@ export default function Landing() {
 
       <div className="rl-divider"/>
 
-      {/* ═══ S3: NLP RETRIEVAL ═══ */}
-      <div id="pipeline" style={{background:'rgba(250,250,250,0.7)',backdropFilter:'blur(4px)'}}>
-        <div ref={nlpRef} className={`rl-s ${rv(nlpVis)}`}>
-          <div style={{fontSize:12,fontWeight:700,color:'#D85A30',letterSpacing:2.5,textTransform:'uppercase',marginBottom:16}}><i className="fas fa-comments" style={{marginRight:6}}/>Killer feature #1</div>
-          <h2 style={{fontSize:'clamp(24px,3.5vw,36px)',fontWeight:800,lineHeight:1.2,marginBottom:12,letterSpacing:-1}}>Ask for files like you'd ask a friend.</h2>
-          <p style={{fontSize:17,lineHeight:1.8,color:'#555',marginBottom:36}}>Not keyword search. Reyna's NLP engine resolves <strong>who</strong> shared it, <strong>what</strong> it's about, <strong>when</strong> it was shared, and <strong>why</strong> you're asking — from a single natural sentence.</p>
-
-          <div style={{textAlign:'center',marginBottom:24}}>
-            <div style={{display:'inline-block',fontSize:17,fontWeight:500,padding:'14px 28px',borderRadius:28,background:'#fff',border:'1px solid #ddd',boxShadow:'0 2px 12px rgba(0,0,0,0.04)'}}>
-              <i className="fas fa-quote-left" style={{fontSize:10,color:'#ccc',marginRight:8}}/>
-              What did <span style={{color:'#D85A30',fontWeight:700}}>Rahul</span> share about <span style={{color:'#7F77DD',fontWeight:700}}>drones</span> <span style={{color:'#1D9E75',fontWeight:700}}>last week</span>?
-              <i className="fas fa-quote-right" style={{fontSize:10,color:'#ccc',marginLeft:8}}/>
-            </div>
-          </div>
-
-          <div className="rl-dims" style={{display:'flex',gap:12,justifyContent:'center',marginBottom:28}}>
-            {[
-              {t:'WHO',v:'Rahul',d:'sender filter',c:'#D85A30',bg:'#FAECE7',icon:'fa-user'},
-              {t:'WHAT',v:'drones',d:'content + filename',c:'#7F77DD',bg:'#EEEDFE',icon:'fa-file-alt'},
-              {t:'WHEN',v:'last week',d:'7-day window',c:'#1D9E75',bg:'#E1F5EE',icon:'fa-calendar'},
-              {t:'WHY',v:'retrieve',d:'intent: find file',c:'#BA7517',bg:'#FAEEDA',icon:'fa-bullseye'},
-            ].map((dim,i)=>(
-              <div key={dim.t} className={nlpVis?'rl-dim':''} style={{flex:1,minWidth:120,padding:'18px 14px',textAlign:'center',borderTop:`3px solid ${dim.c}`,background:'#fff',borderRadius:'0 0 10px 10px',boxShadow:'0 2px 8px rgba(0,0,0,0.03)',animationDelay:`${300+i*150}ms`}}>
-                <i className={`fas ${dim.icon}`} style={{fontSize:16,color:dim.c,marginBottom:8,display:'block'}}/>
-                <div style={{fontSize:11,fontWeight:700,letterSpacing:2,textTransform:'uppercase',color:dim.c,marginBottom:4}}>{dim.t}</div>
-                <div style={{fontSize:18,fontWeight:700,color:'#1a1a1a'}}>{dim.v}</div>
-                <div style={{fontSize:11,color:'#999',marginTop:4}}>{dim.d}</div>
-              </div>
-            ))}
-          </div>
-
-          <div style={{background:'#fff',border:'1px solid #e0ddd5',borderRadius:12,padding:'16px 24px',maxWidth:560,margin:'0 auto 36px',fontSize:14,color:'#555',lineHeight:1.8,boxShadow:'0 2px 12px rgba(0,0,0,0.03)'}}>
-            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}><i className="fas fa-crown" style={{color:'#25D366',fontSize:12}}/><strong style={{color:'#1a1a1a'}}>Reyna responds:</strong></div>
-            Found <strong>2 files</strong> from <strong>Rahul</strong> matching <strong>"drones"</strong> in the last 7 days:<br/>
-            <code style={{fontFamily:'JetBrains Mono,monospace',fontSize:12,background:'#f5f5f5',padding:'2px 6px',borderRadius:4}}>Drone_Regulation_India_2024.pdf</code> — Robotics folder<br/>
-            <code style={{fontFamily:'JetBrains Mono,monospace',fontSize:12,background:'#f5f5f5',padding:'2px 6px',borderRadius:4}}>UAV_Project_Proposal_v2.docx</code> — Projects folder
-          </div>
-
-          <div style={{fontSize:11,fontWeight:700,color:'#888',letterSpacing:2,textTransform:'uppercase',textAlign:'center',marginBottom:16}}>More examples — every query is a conversation</div>
-          <div style={{maxWidth:600,margin:'0 auto'}}>
-            {nlpExamples.map((ex,i)=>(
-              <div key={i} className={nlpVis?'rl-dim':''} style={{display:'flex',alignItems:'center',gap:14,marginBottom:8,padding:'10px 16px',background:'#fff',borderRadius:10,border:'1px solid #eee',animationDelay:`${800+i*120}ms`}}>
-                <div style={{flex:2,fontSize:13,fontWeight:500}}>{ex.q}</div>
-                <div style={{color:'#ccc',fontSize:14}}><i className="fas fa-arrow-right"/></div>
-                <div style={{flex:3,display:'flex',gap:4,flexWrap:'wrap'}}>
-                  {ex.tags.map((tag,j)=>(<span key={j} className="rl-tag" style={{background:tag.c+'15',color:tag.c}}>{tag.t}: {tag.v}</span>))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* ═══ S4: CLASSIFICATION PIPELINE ═══ */}
-      <div id="features">
-        <div ref={pipeRef} className={`rl-s ${rv(pipeVis)}`}>
-          <div style={{fontSize:12,fontWeight:700,color:'#534AB7',letterSpacing:2.5,textTransform:'uppercase',marginBottom:16}}><i className="fas fa-brain" style={{marginRight:6}}/>Killer feature #2 — Autonomous pipeline</div>
-          <h2 style={{fontSize:'clamp(24px,3.5vw,36px)',fontWeight:800,lineHeight:1.2,marginBottom:12,letterSpacing:-1}}>Drop a file. Five agents handle everything.</h2>
-          <p style={{fontSize:17,lineHeight:1.8,color:'#555',marginBottom:36}}>No commands. No folder selection. Reyna reads the file, understands what it's about, finds the best folder in your Drive, and syncs it — autonomously.</p>
-
-          <div className="rl-prow" style={{display:'flex',gap:0,marginBottom:32}}>
-            {pipeStages.map((s,i)=>(
-              <div key={s.t} style={{display:'contents'}}>
-                <div className={pipeVis?'rl-pipe':''} style={{flex:1,textAlign:'center',padding:'20px 10px',background:i<3?'#EEEDFE':'#E1F5EE',borderRadius:i===0?'12px 0 0 12px':i===4?'0 12px 12px 0':0,animationDelay:`${200+i*180}ms`}}>
-                  <i className={`fas ${s.icon}`} style={{fontSize:20,color:s.c,marginBottom:8,display:'block'}}/>
-                  <div style={{fontSize:15,fontWeight:700,color:s.c}}>{s.t}</div>
-                  <div style={{fontSize:11,color:i<3?'#7F77DD':'#1D9E75',marginTop:4}}>{s.d}</div>
-                </div>
-                {i<4&&<div className="rl-parr" style={{display:'flex',alignItems:'center',background:i<2?'#EEEDFE':i===2?'#dde8dd':'#E1F5EE'}}><i className="fas fa-chevron-right" style={{fontSize:10,color:'#aaa'}}/></div>}
-              </div>
-            ))}
-          </div>
-
-          {/* Content extraction + classification demo */}
-          <div style={{background:'#fafafa',border:'1px solid #eee',borderRadius:14,padding:'24px 28px',marginBottom:24}}>
-            <div style={{fontFamily:'JetBrains Mono,monospace',fontSize:14,fontWeight:600,marginBottom:14,display:'flex',alignItems:'center',gap:8}}>
-              <i className="fas fa-file-pdf" style={{color:'#dc2626'}}/> Module3_Compiler_Design_Unit2.pdf
-            </div>
-            {[
-              {icon:'fa-download',c:'#534AB7',bg:'#EEEDFE',t:'File shared in "CSE 2026 — Section B". <strong>Auto-track on</strong> — captured.'},
-              {icon:'fa-file-alt',c:'#534AB7',bg:'#EEEDFE',t:'<strong>Content extracted</strong>: 42 pages — <strong>syntax analysis, parsing tables, LL(1) grammars</strong>.'},
-              {icon:'fa-brain',c:'#534AB7',bg:'#EEEDFE',t:'Claude receives extracted content + filename + user\'s existing folders:'},
-            ].map((step,i)=>(
-              <div key={i} style={{display:'flex',alignItems:'flex-start',gap:10,marginBottom:8}}>
-                <div style={{width:26,height:26,borderRadius:'50%',background:step.bg,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><i className={`fas ${step.icon}`} style={{fontSize:10,color:step.c}}/></div>
-                <div style={{fontSize:13,lineHeight:1.7,color:'#555'}} dangerouslySetInnerHTML={{__html:step.t}}/>
-              </div>
-            ))}
-            <div style={{background:'#fff',border:'1px solid #ddd',borderRadius:8,padding:'12px 18px',margin:'8px 0 12px 36px',fontFamily:'JetBrains Mono,monospace',fontSize:12,lineHeight:2.2,color:'#888'}}>
-              <i className="fas fa-folder" style={{color:'#25D366',marginRight:4}}/> Reyna/<br/>
-              &ensp;&ensp;<i className="fas fa-folder" style={{color:'#888',marginRight:4}}/> DSA/<br/>
-              &ensp;&ensp;<span className="rl-match"><i className="fas fa-folder-open" style={{color:'#25D366',marginRight:4}}/> <strong style={{color:'#085041'}}>Compiler Design/</strong></span> <span style={{color:'#25D366',fontSize:11}}>← best match</span><br/>
-              &ensp;&ensp;<i className="fas fa-folder" style={{color:'#888',marginRight:4}}/> Operating Systems/<br/>
-              &ensp;&ensp;<i className="fas fa-folder" style={{color:'#888',marginRight:4}}/> DBMS/
-            </div>
-            {[
-              {icon:'fa-clock',c:'#0F6E56',bg:'#E1F5EE',t:'<strong>Staged</strong> as Compiler Design / Module3_...pdf. Auto-commit: 24h.'},
-              {icon:'fa-cloud-upload-alt',c:'#0F6E56',bg:'#E1F5EE',t:'<strong>Synced</strong> to Google Drive. Re-uploads become v2 automatically.'},
-            ].map((step,i)=>(
-              <div key={i} style={{display:'flex',alignItems:'flex-start',gap:10,marginBottom:6}}>
-                <div style={{width:26,height:26,borderRadius:'50%',background:step.bg,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><i className={`fas ${step.icon}`} style={{fontSize:10,color:step.c}}/></div>
-                <div style={{fontSize:13,lineHeight:1.7,color:'#555'}} dangerouslySetInnerHTML={{__html:step.t}}/>
-              </div>
-            ))}
-          </div>
-
-          {/* Folder priority logic */}
-          <div style={{fontSize:11,fontWeight:700,color:'#888',letterSpacing:2,textTransform:'uppercase',textAlign:'center',marginBottom:14}}>Folder priority logic</div>
-          <div style={{display:'flex',gap:10,maxWidth:560,margin:'0 auto'}}>
-            {[
-              {n:'1st',l:'User-created folders',d:'Your structure wins',c:'#0F6E56',icon:'fa-user'},
-              {n:'2nd',l:'Reyna-created folders',d:'From past classifications',c:'#534AB7',icon:'fa-crown'},
-              {n:'3rd',l:'Create new folder',d:'Only when nothing fits',c:'#BA7517',icon:'fa-plus'},
-            ].map((p,i)=>(
-              <div key={i} style={{flex:1,padding:'16px 12px',textAlign:'center',borderTop:`3px solid ${p.c}`,background:'#fafafa',borderRadius:'0 0 10px 10px'}}>
-                <i className={`fas ${p.icon}`} style={{fontSize:14,color:p.c,marginBottom:6,display:'block'}}/>
-                <div style={{fontSize:22,fontWeight:800,color:p.c}}>{p.n}</div>
-                <div style={{fontSize:12,fontWeight:600,marginTop:4}}>{p.l}</div>
-                <div style={{fontSize:10,color:'#aaa',marginTop:2}}>{p.d}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="rl-divider"/>
-
-      {/* ═══ S5: CAPTURE MODES ═══ */}
-      <div style={{background:'rgba(250,250,250,0.7)',backdropFilter:'blur(4px)'}}>
-        <div ref={capRef} className={`rl-s ${rv(capVis)}`}>
-          <div style={{fontSize:12,fontWeight:700,color:'#25D366',letterSpacing:2.5,textTransform:'uppercase',marginBottom:16}}><i className="fas fa-bolt" style={{marginRight:6}}/>Two capture modes</div>
-          <h2 style={{fontSize:'clamp(24px,3.5vw,36px)',fontWeight:800,lineHeight:1.2,marginBottom:12,letterSpacing:-1}}>Choose your level of automation.</h2>
-          <p style={{fontSize:17,lineHeight:1.8,color:'#555',marginBottom:36}}>Toggle per group from the dashboard. Both feed into the same autonomous pipeline.</p>
-          <div className="rl-capg" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
-            {[
-              {num:'01',icon:'fa-folder',title:'Track all files',sub:'Full autopilot',color:'#25D366',desc:'Every document shared in the group is automatically captured, classified, and synced. Zero effort.',tip:'Best for active study groups'},
-              {num:'02',icon:'fa-thumbtack',title:'Reactions only',sub:'Selective control',color:'#0ea5e9',desc:'Only files that get a pin reaction are staged. Everything else is ignored. You choose what matters.',tip:'Best for noisy or mixed groups'},
-            ].map((m,i)=>(
-              <div key={i} style={{background:'#fff',border:'2px solid #111',borderRadius:14,padding:28,position:'relative',overflow:'hidden'}}>
-                <div style={{position:'absolute',top:12,right:16,fontSize:56,fontWeight:900,color:'#f5f5f5',lineHeight:1}}>{m.num}</div>
-                <i className={`fas ${m.icon}`} style={{fontSize:28,color:'#111',marginBottom:12,display:'block'}}/>
-                <h3 style={{fontSize:20,fontWeight:800,marginBottom:4}}>{m.title}</h3>
-                <div style={{fontSize:12,fontWeight:700,color:m.color,textTransform:'uppercase',letterSpacing:2,marginBottom:14}}>{m.sub}</div>
-                <p style={{fontSize:14,color:'#555',lineHeight:1.8,marginBottom:16}}>{m.desc}</p>
-                <div style={{fontSize:13,color:m.color,fontWeight:500}}><i className="fas fa-arrow-right" style={{marginRight:6}}/> {m.tip}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="rl-divider"/>
-
-      {/* ═══ S6: NOTES Q&A (replaces Insights) ═══ */}
-      <div ref={qaRef} className={`rl-s ${rv(qaVis)}`}>
-        <div style={{fontSize:12,fontWeight:700,color:'#7F77DD',letterSpacing:2.5,textTransform:'uppercase',marginBottom:16}}><i className="fas fa-graduation-cap" style={{marginRight:6}}/>Killer feature #3 — Notes Q&A</div>
-        <h2 style={{fontSize:'clamp(24px,3.5vw,36px)',fontWeight:800,lineHeight:1.2,marginBottom:12,letterSpacing:-1}}>Ask anything from your notes.</h2>
-        <p style={{fontSize:17,lineHeight:1.8,color:'#555',marginBottom:36}}>
-          Ask Reyna about shared notes directly in WhatsApp. She fetches the relevant files from Drive, sends the content to Claude, and replies with a clear answer — instantly. No need to open any other app or copy files elsewhere.
-        </p>
-
-        {/* Chat-style Q&A demo */}
-        <div style={{maxWidth:520,margin:'0 auto 32px',display:'flex',flexDirection:'column',gap:4}}>
-          {qaExamples.map((ex,i)=>(
-            <div key={i} className={qaVis?'rl-dim':''} style={{animationDelay:`${300+i*350}ms`}}>
-              <div className="rl-qa-q">
-                <i className="fas fa-user" style={{fontSize:9,opacity:0.5,marginRight:6}}/>{ex.q}
-              </div>
-              <div style={{display:'flex',alignItems:'flex-start',gap:8,marginBottom:16}}>
-                <div style={{width:24,height:24,borderRadius:'50%',background:'#25D366',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:2}}>
-                  <i className="fas fa-crown" style={{fontSize:9,color:'#fff'}}/>
-                </div>
-                <div className="rl-qa-a">
-                  <div style={{fontSize:11,fontWeight:700,color:'#25D366',marginBottom:6,letterSpacing:1,textTransform:'uppercase'}}>Reyna</div>
-                  {ex.a}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div style={{textAlign:'center',padding:'16px 24px',background:'#f5f3ff',border:'1px solid #e0dafe',borderRadius:12,maxWidth:480,margin:'0 auto'}}>
-          <div style={{fontSize:13,color:'#534AB7',fontWeight:600,marginBottom:4}}>
-            <i className="fas fa-magic" style={{marginRight:6}}/>Powered by content extraction
-          </div>
-          <div style={{fontSize:12,color:'#888',lineHeight:1.6}}>
-            Reyna reads every page of every PDF and DOCX shared in your group. When you ask a question, it searches through all extracted content — not just filenames.
-          </div>
-        </div>
-      </div>
-
-      <div className="rl-divider"/>
-
       {/* ═══ S6.5: DEEP DIVE — THE REAL PIPELINE ═══ */}
       <div id="deepdive" style={{background:'rgba(250,250,250,0.7)',backdropFilter:'blur(4px)'}}>
         <div ref={deepRef} className={`rl-s ${rv(deepVis)}`} style={{maxWidth:920}}>
@@ -620,6 +427,199 @@ export default function Landing() {
             <p style={{fontSize:14,lineHeight:1.6,color:'#666',maxWidth:600,margin:'18px auto 0'}}>
               No more digging through chat history. No more re-uploading to Drive. No more typing answers from notes you can't find. <strong style={{color:'#1a1a1a'}}>Just ask. Reyna handles the rest.</strong>
             </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="rl-divider"/>
+
+      {/* ═══ S3: NLP RETRIEVAL ═══ */}
+      <div id="pipeline" style={{background:'rgba(250,250,250,0.7)',backdropFilter:'blur(4px)'}}>
+        <div ref={nlpRef} className={`rl-s ${rv(nlpVis)}`}>
+          <div style={{fontSize:12,fontWeight:700,color:'#D85A30',letterSpacing:2.5,textTransform:'uppercase',marginBottom:16}}><i className="fas fa-comments" style={{marginRight:6}}/>Killer feature #1</div>
+          <h2 style={{fontSize:'clamp(24px,3.5vw,36px)',fontWeight:800,lineHeight:1.2,marginBottom:12,letterSpacing:-1}}>Ask for files like you'd ask a friend.</h2>
+          <p style={{fontSize:17,lineHeight:1.8,color:'#555',marginBottom:36}}>Not keyword search. Reyna's NLP engine resolves <strong>who</strong> shared it, <strong>what</strong> it's about, <strong>when</strong> it was shared, and <strong>why</strong> you're asking — from a single natural sentence.</p>
+
+          <div style={{textAlign:'center',marginBottom:24}}>
+            <div style={{display:'inline-block',fontSize:17,fontWeight:500,padding:'14px 28px',borderRadius:28,background:'#fff',border:'1px solid #ddd',boxShadow:'0 2px 12px rgba(0,0,0,0.04)'}}>
+              <i className="fas fa-quote-left" style={{fontSize:10,color:'#ccc',marginRight:8}}/>
+              What did <span style={{color:'#D85A30',fontWeight:700}}>Rahul</span> share about <span style={{color:'#7F77DD',fontWeight:700}}>drones</span> <span style={{color:'#1D9E75',fontWeight:700}}>last week</span>?
+              <i className="fas fa-quote-right" style={{fontSize:10,color:'#ccc',marginLeft:8}}/>
+            </div>
+          </div>
+
+          <div className="rl-dims" style={{display:'flex',gap:12,justifyContent:'center',marginBottom:28}}>
+            {[
+              {t:'WHO',v:'Rahul',d:'sender filter',c:'#D85A30',bg:'#FAECE7',icon:'fa-user'},
+              {t:'WHAT',v:'drones',d:'content + filename',c:'#7F77DD',bg:'#EEEDFE',icon:'fa-file-alt'},
+              {t:'WHEN',v:'last week',d:'7-day window',c:'#1D9E75',bg:'#E1F5EE',icon:'fa-calendar'},
+              {t:'WHY',v:'retrieve',d:'intent: find file',c:'#BA7517',bg:'#FAEEDA',icon:'fa-bullseye'},
+            ].map((dim,i)=>(
+              <div key={dim.t} className={nlpVis?'rl-dim':''} style={{flex:1,minWidth:120,padding:'18px 14px',textAlign:'center',borderTop:`3px solid ${dim.c}`,background:'#fff',borderRadius:'0 0 10px 10px',boxShadow:'0 2px 8px rgba(0,0,0,0.03)',animationDelay:`${300+i*150}ms`}}>
+                <i className={`fas ${dim.icon}`} style={{fontSize:16,color:dim.c,marginBottom:8,display:'block'}}/>
+                <div style={{fontSize:11,fontWeight:700,letterSpacing:2,textTransform:'uppercase',color:dim.c,marginBottom:4}}>{dim.t}</div>
+                <div style={{fontSize:18,fontWeight:700,color:'#1a1a1a'}}>{dim.v}</div>
+                <div style={{fontSize:11,color:'#999',marginTop:4}}>{dim.d}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{background:'#fff',border:'1px solid #e0ddd5',borderRadius:12,padding:'16px 24px',maxWidth:560,margin:'0 auto 36px',fontSize:14,color:'#555',lineHeight:1.8,boxShadow:'0 2px 12px rgba(0,0,0,0.03)'}}>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}><i className="fas fa-crown" style={{color:'#25D366',fontSize:12}}/><strong style={{color:'#1a1a1a'}}>Reyna responds:</strong></div>
+            Found <strong>2 files</strong> from <strong>Rahul</strong> matching <strong>"drones"</strong> in the last 7 days:<br/>
+            <code style={{fontFamily:'JetBrains Mono,monospace',fontSize:12,background:'#f5f5f5',padding:'2px 6px',borderRadius:4}}>Drone_Regulation_India_2024.pdf</code> — Robotics folder<br/>
+            <code style={{fontFamily:'JetBrains Mono,monospace',fontSize:12,background:'#f5f5f5',padding:'2px 6px',borderRadius:4}}>UAV_Project_Proposal_v2.docx</code> — Projects folder
+          </div>
+
+          <div style={{fontSize:11,fontWeight:700,color:'#888',letterSpacing:2,textTransform:'uppercase',textAlign:'center',marginBottom:16}}>More examples — every query is a conversation</div>
+          <div style={{maxWidth:600,margin:'0 auto'}}>
+            {nlpExamples.map((ex,i)=>(
+              <div key={i} className={nlpVis?'rl-dim':''} style={{display:'flex',alignItems:'center',gap:14,marginBottom:8,padding:'10px 16px',background:'#fff',borderRadius:10,border:'1px solid #eee',animationDelay:`${800+i*120}ms`}}>
+                <div style={{flex:2,fontSize:13,fontWeight:500}}>{ex.q}</div>
+                <div style={{color:'#ccc',fontSize:14}}><i className="fas fa-arrow-right"/></div>
+                <div style={{flex:3,display:'flex',gap:4,flexWrap:'wrap'}}>
+                  {ex.tags.map((tag,j)=>(<span key={j} className="rl-tag" style={{background:tag.c+'15',color:tag.c}}>{tag.t}: {tag.v}</span>))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ═══ S4: CLASSIFICATION PIPELINE ═══ */}
+      <div id="features">
+        <div ref={pipeRef} className={`rl-s ${rv(pipeVis)}`}>
+          <div style={{fontSize:12,fontWeight:700,color:'#534AB7',letterSpacing:2.5,textTransform:'uppercase',marginBottom:16}}><i className="fas fa-brain" style={{marginRight:6}}/>Killer feature #2 — Autonomous pipeline</div>
+          <h2 style={{fontSize:'clamp(24px,3.5vw,36px)',fontWeight:800,lineHeight:1.2,marginBottom:12,letterSpacing:-1}}>Drop a file. Five agents handle everything.</h2>
+          <p style={{fontSize:17,lineHeight:1.8,color:'#555',marginBottom:36}}>No commands. No folder selection. Reyna reads the file, understands what it's about, finds the best folder in your Drive, and syncs it — autonomously.</p>
+
+          <div className="rl-prow" style={{display:'flex',gap:0,marginBottom:32}}>
+            {pipeStages.map((s,i)=>(
+              <div key={s.t} style={{display:'contents'}}>
+                <div className={pipeVis?'rl-pipe':''} style={{flex:1,textAlign:'center',padding:'20px 10px',background:i<3?'#EEEDFE':'#E1F5EE',borderRadius:i===0?'12px 0 0 12px':i===4?'0 12px 12px 0':0,animationDelay:`${200+i*180}ms`}}>
+                  <i className={`fas ${s.icon}`} style={{fontSize:20,color:s.c,marginBottom:8,display:'block'}}/>
+                  <div style={{fontSize:15,fontWeight:700,color:s.c}}>{s.t}</div>
+                  <div style={{fontSize:11,color:i<3?'#7F77DD':'#1D9E75',marginTop:4}}>{s.d}</div>
+                </div>
+                {i<4&&<div className="rl-parr" style={{display:'flex',alignItems:'center',background:i<2?'#EEEDFE':i===2?'#dde8dd':'#E1F5EE'}}><i className="fas fa-chevron-right" style={{fontSize:10,color:'#aaa'}}/></div>}
+              </div>
+            ))}
+          </div>
+
+          {/* Content extraction + classification demo */}
+          <div style={{background:'#fafafa',border:'1px solid #eee',borderRadius:14,padding:'24px 28px',marginBottom:24}}>
+            <div style={{fontFamily:'JetBrains Mono,monospace',fontSize:14,fontWeight:600,marginBottom:14,display:'flex',alignItems:'center',gap:8}}>
+              <i className="fas fa-file-pdf" style={{color:'#dc2626'}}/> Module3_Compiler_Design_Unit2.pdf
+            </div>
+            {[
+              {icon:'fa-download',c:'#534AB7',bg:'#EEEDFE',t:'File shared in "CSE 2026 — Section B". <strong>Auto-track on</strong> — captured.'},
+              {icon:'fa-file-alt',c:'#534AB7',bg:'#EEEDFE',t:'<strong>Content extracted</strong>: 42 pages — <strong>syntax analysis, parsing tables, LL(1) grammars</strong>.'},
+              {icon:'fa-brain',c:'#534AB7',bg:'#EEEDFE',t:'Claude receives extracted content + filename + user\'s existing folders:'},
+            ].map((step,i)=>(
+              <div key={i} style={{display:'flex',alignItems:'flex-start',gap:10,marginBottom:8}}>
+                <div style={{width:26,height:26,borderRadius:'50%',background:step.bg,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><i className={`fas ${step.icon}`} style={{fontSize:10,color:step.c}}/></div>
+                <div style={{fontSize:13,lineHeight:1.7,color:'#555'}} dangerouslySetInnerHTML={{__html:step.t}}/>
+              </div>
+            ))}
+            <div style={{background:'#fff',border:'1px solid #ddd',borderRadius:8,padding:'12px 18px',margin:'8px 0 12px 36px',fontFamily:'JetBrains Mono,monospace',fontSize:12,lineHeight:2.2,color:'#888'}}>
+              <i className="fas fa-folder" style={{color:'#25D366',marginRight:4}}/> Reyna/<br/>
+              &ensp;&ensp;<i className="fas fa-folder" style={{color:'#888',marginRight:4}}/> DSA/<br/>
+              &ensp;&ensp;<span className="rl-match"><i className="fas fa-folder-open" style={{color:'#25D366',marginRight:4}}/> <strong style={{color:'#085041'}}>Compiler Design/</strong></span> <span style={{color:'#25D366',fontSize:11}}>← best match</span><br/>
+              &ensp;&ensp;<i className="fas fa-folder" style={{color:'#888',marginRight:4}}/> Operating Systems/<br/>
+              &ensp;&ensp;<i className="fas fa-folder" style={{color:'#888',marginRight:4}}/> DBMS/
+            </div>
+            {[
+              {icon:'fa-clock',c:'#0F6E56',bg:'#E1F5EE',t:'<strong>Staged</strong> as Compiler Design / Module3_...pdf. Auto-commit: 24h.'},
+              {icon:'fa-cloud-upload-alt',c:'#0F6E56',bg:'#E1F5EE',t:'<strong>Synced</strong> to Google Drive. Re-uploads become v2 automatically.'},
+            ].map((step,i)=>(
+              <div key={i} style={{display:'flex',alignItems:'flex-start',gap:10,marginBottom:6}}>
+                <div style={{width:26,height:26,borderRadius:'50%',background:step.bg,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><i className={`fas ${step.icon}`} style={{fontSize:10,color:step.c}}/></div>
+                <div style={{fontSize:13,lineHeight:1.7,color:'#555'}} dangerouslySetInnerHTML={{__html:step.t}}/>
+              </div>
+            ))}
+          </div>
+
+          {/* Folder priority logic */}
+          <div style={{fontSize:11,fontWeight:700,color:'#888',letterSpacing:2,textTransform:'uppercase',textAlign:'center',marginBottom:14}}>Folder priority logic</div>
+          <div style={{display:'flex',gap:10,maxWidth:560,margin:'0 auto'}}>
+            {[
+              {n:'1st',l:'User-created folders',d:'Your structure wins',c:'#0F6E56',icon:'fa-user'},
+              {n:'2nd',l:'Reyna-created folders',d:'From past classifications',c:'#534AB7',icon:'fa-crown'},
+              {n:'3rd',l:'Create new folder',d:'Only when nothing fits',c:'#BA7517',icon:'fa-plus'},
+            ].map((p,i)=>(
+              <div key={i} style={{flex:1,padding:'16px 12px',textAlign:'center',borderTop:`3px solid ${p.c}`,background:'#fafafa',borderRadius:'0 0 10px 10px'}}>
+                <i className={`fas ${p.icon}`} style={{fontSize:14,color:p.c,marginBottom:6,display:'block'}}/>
+                <div style={{fontSize:22,fontWeight:800,color:p.c}}>{p.n}</div>
+                <div style={{fontSize:12,fontWeight:600,marginTop:4}}>{p.l}</div>
+                <div style={{fontSize:10,color:'#aaa',marginTop:2}}>{p.d}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="rl-divider"/>
+
+      {/* ═══ S5: CAPTURE MODES ═══ */}
+      <div style={{background:'rgba(250,250,250,0.7)',backdropFilter:'blur(4px)'}}>
+        <div ref={capRef} className={`rl-s ${rv(capVis)}`}>
+          <div style={{fontSize:12,fontWeight:700,color:'#25D366',letterSpacing:2.5,textTransform:'uppercase',marginBottom:16}}><i className="fas fa-bolt" style={{marginRight:6}}/>Two capture modes</div>
+          <h2 style={{fontSize:'clamp(24px,3.5vw,36px)',fontWeight:800,lineHeight:1.2,marginBottom:12,letterSpacing:-1}}>Choose your level of automation.</h2>
+          <p style={{fontSize:17,lineHeight:1.8,color:'#555',marginBottom:36}}>Toggle per group from the dashboard. Both feed into the same autonomous pipeline.</p>
+          <div className="rl-capg" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+            {[
+              {num:'01',icon:'fa-folder',title:'Track all files',sub:'Full autopilot',color:'#25D366',desc:'Every document shared in the group is automatically captured, classified, and synced. Zero effort.',tip:'Best for active study groups'},
+              {num:'02',icon:'fa-thumbtack',title:'Reactions only',sub:'Selective control',color:'#0ea5e9',desc:'Only files that get a pin reaction are staged. Everything else is ignored. You choose what matters.',tip:'Best for noisy or mixed groups'},
+            ].map((m,i)=>(
+              <div key={i} style={{background:'#fff',border:'2px solid #111',borderRadius:14,padding:28,position:'relative',overflow:'hidden'}}>
+                <div style={{position:'absolute',top:12,right:16,fontSize:56,fontWeight:900,color:'#f5f5f5',lineHeight:1}}>{m.num}</div>
+                <i className={`fas ${m.icon}`} style={{fontSize:28,color:'#111',marginBottom:12,display:'block'}}/>
+                <h3 style={{fontSize:20,fontWeight:800,marginBottom:4}}>{m.title}</h3>
+                <div style={{fontSize:12,fontWeight:700,color:m.color,textTransform:'uppercase',letterSpacing:2,marginBottom:14}}>{m.sub}</div>
+                <p style={{fontSize:14,color:'#555',lineHeight:1.8,marginBottom:16}}>{m.desc}</p>
+                <div style={{fontSize:13,color:m.color,fontWeight:500}}><i className="fas fa-arrow-right" style={{marginRight:6}}/> {m.tip}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="rl-divider"/>
+
+      {/* ═══ S6: NOTES Q&A (replaces Insights) ═══ */}
+      <div ref={qaRef} className={`rl-s ${rv(qaVis)}`}>
+        <div style={{fontSize:12,fontWeight:700,color:'#7F77DD',letterSpacing:2.5,textTransform:'uppercase',marginBottom:16}}><i className="fas fa-graduation-cap" style={{marginRight:6}}/>Killer feature #3 — Notes Q&A</div>
+        <h2 style={{fontSize:'clamp(24px,3.5vw,36px)',fontWeight:800,lineHeight:1.2,marginBottom:12,letterSpacing:-1}}>Ask anything from your notes.</h2>
+        <p style={{fontSize:17,lineHeight:1.8,color:'#555',marginBottom:36}}>
+          Ask Reyna about shared notes directly in WhatsApp. She fetches the relevant files from Drive, sends the content to Claude, and replies with a clear answer — instantly. No need to open any other app or copy files elsewhere.
+        </p>
+
+        {/* Chat-style Q&A demo */}
+        <div style={{maxWidth:520,margin:'0 auto 32px',display:'flex',flexDirection:'column',gap:4}}>
+          {qaExamples.map((ex,i)=>(
+            <div key={i} className={qaVis?'rl-dim':''} style={{animationDelay:`${300+i*350}ms`}}>
+              <div className="rl-qa-q">
+                <i className="fas fa-user" style={{fontSize:9,opacity:0.5,marginRight:6}}/>{ex.q}
+              </div>
+              <div style={{display:'flex',alignItems:'flex-start',gap:8,marginBottom:16}}>
+                <div style={{width:24,height:24,borderRadius:'50%',background:'#25D366',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:2}}>
+                  <i className="fas fa-crown" style={{fontSize:9,color:'#fff'}}/>
+                </div>
+                <div className="rl-qa-a">
+                  <div style={{fontSize:11,fontWeight:700,color:'#25D366',marginBottom:6,letterSpacing:1,textTransform:'uppercase'}}>Reyna</div>
+                  {ex.a}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{textAlign:'center',padding:'16px 24px',background:'#f5f3ff',border:'1px solid #e0dafe',borderRadius:12,maxWidth:480,margin:'0 auto'}}>
+          <div style={{fontSize:13,color:'#534AB7',fontWeight:600,marginBottom:4}}>
+            <i className="fas fa-magic" style={{marginRight:6}}/>Powered by content extraction
+          </div>
+          <div style={{fontSize:12,color:'#888',lineHeight:1.6}}>
+            Reyna reads every page of every PDF and DOCX shared in your group. When you ask a question, it searches through all extracted content — not just filenames.
           </div>
         </div>
       </div>
