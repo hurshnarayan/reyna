@@ -354,41 +354,67 @@ reyna/
 git clone https://github.com/<you>/reyna.git
 cd reyna
 cp .env.example .env
-# fill in: GEMINI_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, JWT_SECRET
 ```
 
-### 2. Backend
+Edit `.env` and fill in:
+
+```env
+GEMINI_API_KEY=your-gemini-key        # from aistudio.google.com/apikey
+GOOGLE_CLIENT_ID=your-oauth-id        # from console.cloud.google.com
+GOOGLE_CLIENT_SECRET=your-secret
+JWT_SECRET=any-random-string
+LLM_PROVIDER=gemini                   # or: claude, grok, openai
+```
+
+### 2. Install dependencies
 
 ```bash
-go run ./cmd/server/
-# → :8080
+make install
+# installs web/ (React) and whatsapp-bot/ (Node) deps
 ```
 
-### 3. Frontend
+### 3. Start everything (3 terminals)
 
 ```bash
-cd web
-npm install
-npm run dev
-# → :5173
+# Terminal 1 — backend (auto-loads .env)
+make backend          # → :8080
+
+# Terminal 2 — frontend
+make frontend         # → :5173
+
+# Terminal 3 — WhatsApp bot
+make bot              # scan QR with your phone → Linked Devices → Link a Device
 ```
 
-### 4. WhatsApp bot
+**Or for a fresh start** (wipes old DB + starts backend):
 
 ```bash
-cd whatsapp-bot
-npm install
-node bot.js
-# scan the QR with your WhatsApp → Linked Devices → Link a Device
+make fresh
 ```
 
-### 5. Connect Drive + try it
+> **Note:** The Makefile auto-loads your `.env` file — no need to manually export variables. Works in bash, zsh, and fish.
+
+### 4. Connect Drive + try it
 
 1. Open <http://localhost:5173>, create an account, connect Google Drive (Settings → Change folder → pick a root)
 2. In any WhatsApp group, type `/reyna init`
 3. Share a PDF in that group → watch it auto-classify in the dashboard staging area
-4. DM your own Reyna number: `reyna find that pdf` → file drops with Drive link
+4. DM the Reyna number: `reyna find that pdf` → file drops with Drive link
 5. `reyna summarize it` → multi-turn Q&A kicks in
+
+### Available make targets
+
+```
+make help        # list all targets
+make backend     # start Go API on :8080
+make frontend    # start React dev server on :5173
+make bot         # start WhatsApp bot
+make fresh       # clean DB + start backend (daily dev command)
+make install     # install JS dependencies
+make build       # compile Go binary → ./reyna-server
+make clean       # wipe DB + drive storage + bot auth
+make dev         # print "run in 3 terminals" instructions
+```
 
 ---
 
@@ -415,6 +441,17 @@ node bot.js
 Reyna fixes that. **The user does nothing differently** — they share files the way they always have. Reyna does the rest: capture, parse, classify, dedupe, file, version, retrieve, answer. In any language. Without you ever opening a Drive tab.
 
 That's the vision: **one place, total recall, zero effort**.
+
+---
+
+## 🔒 Privacy & data handling
+
+> Reyna processes your study materials to classify, search, and answer questions. File content is sent to Google Gemini for AI analysis and stored in **your own Google Drive** — not ours. Extracted text summaries are cached locally in SQLite for search performance and purged when you delete the file. We don't sell, share, or train on your data.
+>
+> **What Reyna can see:** messages and files in WhatsApp groups where it's activated, and DMs sent to the bot.
+> **What Reyna can't see:** groups where it hasn't been initialized, messages sent before activation.
+>
+> For sensitive documents (financial, medical, personal), don't add them to Reyna-enabled groups. This is the same model used by ChatGPT, Notion AI, Google Docs AI, and Grammarly — the utility requires processing your content, and we're transparent about that.
 
 ---
 

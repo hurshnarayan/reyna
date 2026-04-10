@@ -651,6 +651,21 @@ export default function Landing() {
         </div>
       </div>
 
+      {/* ═══ Privacy disclaimer ═══ */}
+      <div style={{background:'#fafafa',borderTop:'1px solid #eee',padding:'36px 24px'}}>
+        <div style={{maxWidth:720,margin:'0 auto',textAlign:'center'}}>
+          <div style={{fontSize:11,fontWeight:700,color:'#888',letterSpacing:2,textTransform:'uppercase',marginBottom:10}}>
+            <i className="fas fa-shield-halved" style={{marginRight:6}}/>privacy & data handling
+          </div>
+          <p style={{fontSize:13,lineHeight:1.8,color:'#666',marginBottom:8}}>
+            Reyna processes your study materials to classify, search, and answer questions. File content is sent to Google Gemini for AI analysis and stored in <strong style={{color:'#1a1a1a'}}>your own Google Drive</strong> — not ours. Extracted summaries are cached locally for search and purged when you delete. We don't sell, share, or train on your data.
+          </p>
+          <p style={{fontSize:12,lineHeight:1.7,color:'#999'}}>
+            For sensitive documents (financial, medical, personal), don't add them to Reyna-enabled groups. This is the same transparency model used by ChatGPT, Notion AI, and Grammarly — the utility requires processing your content, and we're upfront about it.
+          </p>
+        </div>
+      </div>
+
       {/* ═══ S8: CTA / WAITLIST ═══ */}
       <section id="waitlist" ref={ctaRef} className={rv(ctaVis)} style={{background:'#111',padding:'80px 24px',textAlign:'center'}}>
         <h2 style={{fontSize:'clamp(28px,4.5vw,44px)',fontWeight:900,lineHeight:1.2,marginBottom:16,color:'#fff',letterSpacing:-1}}>Your files deserve better than vanishing into chat history.</h2>
