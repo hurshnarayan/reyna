@@ -14,6 +14,23 @@ import (
 	"time"
 )
 
+// sanitizeName strips path traversal sequences from user-controlled filenames
+// and folder names. Prevents writes to arbitrary paths via names like
+// "../../../etc/cron.d/payload". Returns just the base filename with any
+// remaining slashes/backslashes removed.
+func sanitizeName(name string) string {
+	// filepath.Base strips directory components: "../../etc/passwd" → "passwd"
+	name = filepath.Base(name)
+	// Extra defense: remove any remaining slashes or backslashes
+	name = strings.ReplaceAll(name, "/", "_")
+	name = strings.ReplaceAll(name, "\\", "_")
+	// Reject empty or dot-only names
+	if name == "" || name == "." || name == ".." {
+		name = "unnamed"
+	}
+	return name
+}
+
 type TokenInfo struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
@@ -341,15 +358,17 @@ func (s *Service) CreateUserRoot(uid int64) (string, error) {
 }
 
 func (s *Service) CreateFolder(uid int64, name string) (string, error) {
-	os.MkdirAll(filepath.Join(s.localPath, fmt.Sprintf("user_%d", uid), "Reyna", name), 0755)
-	return fmt.Sprintf("local_%s", name), nil
+	safeName := sanitizeName(name)
+	os.MkdirAll(filepath.Join(s.localPath, fmt.Sprintf("user_%d", uid), "Reyna", safeName), 0755)
+	return fmt.Sprintf("local_%s", safeName), nil
 }
 
 func (s *Service) UploadFileLocal(uid int64, subject, name string, data []byte) (string, error) {
 	folder := "General"
 	if subject != "" {
-		folder = subject
+		folder = sanitizeName(subject)
 	}
+	name = sanitizeName(name)
 	dir := filepath.Join(s.localPath, fmt.Sprintf("user_%d", uid), "Reyna", folder)
 	os.MkdirAll(dir, 0755)
 	p := filepath.Join(dir, name)
@@ -387,8 +406,8 @@ func (s *Service) GetLocalFileData(fileID int64) ([]byte, error) {
 // GetFileFromLocalStore tries to read a file from the user's local Reyna folder
 func (s *Service) GetFileFromLocalStore(userID int64, subject, fileName string) ([]byte, error) {
 	folder := "General"
-	if subject != "" { folder = subject }
-	p := filepath.Join(s.localPath, fmt.Sprintf("user_%d", userID), "Reyna", folder, fileName)
+	if subject != "" { folder = sanitizeName(subject) }
+	p := filepath.Join(s.localPath, fmt.Sprintf("user_%d", userID), "Reyna", folder, sanitizeName(fileName))
 	data, err := os.ReadFile(p)
 	if err != nil {
 		// Try without subject folder
