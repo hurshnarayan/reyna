@@ -33,6 +33,30 @@
 
 ---
 
+## 🔒 Privacy & data handling
+
+> Reyna processes your study materials to classify, search, and answer questions. File content is sent to Google Gemini for AI analysis and stored in **your own Google Drive** — not ours. Extracted text summaries are cached locally in SQLite for search performance and purged when you delete the file. We don't sell, share, or train on your data.
+>
+> **What Reyna can see:** messages and files in WhatsApp groups where it's activated, and DMs sent to the bot.
+> **What Reyna can't see:** groups where it hasn't been initialized, messages sent before activation.
+>
+> For sensitive documents (financial, medical, personal), don't add them to Reyna-enabled groups. This is the same model used by ChatGPT, Notion AI, Google Docs AI, and Grammarly — the utility requires processing your content, and we're transparent about that.
+
+---
+
+## 🌍 Why Reyna exists
+
+> *Your group chat is a knowledge base.
+> Your files deserve better than vanishing into chat history.*
+
+2 billion people share files in WhatsApp. None of them have a way to find those files five days later. The PDFs scroll past, the lab manuals vanish, the "send me that file again" loop runs forever. Drive folders, if they exist, are messy because filing-by-hand is a thankless chore nobody does.
+
+Reyna fixes that. **The user does nothing differently** — they share files the way they always have. Reyna does the rest: capture, parse, classify, dedupe, file, version, retrieve, answer. In any language. Without you ever opening a Drive tab.
+
+That's the vision: **one place, total recall, zero effort**.
+
+---
+
 ## 🛑 Before you scroll: read this
 
 > ### Reyna is **not** an LLM wrapper.
@@ -428,30 +452,6 @@ make dev         # print "run in 3 terminals" instructions
 | **Frontend** | React 19 + Vite 8 · no component library · 1.2k LOC | Hand-rolled markdown renderer, conversational chat thread, auto-grow textareas |
 | **Bot** | Node.js · [Baileys](https://github.com/WhiskeySockets/Baileys) · in-memory session store | WhatsApp Web protocol, no Twilio fees, runs anywhere |
 | **Auth** | JWT (HS256) | Stateless, simple, no session table |
-
----
-
-## 🌍 Why Reyna exists
-
-> *Your group chat is a knowledge base.
-> Your files deserve better than vanishing into chat history.*
-
-2 billion people share files in WhatsApp. None of them have a way to find those files five days later. The PDFs scroll past, the lab manuals vanish, the "send me that file again" loop runs forever. Drive folders, if they exist, are messy because filing-by-hand is a thankless chore nobody does.
-
-Reyna fixes that. **The user does nothing differently** — they share files the way they always have. Reyna does the rest: capture, parse, classify, dedupe, file, version, retrieve, answer. In any language. Without you ever opening a Drive tab.
-
-That's the vision: **one place, total recall, zero effort**.
-
----
-
-## 🔒 Privacy & data handling
-
-> Reyna processes your study materials to classify, search, and answer questions. File content is sent to Google Gemini for AI analysis and stored in **your own Google Drive** — not ours. Extracted text summaries are cached locally in SQLite for search performance and purged when you delete the file. We don't sell, share, or train on your data.
->
-> **What Reyna can see:** messages and files in WhatsApp groups where it's activated, and DMs sent to the bot.
-> **What Reyna can't see:** groups where it hasn't been initialized, messages sent before activation.
->
-> For sensitive documents (financial, medical, personal), don't add them to Reyna-enabled groups. This is the same model used by ChatGPT, Notion AI, Google Docs AI, and Grammarly — the utility requires processing your content, and we're transparent about that.
 
 ---
 

@@ -13,13 +13,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/reyna-bot/reyna-backend/internal/auth"
-	"github.com/reyna-bot/reyna-backend/internal/config"
-	"github.com/reyna-bot/reyna-backend/internal/repository"
-	"github.com/reyna-bot/reyna-backend/internal/integrations/gdrive"
-	"github.com/reyna-bot/reyna-backend/internal/model"
-	"github.com/reyna-bot/reyna-backend/internal/nlp"
-	"github.com/reyna-bot/reyna-backend/internal/reyna"
+	"github.com/hurshnarayan/reyna/internal/auth"
+	"github.com/hurshnarayan/reyna/internal/config"
+	"github.com/hurshnarayan/reyna/internal/repository"
+	"github.com/hurshnarayan/reyna/internal/integrations/gdrive"
+	"github.com/hurshnarayan/reyna/internal/model"
+	"github.com/hurshnarayan/reyna/internal/nlp"
+	"github.com/hurshnarayan/reyna/internal/reyna"
 )
 
 type Server struct {

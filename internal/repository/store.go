@@ -8,7 +8,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/reyna-bot/reyna-backend/internal/model"
+	"github.com/hurshnarayan/reyna/internal/model"
 )
 
 type Store struct {

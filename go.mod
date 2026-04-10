@@ -1,4 +1,4 @@
-module github.com/reyna-bot/reyna-backend
+module github.com/hurshnarayan/reyna
 
 go 1.22.2
 

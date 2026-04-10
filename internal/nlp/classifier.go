@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/reyna-bot/reyna-backend/internal/integrations/llm"
+	"github.com/hurshnarayan/reyna/internal/integrations/llm"
 )
 
 // geminiInlineMaxBytes is the safe ceiling for inline base64-encoded file data

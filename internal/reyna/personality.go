@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/reyna-bot/reyna-backend/internal/model"
+	"github.com/hurshnarayan/reyna/internal/model"
 )
 
 // Reyna is the response engine for the bot — professional, English-only
