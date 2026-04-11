@@ -17,6 +17,7 @@ let enabledGroups = new Set();   // WA group JIDs that Reyna is active in
 let groupModes = new Map();      // groupJid → "auto" | "reaction"
 const groupFiles = new Map();    // groupJid → Map<msgId, fileInfo>
 const groupLastSyncTime = new Map(); // groupJid → timestamp (throttle re-syncs)
+const lastKnownEnabled = new Map(); // groupJid → boolean (for detecting dashboard toggles)
 
 // dmContext caches per-user conversation state for private DM follow-ups.
 // Keyed by senderPhone. Stores the most recent search results so messages
@@ -264,10 +265,87 @@ async function refreshEnabledGroups() {
     const res = await fetch(`${BACKEND_URL}/api/bot/enabled-groups`);
     const data = await res.json();
     enabledGroups = new Set(data.groups || []);
-    console.log(`  Enabled groups: ${enabledGroups.size}`);
   } catch (err) {
     console.error('Failed to fetch enabled groups:', err.message);
   }
+}
+
+// watchGroupStateChanges polls the backend every 10 seconds to detect when
+// the dashboard toggles or removes a group. Sends appropriate WhatsApp messages.
+const lastKnownHidden = new Map(); // groupJid → boolean
+
+function startGroupStateWatcher(sock) {
+  setInterval(async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/bot/group-states`);
+      const states = await res.json(); // { "jid": { enabled: bool, hidden: bool }, ... }
+
+      for (const jid of syncedGroups) {
+        const state = states[jid];
+        if (!state) continue;
+
+        const wasEnabled = lastKnownEnabled.get(jid);
+        const wasHidden = lastKnownHidden.get(jid);
+        const nowEnabled = state.enabled === true;
+        const nowHidden = state.hidden === true;
+
+        // First run — store state without sending messages
+        if (wasEnabled === undefined) {
+          lastKnownEnabled.set(jid, nowEnabled);
+          lastKnownHidden.set(jid, nowHidden);
+          continue;
+        }
+
+        // Group was REMOVED (hidden) from dashboard
+        if (!wasHidden && nowHidden) {
+          lastKnownHidden.set(jid, true);
+          lastKnownEnabled.set(jid, false);
+          try {
+            await sock.sendMessage(jid, {
+              text: '*Reyna:* This group has been removed from tracking. Files will no longer be captured.\n\nTo add it back, send /reyna init.',
+            });
+            console.log(`  [WATCH] sent "group removed" to ${jid}`);
+          } catch {}
+          continue;
+        }
+
+        // Group was UN-HIDDEN (re-added via /reyna init) — already handled by init message
+        if (wasHidden && !nowHidden) {
+          lastKnownHidden.set(jid, false);
+          lastKnownEnabled.set(jid, nowEnabled);
+          continue;
+        }
+
+        // Toggle: enabled → disabled
+        if (wasEnabled && !nowEnabled && !nowHidden) {
+          lastKnownEnabled.set(jid, false);
+          try {
+            await sock.sendMessage(jid, {
+              text: '*Reyna:* Tracking paused for this group. Files won\'t be captured until re-enabled.\n\nRe-enable from the dashboard or send /reyna init.',
+            });
+            console.log(`  [WATCH] sent "tracking paused" to ${jid}`);
+          } catch {}
+        }
+        // Toggle: disabled → enabled
+        else if (!wasEnabled && nowEnabled) {
+          lastKnownEnabled.set(jid, true);
+          try {
+            await sock.sendMessage(jid, {
+              text: '*Reyna:* Tracking resumed! Files shared in this group will be captured automatically.',
+            });
+            console.log(`  [WATCH] sent "tracking resumed" to ${jid}`);
+          } catch {}
+        }
+        else {
+          lastKnownEnabled.set(jid, nowEnabled);
+          lastKnownHidden.set(jid, nowHidden);
+        }
+      }
+
+      // Update enabledGroups set
+      enabledGroups = new Set(Object.entries(states).filter(([,s]) => s.enabled).map(([jid]) => jid));
+    } catch {}
+  }, 10000);
 }
 
 // Returns { mode, enabled } — the bot must check BOTH.
@@ -1219,12 +1297,8 @@ async function startBot() {
       // Fetch enabled groups and pre-load synced groups
       refreshEnabledGroups();
       preloadSyncedGroups().then(() => refreshGroupNames(sock));
-      // Refresh every 5 minutes
-      setInterval(refreshEnabledGroups, 5 * 60 * 1000);
-      // Refresh group names every 30 minutes
-      // Don't refresh names on an interval — it causes too many groupMetadata
-      // calls which trigger 440 disconnects. Names are synced on-demand when
-      // messages arrive (throttled to once per 10 min per group).
+      // Watch for dashboard toggle changes every 10 seconds
+      startGroupStateWatcher(sock);
     }
     if (connection === 'close') {
       const code = lastDisconnect?.error?.output?.statusCode;

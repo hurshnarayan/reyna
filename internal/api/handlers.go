@@ -101,6 +101,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/bot/reaction", wrap(s.handleBotReaction))
 	s.mux.HandleFunc("/api/bot/sync-group", wrap(s.handleBotSyncGroup))
 	s.mux.HandleFunc("/api/bot/enabled-groups", wrap(s.handleEnabledGroups))
+	s.mux.HandleFunc("/api/bot/group-states", wrap(s.handleGroupStates))
 	s.mux.HandleFunc("/api/bot/known-groups", wrap(s.handleKnownGroups))
 	s.mux.HandleFunc("/api/bot/group-mode", wrap(s.handleGroupMode))
 
@@ -1469,6 +1470,19 @@ func (s *Server) handleEnabledGroups(w http.ResponseWriter, r *http.Request) {
 		ids = []string{}
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{"groups": ids})
+}
+
+// handleGroupStates returns enabled + hidden status for every known group.
+// Used by the bot's state-change watcher to detect dashboard toggles/removes
+// and send appropriate WhatsApp messages.
+func (s *Server) handleGroupStates(w http.ResponseWriter, r *http.Request) {
+	groups, _ := s.store.GetAllGroups()
+	states := make(map[string]map[string]bool)
+	for _, g := range groups {
+		gs := s.store.GetGroupSettings(g.ID)
+		states[g.WAID] = map[string]bool{"enabled": gs.Enabled, "hidden": gs.Hidden}
+	}
+	json.NewEncoder(w).Encode(states)
 }
 
 // ── Sync Group from Bot (auto-registers groups from WhatsApp) ──
