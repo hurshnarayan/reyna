@@ -27,7 +27,7 @@ export default function Login() {
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-color)' }}>
       <div style={{ maxWidth: 380, width: '100%', padding: 32 }}>
         <div style={{ textAlign: 'center', marginBottom: 40 }}>
-          <h1 style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, marginBottom: 8, color: 'var(--text-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0 }}>
+          <h1 onClick={() => navigate('/')} style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, marginBottom: 8, color: 'var(--text-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0, cursor: 'pointer' }}>
             <Fa icon="fa-crown" style={{ fontSize: 20, color: 'var(--reyna-accent)', marginRight: 6, filter: 'drop-shadow(0 0 6px rgba(37,211,102,0.4))' }} />
             reyna
             <span style={{ fontSize: 10, color: 'var(--sub-color)', fontWeight: 400, marginLeft: 3 }}>v2</span>

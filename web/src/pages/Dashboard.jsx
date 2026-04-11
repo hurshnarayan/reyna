@@ -349,8 +349,8 @@ export default function Dashboard() {
         {[
           { label: 'total files', value: stats.total_files, icon: icons.totalFiles, color: '#1a1a1a' },
           { label: 'groups', value: stats.total_groups, icon: icons.groups, color: '#2563eb' },
-          { label: 'storage used', value: formatBytes(storageUsed), icon: icons.storage, color: '#d97706' },
-          { label: 'drive free', value: formatBytes(Math.max(0, storageLimit - storageUsed)), icon: icons.cloud, color: '#25D366' },
+          { label: 'storage used', value: driveStatus?.connected ? formatBytes(storageUsed) : '–', icon: icons.storage, color: '#d97706' },
+          { label: 'drive free', value: driveStatus?.connected ? formatBytes(Math.max(0, storageLimit - storageUsed)) : '–', icon: icons.cloud, color: '#25D366' },
         ].map((s, i) => (
           <div key={i} style={{ ...cardStyle, borderTop: `3px solid ${s.color}` }}>
             <div style={{ marginBottom: 12 }}>
