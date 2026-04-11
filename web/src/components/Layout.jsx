@@ -1,5 +1,5 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { isLoggedIn, logout, getUser } from '../lib/api'
+import { isLoggedIn, logout, getUser, api } from '../lib/api'
 import { useEffect, useState, useRef } from 'react'
 import { NotificationBell } from './Notifications'
 import { Fa, icons } from './icons'
@@ -235,29 +235,42 @@ export default function Layout() {
                 options={['light', 'dark']} active={darkMode ? 'dark' : 'light'}
                 onSelect={(v) => setDarkMode(v === 'dark')}
               />
-              <SettingRow icon={icons.tip} title="background animation"
-                desc="floating blobs that follow your cursor. turn off if distracting."
-                options={['off', 'on']} active={blobsOn ? 'on' : 'off'}
-                onSelect={(v) => setBlobsOn(v === 'on')}
-              />
-              <SettingRow icon={icons.commit} title="button animations"
-                desc="lusion-style hover — a circle expands from your cursor on button hover."
-                options={['off', 'on']} active={btnAnimOn ? 'on' : 'off'}
-                onSelect={(v) => setBtnAnimOn(v === 'on')}
-              />
             </>}
 
             {sectionHeader('tracking', 'tracking')}
             {openSections.tracking && <>
               <SettingRow icon={icons.staging} title="auto-commit timer"
-                desc="staged files are automatically committed after this period."
+                desc="staged files are automatically committed after this period. synced with the dashboard."
                 options={['off', '6 hours', '12 hours', '24 hours']} active={autoCommit}
-                onSelect={(v) => { setAutoCommit(v); save('autoCommit', v) }}
+                onSelect={async (v) => {
+                  setAutoCommit(v); save('autoCommit', v)
+                  const hours = v === 'off' ? 0 : parseInt(v) || 24
+                  try {
+                    const groups = await api.groupSettings()
+                    if (groups && Array.isArray(groups)) {
+                      for (const gs of groups) {
+                        if (gs.group?.id) await api.updateGroupSettings(gs.group.id, { auto_commit_hours: hours })
+                      }
+                    }
+                  } catch {}
+                }}
               />
               <SettingRow icon={icons.pin} title="default tracking mode"
-                desc="when a new group is added, reyna uses this mode by default."
+                desc="changes tracking mode for all your groups. synced with the dashboard."
                 options={['auto', 'reactions only']} active={defaultMode}
-                onSelect={(v) => { setDefaultMode(v); save('defaultMode', v) }}
+                onSelect={async (v) => {
+                  setDefaultMode(v); save('defaultMode', v)
+                  // sync with backend for all groups
+                  try {
+                    const mode = v === 'auto' ? 'auto' : 'reaction'
+                    const groups = await api.groupSettings()
+                    if (groups && Array.isArray(groups)) {
+                      for (const gs of groups) {
+                        if (gs.group?.id) await api.updateGroupSettings(gs.group.id, { tracking_mode: mode })
+                      }
+                    }
+                  } catch {}
+                }}
               />
             </>}
           </div>

@@ -372,7 +372,7 @@ export default function Dashboard() {
             </div>
             <div style={{ fontSize: 12, color: 'var(--sub-color)', marginTop: 2 }}>
               {llmStatus.enabled
-                ? `Powered by ${llmStatus.provider} — content extraction, classification, NLP retrieval, Notes Q&A`
+                ? `Powered by ${llmStatus.provider} - content extraction, classification, NLP features enabled`
                 : 'Set ANTHROPIC_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY, or XAI_API_KEY to enable AI features'}
             </div>
           </div>
