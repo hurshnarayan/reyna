@@ -448,25 +448,30 @@ function isReynaMessage(text) {
 const syncedGroups = new Set();
 
 async function ensureGroupSynced(sock, groupJid) {
-  if (syncedGroups.has(groupJid)) return;
+  // Always try to fetch the real name even if already in syncedGroups.
+  // Baileys sometimes returns empty metadata on first connect, so the
+  // group gets registered as "WhatsApp Group". We re-check every time
+  // until we get a real name, then stop re-checking.
+  const alreadySynced = syncedGroups.has(groupJid);
+
   let groupName = 'WhatsApp Group';
   let memberCount = 0;
 
-  // Try multiple times to get metadata (sometimes fails on first connect)
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const metadata = await sock.groupMetadata(groupJid);
-      console.log(`  [SYNC] Attempt ${attempt + 1}: subject="${metadata?.subject}" participants=${metadata?.participants?.length}`);
       if (metadata?.subject && metadata.subject !== '') {
         groupName = metadata.subject;
         memberCount = (metadata.participants || []).length;
         break;
       }
     } catch (err) {
-      console.log(`  [SYNC] Attempt ${attempt + 1} failed: ${err.message}`);
-      if (attempt < 2) await new Promise(r => setTimeout(r, 1000)); // wait 1s before retry
+      if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
     }
   }
+
+  // If we already synced with a real name and nothing changed, skip the API call
+  if (alreadySynced && groupName === 'WhatsApp Group') return;
 
   try {
     await fetch(`${BACKEND_URL}/api/bot/sync-group`, {
@@ -479,7 +484,9 @@ async function ensureGroupSynced(sock, groupJid) {
       }),
     });
     syncedGroups.add(groupJid);
-    console.log(`  Synced group: ${groupName} (${groupJid})`);
+    if (groupName !== 'WhatsApp Group') {
+      console.log(`  Synced group: ${groupName} (${groupJid})`);
+    }
   } catch (err) {
     console.error(`  Group sync failed for ${groupJid}: ${err.message}`);
   }
@@ -862,6 +869,11 @@ async function handleMessage(sock, msg) {
   // ── Only process messages from initialized groups ──
   if (!syncedGroups.has(chat)) return;
 
+  // Re-sync group name in background on every message — catches the case
+  // where Baileys didn't have metadata on first connect and the group got
+  // registered as "WhatsApp Group". This is fire-and-forget, non-blocking.
+  ensureGroupSynced(sock, chat).catch(() => {});
+
   const mode = await getGroupMode(chat);
 
   // ── Track document shares ──
@@ -1142,7 +1154,7 @@ async function startBot() {
       // Refresh every 5 minutes
       setInterval(refreshEnabledGroups, 5 * 60 * 1000);
       // Refresh group names every 30 minutes
-      setInterval(() => refreshGroupNames(sock), 30 * 60 * 1000);
+      setInterval(() => refreshGroupNames(sock), 5 * 60 * 1000);
     }
     if (connection === 'close') {
       const code = lastDisconnect?.error?.output?.statusCode;
