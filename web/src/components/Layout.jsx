@@ -33,6 +33,21 @@ export default function Layout() {
 
   const audioRef = useRef(null)
 
+  // network status bar
+  const [offline, setOffline] = useState(!navigator.onLine)
+  const [showOfflineBar, setShowOfflineBar] = useState(!navigator.onLine)
+  const [justReconnected, setJustReconnected] = useState(false)
+  useEffect(() => {
+    const goOffline = () => { setOffline(true); setShowOfflineBar(true); setJustReconnected(false) }
+    const goOnline = () => {
+      setOffline(false); setShowOfflineBar(true); setJustReconnected(true)
+      setTimeout(() => { setShowOfflineBar(false); setJustReconnected(false) }, 3000)
+    }
+    window.addEventListener('offline', goOffline)
+    window.addEventListener('online', goOnline)
+    return () => { window.removeEventListener('offline', goOffline); window.removeEventListener('online', goOnline) }
+  }, [])
+
   useEffect(() => { if (!isLoggedIn()) navigate('/login') }, [])
   useEffect(() => { document.body.classList.toggle('reyna-dark', darkMode); save('darkMode', darkMode) }, [darkMode])
   useEffect(() => { document.querySelectorAll('.reyna-blob').forEach(el => { el.style.opacity = blobsOn ? '0.1' : '0' }); save('blobsOn', blobsOn) }, [blobsOn])
@@ -105,7 +120,26 @@ export default function Layout() {
   )
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh' }}>
+    <div style={{ display: 'flex', minHeight: '100vh', flexDirection: 'column' }}>
+      {/* network status bar */}
+      {showOfflineBar && (
+        <div onClick={() => setShowOfflineBar(false)} style={{
+          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
+          background: offline ? '#dc2626' : '#25D366',
+          color: '#fff', fontSize: 13, fontWeight: 600,
+          padding: '8px 20px',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+          animation: 'slideDownBar 0.3s ease',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+          cursor: 'pointer',
+        }}>
+          <Fa icon={offline ? 'fa-wifi' : 'fa-check-circle'} style={{ fontSize: 12 }} />
+          {offline ? "you're offline. check your internet connection." : 'back online.'}
+          <Fa icon="fa-xmark" style={{ position: 'absolute', right: 16, fontSize: 14, opacity: 0.8 }} />
+        </div>
+      )}
+      <style>{`@keyframes slideDownBar{from{transform:translateY(-100%)}to{transform:translateY(0)}}`}</style>
+      <div style={{ display: 'flex', flex: 1 }}>
       <aside style={{
         width: 220, background: 'var(--sidebar-bg)', padding: '24px 0',
         display: 'flex', flexDirection: 'column', position: 'fixed', top: 0, bottom: 0, left: 0,
@@ -240,6 +274,7 @@ export default function Layout() {
           <Outlet />
         </div>
       </main>
+    </div>
     </div>
   )
 }
