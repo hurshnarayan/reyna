@@ -652,98 +652,92 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 		log.Printf("📝 New version detected for %s — uploading as %s", fileName, versionedName)
 	}
 
-	// NLP classification if subject not provided
-	// v3: Use combined extract+classify for PDFs (collapses Agents 1 & 2)
-	var extractedContent, contentSummary string
+	// ── Save file IMMEDIATELY — classify async ──
+	// The bot gets an instant response so the checkmark reaction fires
+	// within milliseconds. Classification + extraction happen in a background
+	// goroutine. The file shows up in the dashboard as "classifying..." and
+	// updates to the real subject once Gemini responds.
 	if subject == "" {
-		// Build the candidate folder list. Two sources, deduped:
-		//   1. Subjects already used in THIS group's DB rows (covers folders
-		//      created in the last few seconds that Drive might not surface
-		//      yet — eventual consistency).
-		//   2. Live subfolders under the user's Drive root.
-		// Both feed the same `existingFolders` list so the LLM (and the
-		// post-LLM snapToExistingFolder normalization) always considers them.
-		seen := map[string]bool{}
-		var existingFolders []string
-		for _, sub := range s.store.DistinctSubjectsForGroup(groupID) {
-			if sub == "" || seen[sub] {
-				continue
-			}
-			seen[sub] = true
-			existingFolders = append(existingFolders, sub)
-		}
-		driveUser := s.store.FindDriveConnectedUser(groupID)
-		if driveUser != nil && driveUser.GoogleRefresh != "" && driveUser.DriveRootID != "" {
-			token, terr := s.drive.GetValidToken(driveUser.GoogleToken, driveUser.GoogleRefresh, 0)
-			if terr == nil {
-				folders, _ := s.drive.ListDriveFolders(token, driveUser.DriveRootID)
-				for _, f := range folders {
-					name := f["name"]
-					if name == "" || seen[name] {
-						continue
-					}
-					seen[name] = true
-					existingFolders = append(existingFolders, name)
-				}
-			}
-		}
-		log.Printf("[CLASSIFY] candidate folders for group %d: %v", groupID, existingFolders)
-		// Try content-based classify+extract in one LLM call.
-		// PDFs go via inline doc API; DOCX/PPTX/XLSX get text-extracted from
-		// their zip payload first; everything else falls back to filename-only
-		// classification.
-		groupName := ""
-		if group != nil {
-			groupName = group.Name
-		}
-		fmeta := nlp.FileMeta{
-			SenderName:  sharedByName,
-			SenderPhone: userPhone,
-			GroupName:   groupName,
-			SharedAt:    time.Now(),
-		}
-		if len(fileBytes) > 0 && (strings.Contains(mimeType, "pdf") || nlp.IsOfficeDoc(mimeType)) {
-			subject, _, _, extractedContent, contentSummary = s.classifier.ClassifyFileWithContent(fileName, mimeType, fileBytes, existingFolders, fmeta)
-		} else {
-			subject, _, _ = s.classifier.ClassifyFile(fileName, existingFolders)
-		}
-		log.Printf("[NLP] Classified %s → %s", fileName, subject)
+		subject = "classifying..."
 	}
 
-	// Save locally — note we use the *original* fileName for the local store
-	// but the *versioned* filename when staging the row, so the eventual Drive
-	// upload uses the versioned name (e.g. hii.v2.pdf) while we still know the
-	// canonical name for matching.
 	localID, folderID, _ := s.drive.SmartUpload("", "", user.ID, subject, versionedName, mimeType, fileBytes)
-	// Save raw bytes for later Drive upload on commit
 	dbFile := &model.File{GroupID: groupID, UserID: user.ID, SharedByPhone: userPhone, SharedByName: sharedByName, FileName: versionedName, FileSize: fileSize, MimeType: mimeType, Subject: subject, DriveFileID: localID, DriveFolderID: folderID, Status: "staged", ContentHash: contentHash}
 	saved, err := s.store.AddFile(dbFile)
 	if err != nil { log.Printf("❌ DB: %v", err); http.Error(w, `{"error":"db save failed"}`, 500); return }
 
 	s.drive.SaveLocalFileData(saved.ID, fileBytes)
-	log.Printf("✅ Saved file %d: %s (%d bytes) — staged", saved.ID, fileName, len(fileBytes))
-
-	// v3: Content extraction — if combined call already extracted, save it now.
-	// Otherwise run async extraction with file data as document blocks.
-	if extractedContent != "" {
-		s.store.UpdateFileContent(saved.ID, extractedContent, contentSummary)
-		log.Printf("[EXTRACT] Combined: %s → %s", fileName, contentSummary)
-	} else {
-		go func(fileID int64, fName, mime string, fSize int64, data []byte) {
-			content, summary := s.classifier.ExtractContent(fName, mime, fSize, data)
-			if content != "" {
-				s.store.UpdateFileContent(fileID, content, summary)
-				log.Printf("[EXTRACT] Async: %s → %s", fName, summary)
-			}
-		}(saved.ID, fileName, mimeType, fileSize, fileBytes)
-	}
+	log.Printf("✅ Saved file %d: %s (%d bytes) — staged (classifying async)", saved.ID, fileName, len(fileBytes))
 
 	total := s.store.CountGroupFiles(groupID)
 	v := 1; if saved != nil { v = saved.Version }
 	reply := s.reyna.AddResponse(fileName, v, total)
 	s.store.LogActivity(groupID, user.ID, "add", "/reyna add "+fileName, "staged")
 
+	// Respond instantly — bot can send checkmark NOW
 	json.NewEncoder(w).Encode(map[string]interface{}{"reply": reply, "file_id": saved.ID, "status": "staged"})
+
+	// ── Background: classify + extract ──
+	go func(fileID int64, gID int64, fName, mime string, fSize int64, data []byte, grp *model.Group) {
+		classifySubject := ""
+
+		// Build candidate folders
+		seen := map[string]bool{}
+		var existingFolders []string
+		for _, sub := range s.store.DistinctSubjectsForGroup(gID) {
+			if sub == "" || sub == "classifying..." || seen[sub] { continue }
+			seen[sub] = true
+			existingFolders = append(existingFolders, sub)
+		}
+		driveUser := s.store.FindDriveConnectedUser(gID)
+		if driveUser != nil && driveUser.GoogleRefresh != "" && driveUser.DriveRootID != "" {
+			token, terr := s.drive.GetValidToken(driveUser.GoogleToken, driveUser.GoogleRefresh, 0)
+			if terr == nil {
+				folders, _ := s.drive.ListDriveFolders(token, driveUser.DriveRootID)
+				for _, f := range folders {
+					n := f["name"]
+					if n == "" || seen[n] { continue }
+					seen[n] = true
+					existingFolders = append(existingFolders, n)
+				}
+			}
+		}
+
+		groupName := ""
+		if grp != nil { groupName = grp.Name }
+		fmeta := nlp.FileMeta{
+			SenderName: sharedByName, SenderPhone: userPhone,
+			GroupName: groupName, SharedAt: time.Now(),
+		}
+
+		var extractedContent, contentSummary string
+		if len(data) > 0 && (strings.Contains(mime, "pdf") || nlp.IsOfficeDoc(mime)) {
+			classifySubject, _, _, extractedContent, contentSummary = s.classifier.ClassifyFileWithContent(fName, mime, data, existingFolders, fmeta)
+		} else {
+			classifySubject, _, _ = s.classifier.ClassifyFile(fName, existingFolders)
+		}
+
+		if classifySubject == "" {
+			classifySubject = "Uncategorized"
+			log.Printf("⚠️  Classification failed for %s — marking as Uncategorized", fName)
+			s.store.UpdateFileSubject(fileID, classifySubject)
+		} else {
+			log.Printf("[NLP] Classified %s → %s (async)", fName, classifySubject)
+			s.store.UpdateFileSubject(fileID, classifySubject)
+		}
+
+		// Content extraction
+		if extractedContent != "" {
+			s.store.UpdateFileContent(fileID, extractedContent, contentSummary)
+			log.Printf("[EXTRACT] Combined: %s → %s", fName, contentSummary)
+		} else {
+			content, summary := s.classifier.ExtractContent(fName, mime, fSize, data)
+			if content != "" {
+				s.store.UpdateFileContent(fileID, content, summary)
+				log.Printf("[EXTRACT] Async: %s → %s", fName, summary)
+			}
+		}
+	}(saved.ID, groupID, fileName, mimeType, fileSize, fileBytes, group)
 }
 
 // ── Waitlist ──
@@ -948,18 +942,35 @@ func (s *Server) handleCommitStaged(w http.ResponseWriter, r *http.Request) {
 			token, terr := s.drive.GetValidToken(driveUser.GoogleToken, driveUser.GoogleRefresh, 0)
 			if terr == nil {
 				s.store.UpdateUserGoogle(driveUser.ID, driveUser.Email, token, driveUser.GoogleRefresh, driveUser.DriveRootID)
+				// Upload all files concurrently
+				sem := make(chan struct{}, 10)
+				var uploadMu sync.Mutex
+				var wg sync.WaitGroup
 				for _, f := range staged {
-					folderID, ferr := s.drive.EnsureSubjectFolder(token, driveUser.DriveRootID, f.Subject)
-					if ferr != nil { continue }
-					fileData, _ := s.drive.GetLocalFileData(f.ID)
-					if len(fileData) == 0 { fileData, _ = s.drive.GetFileFromLocalStore(f.UserID, f.Subject, f.FileName) }
-					if len(fileData) == 0 { continue }
-					driveID, uerr := s.drive.UploadFileToDrive(token, folderID, f.FileName, f.MimeType, fileData)
-					if uerr == nil && driveID != "" {
-						s.store.UpdateFileDriveID(f.ID, driveID, folderID)
-						totalUploaded++
-					}
+					// Skip files still being classified
+					if f.Subject == "classifying..." { continue }
+					wg.Add(1)
+					go func(f model.File) {
+						defer wg.Done()
+						sem <- struct{}{}
+						defer func() { <-sem }()
+						folderID, ferr := s.drive.EnsureSubjectFolder(token, driveUser.DriveRootID, f.Subject)
+						if ferr != nil { return }
+						fileData, _ := s.drive.GetLocalFileData(f.ID)
+						if len(fileData) == 0 { fileData, _ = s.drive.GetFileFromLocalStore(f.UserID, f.Subject, f.FileName) }
+						if len(fileData) == 0 { return }
+						driveID, uerr := s.drive.UploadFileToDrive(token, folderID, f.FileName, f.MimeType, fileData)
+						if uerr == nil && driveID != "" {
+							s.store.UpdateFileDriveID(f.ID, driveID, folderID)
+							uploadMu.Lock()
+							totalUploaded++
+							uploadMu.Unlock()
+						} else if uerr != nil {
+							log.Printf("⚠️  Drive upload failed for %s: %v", f.FileName, uerr)
+						}
+					}(f)
 				}
+				wg.Wait()
 			}
 		}
 

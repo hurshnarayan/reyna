@@ -1034,6 +1034,12 @@ func scanFiles(rows *sql.Rows) ([]model.File, error) {
 	return files, nil
 }
 
+// UpdateFileSubject updates the subject/folder after async classification completes
+func (s *Store) UpdateFileSubject(fileID int64, subject string) error {
+	_, err := s.db.Exec(`UPDATE files SET subject=? WHERE id=?`, subject, fileID)
+	return err
+}
+
 // UpdateFileDriveID updates the drive file ID after uploading to Google Drive
 func (s *Store) UpdateFileDriveID(fileID int64, driveFileID, driveFolderID string) error {
 	_, err := s.db.Exec(

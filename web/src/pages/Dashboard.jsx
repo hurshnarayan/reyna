@@ -486,7 +486,13 @@ export default function Dashboard() {
                   <IconBox icon={icons.staging} color="var(--main-color)" bg="rgba(37,211,102,0.08)" size={30} iconSize={12} />
                   <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
                     <div title={f.file_name} style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-color)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>{shortenFilename(f.file_name)}</div>
-                    <div style={{ fontSize: 13, color: 'var(--sub-color)' }}>{f.subject || 'General'} · {formatBytes(f.file_size)}</div>
+                    <div style={{ fontSize: 13, color: 'var(--sub-color)' }}>
+                      {f.subject === 'classifying...' ? (
+                        <span style={{ color: '#d97706' }}><Fa icon={icons.loading} spin style={{ fontSize: 9, marginRight: 3 }} />classifying...</span>
+                      ) : (
+                        <span>{f.subject || 'General'}</span>
+                      )} · {formatBytes(f.file_size)}
+                    </div>
                   </div>
                   <div style={{ fontSize: 10, color: 'var(--main-color)', fontWeight: 500, flexShrink: 0 }}>{hoursUntilCommit(f.created_at)}</div>
                   <button onClick={() => removeFromStaging(f.id)} title="Remove from staging" style={{ ...btnBase, padding: '2px 6px', fontSize: 10 }}><Fa icon={icons.close} style={{ fontSize: 8 }} /></button>
