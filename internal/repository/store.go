@@ -900,6 +900,12 @@ func (s *Store) UpsertGroupSettings(gs *model.GroupSettings) error {
 	return err
 }
 
+func (s *Store) GroupSettingsExist(groupID int64) bool {
+	var count int
+	s.db.QueryRow(`SELECT COUNT(*) FROM group_settings WHERE group_id=?`, groupID).Scan(&count)
+	return count > 0
+}
+
 func (s *Store) IsGroupEnabled(waID string) bool {
 	var enabled int
 	err := s.db.QueryRow(

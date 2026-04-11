@@ -1478,12 +1478,15 @@ func (s *Server) handleBotSyncGroup(w http.ResponseWriter, r *http.Request) {
 		if req.MemberCount > 0 {
 			s.store.UpdateGroupMemberCount(group.ID, req.MemberCount)
 		}
-		// Auto-enable group settings (create if not exists, enable if disabled)
+		// Create group settings with defaults if they don't exist yet.
+		// Do NOT re-enable if the user explicitly disabled the group —
+		// that was overriding the dashboard toggle on every bot sync.
 		gs := s.store.GetGroupSettings(group.ID)
-		if !gs.Enabled {
+		if gs.GroupID == 0 || !s.store.GroupSettingsExist(group.ID) {
+			gs.GroupID = group.ID
 			gs.Enabled = true
 			s.store.UpsertGroupSettings(gs)
-			log.Printf("Auto-enabled group %d (%s) via bot sync", group.ID, req.Name)
+			log.Printf("Auto-enabled group %d (%s) via first sync", group.ID, req.Name)
 		}
 	}
 
