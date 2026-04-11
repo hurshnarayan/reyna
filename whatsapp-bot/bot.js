@@ -919,10 +919,20 @@ async function handleMessage(sock, msg) {
             }
           }
 
-          // React with checkmark instead of sending a message (minimal footprint)
-          try {
-            await sock.sendMessage(chat, { react: { text: '✅', key: msg.key } });
-          } catch {}
+          // React with checkmark — retry once after a short delay if it fails
+          // (WhatsApp throttles rapid-fire reactions when multiple files land at once)
+          for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+              await sock.sendMessage(chat, { react: { text: '✅', key: msg.key } });
+              break;
+            } catch (reactErr) {
+              if (attempt === 0) {
+                await new Promise(r => setTimeout(r, 1000 + Math.random() * 1000));
+              } else {
+                console.log(`  [REACT] failed for ${fileName}: ${reactErr.message}`);
+              }
+            }
+          }
           console.log(`  Auto-staged: ${fileName}`);
           return;
         }
