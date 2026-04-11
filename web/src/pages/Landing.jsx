@@ -37,7 +37,7 @@ const pipeStages = [
 const qaExamples = [
   { q: "Summarize Chapter 5", a: "Chapter 5 covers process scheduling algorithms: FCFS, SJF, Round Robin, and Priority Scheduling. Key concept: no single algorithm is optimal for all scenarios..." },
   { q: "What did the teacher say about integrals?", a: "From the uploaded lecture notes: Integration by parts is emphasized for the exam. The formula is uv - integral(v du). Practice problems focus on trigonometric substitution..." },
-  { q: "Explain photosynthesis from our bio notes", a: "From Biology_Unit3.pdf: Photosynthesis occurs in two stages — light reactions (thylakoid) and Calvin cycle (stroma). Key equation: 6CO2 + 6H2O -> C6H12O6 + 6O2..." },
+  { q: "Explain photosynthesis from our bio notes", a: "From Biology_Unit3.pdf: Photosynthesis occurs in two stages: light reactions (thylakoid) and Calvin cycle (stroma). Key equation: 6CO2 + 6H2O -> C6H12O6 + 6O2..." },
 ]
 
 export default function Landing() {
@@ -148,8 +148,8 @@ export default function Landing() {
       {/* Nav */}
       <nav style={{position:'sticky',top:0,zIndex:100,background:'rgba(255,255,255,0.85)',backdropFilter:'blur(20px)',borderBottom:'1px solid rgba(0,0,0,0.06)',padding:'0 32px'}}>
         <div style={{maxWidth:1100,margin:'0 auto',display:'flex',alignItems:'center',justifyContent:'space-between',height:56}}>
-          <a href="#" style={{fontWeight:900,fontSize:20,letterSpacing:-.5,display:'flex',alignItems:'center',gap:6}}>
-            <i className="fas fa-crown" style={{color:'#25D366',fontSize:16}}/> Reyna <span style={{fontSize:11,color:'#999',fontWeight:400}}>v2</span>
+          <a href="#" style={{fontWeight:800,fontSize:20,color:'#1a1a1a',letterSpacing:-0.5,display:'flex',alignItems:'center',gap:0,textDecoration:'none'}}>
+            <i className="fas fa-crown" style={{color:'#25D366',fontSize:20,marginRight:6,filter:'drop-shadow(0 0 6px rgba(37,211,102,0.4))'}}/>reyna<span style={{fontSize:10,color:'#999',fontWeight:400,marginLeft:3}}>v2</span>
           </a>
           <div style={{display:'flex',gap:24,alignItems:'center'}}>
             {[
@@ -179,7 +179,7 @@ export default function Landing() {
               <span style={{background:'linear-gradient(135deg, #25D366, #0F6E56)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>understood, organized, searchable.</span>
             </h1>
             <p style={{fontSize:18,lineHeight:1.8,color:'#555',maxWidth:640,margin:'0 auto 16px',animationDelay:'240ms'}}>
-              Reyna packs the entire study-file workflow into one place. <strong style={{color:'#1a1a1a'}}>Stop hunting through chat history. Stop re-uploading to Drive. Stop typing answers from notes you can't find.</strong> Reyna does all of it — capture, parse, dedupe, classify, file, retrieve, and answer — autonomously.
+              Reyna packs the entire study-file workflow into one place. <strong style={{color:'#1a1a1a'}}>Stop hunting through chat history. Stop re-uploading to Drive. Stop typing answers from notes you can't find.</strong> Reyna does all of it. Capture, parse, dedupe, classify, file, retrieve, and answer. Autonomously.
             </p>
             <p style={{fontSize:15,color:'#999',maxWidth:540,margin:'0 auto 40px',animationDelay:'360ms',letterSpacing:0.3}}>
               Zero commands. Zero training. Zero new apps to learn.
@@ -214,7 +214,7 @@ export default function Landing() {
         <div className="rl-s">
           <div style={{fontSize:12,fontWeight:700,color:'#25D366',letterSpacing:2.5,textTransform:'uppercase',marginBottom:16}}><i className="fas fa-exclamation-triangle" style={{marginRight:6}}/>The problem</div>
           <h2 style={{fontSize:'clamp(24px,3.5vw,36px)',fontWeight:800,lineHeight:1.2,marginBottom:24,letterSpacing:-1}}>Every group chat is a graveyard of lost files.</h2>
-          <p style={{fontSize:17,lineHeight:1.8,color:'#555',marginBottom:16}}>WhatsApp is where 2 billion people share files. Study notes, project docs, client deliverables — they all go into group chats. And then they <strong style={{color:'#ff4444'}}>disappear</strong>. Buried under messages, impossible to search, auto-deleted after 30 days.</p>
+          <p style={{fontSize:17,lineHeight:1.8,color:'#555',marginBottom:16}}>WhatsApp is where 2 billion people share files. Study notes, project docs, client deliverables. They all go into group chats. And then they <strong style={{color:'#ff4444'}}>disappear</strong>. Buried under messages, impossible to search, auto-deleted after 30 days.</p>
           <p style={{fontSize:17,lineHeight:1.8,color:'#555'}}>The same PDF gets shared five times because nobody can find it. <strong style={{color:'#ff4444'}}>Sound familiar?</strong></p>
         </div>
       </div>
@@ -225,18 +225,18 @@ export default function Landing() {
       <div id="deepdive" style={{background:'rgba(250,250,250,0.7)',backdropFilter:'blur(4px)'}}>
         <div ref={deepRef} className={`rl-s ${rv(deepVis)}`} style={{maxWidth:920}}>
           <div style={{fontSize:12,fontWeight:700,color:'#534AB7',letterSpacing:2.5,textTransform:'uppercase',marginBottom:16}}>
-            <i className="fas fa-cogs" style={{marginRight:6}}/>under the hood — what actually happens
+            <i className="fas fa-cogs" style={{marginRight:6}}/>under the hood: what actually happens
           </div>
           <h2 style={{fontSize:'clamp(24px,3.5vw,38px)',fontWeight:800,lineHeight:1.15,marginBottom:14,letterSpacing:-1}}>
             It's not "save the file and ping an LLM."<br/>
             <span style={{background:'linear-gradient(135deg,#7F77DD,#534AB7)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>It's a 7-stage pipeline.</span>
           </h2>
           <p style={{fontSize:17,lineHeight:1.8,color:'#555',marginBottom:14}}>
-            Every file that lands in Reyna goes through seven distinct processing stages before it hits your Drive. Six of them never touch an LLM at all. Here's the whole loop, step-by-step — explained for humans, not engineers.
+            Every file that lands in Reyna goes through seven distinct processing stages before it hits your Drive. Six of them never touch an LLM at all. Here's the whole loop, step-by-step. Explained for humans, not engineers.
           </p>
           <p style={{fontSize:14,lineHeight:1.7,color:'#888',marginBottom:36}}>
             <i className="fas fa-info-circle" style={{color:'#7F77DD',marginRight:6}}/>
-            Each stage is a real piece of code in the open-source repo — not a marketing diagram.
+            Each stage is a real piece of code in the open-source repo. Not a marketing diagram.
           </p>
 
           {/* The 7 stages, vertically stacked */}
@@ -248,7 +248,7 @@ export default function Landing() {
                 bg: '#EEEDFE',
                 icon: 'fa-fingerprint',
                 title: 'Cryptographic deduplication',
-                lay: 'If you (or anyone in your group) shares the exact same file twice, Reyna recognises it instantly — even if it has a different name — and refuses to create a duplicate.',
+                lay: 'If you (or anyone in your group) shares the exact same file twice, Reyna recognises it instantly, even if it has a different name, and refuses to create a duplicate.',
                 tech: ['SHA-256 hash of every byte', 'Partial UNIQUE index in SQLite', 'Per-group sync.Mutex (race-condition proof)', 'Same name + different bytes → auto v2 / v3 versioning'],
                 why: 'Stops Drive clutter at the source. Six identical "Module5.pdf" uploads in one minute? One row, one Drive file. Forever.',
               },
@@ -257,8 +257,8 @@ export default function Landing() {
                 color: '#7F77DD',
                 bg: '#EEEDFE',
                 icon: 'fa-file-zipper',
-                title: 'Document parsing — without the API',
-                lay: 'Office files (.docx, .pptx, .xlsx) are actually zip archives full of XML. Reyna unzips them, walks the inside, and pulls the real text out — entirely on its own server.',
+                title: 'Document parsing without the API',
+                lay: 'Office files (.docx, .pptx, .xlsx) are actually zip archives full of XML. Reyna unzips them, walks the inside, and pulls the real text out. Entirely on its own server.',
                 tech: ['archive/zip + encoding/xml from Go stdlib', 'Walks word/document.xml, ppt/slides/slide*.xml, xl/sharedStrings.xml', 'Strips XML markup with the streaming token decoder', 'Zero external libraries, zero API calls, zero cents'],
                 why: 'PDFs go to Gemini for vision-aware content reading. Office docs get parsed locally in milliseconds for free. Best of both worlds.',
               },
@@ -278,9 +278,9 @@ export default function Landing() {
                 bg: '#FAECE7',
                 icon: 'fa-magnifying-glass-chart',
                 title: 'Ranked information retrieval',
-                lay: 'Reyna scores every file in your library against your question — looking at filename, subject, tags, the document\'s extracted content, and its summary — then sorts the matches by how many of your keywords landed.',
+                lay: 'Reyna scores every file in your library against your question. It looks at filename, subject, tags, the document\'s extracted content, and its summary, then sorts the matches by how many of your keywords landed.',
                 tech: ['OR-tokenized SQL with hand-built CASE expression scoring', 'ORDER BY (sum of CASE WHEN ... THEN 1 ELSE 0 END) DESC', 'LEFT JOIN against the users table for sender resolution', 'Time window + sender filter applied as separate predicates'],
-                why: 'This is real information retrieval, not "send the question to an LLM and pray". The ranking happens in SQL — fast, deterministic, free.',
+                why: 'This is real information retrieval, not "send the question to an LLM and pray". The ranking happens in SQL. Fast, deterministic, free.',
               },
               {
                 num: '05',
@@ -289,7 +289,7 @@ export default function Landing() {
                 icon: 'fa-folder-tree',
                 title: 'Fuzzy folder normalization',
                 lay: "When Gemini suggests a folder name like \"C Programming Lab\" and you already have \"C Programming Laboratory\", Reyna recognises they're the same thing and snaps the new file into the existing folder. No duplicate folders, ever.",
-                tech: ['Token-based Jaccard similarity (intersection / union)', 'Strict subset detection — handles "Python Programming" ⊂ "Python Programming Modules"', 'Case-insensitive exact match short-circuit', 'Snap threshold ≥ 0.6 with explicit logging for audit'],
+                tech: ['Token-based Jaccard similarity (intersection / union)', 'Strict subset detection. Handles "Python Programming" ⊂ "Python Programming Modules"', 'Case-insensitive exact match short-circuit', 'Snap threshold ≥ 0.6 with explicit logging for audit'],
                 why: 'Without this, two PDFs about the same subject would scatter into 5 near-identical folders. With it, your Drive stays clean automatically.',
               },
               {
@@ -298,9 +298,9 @@ export default function Landing() {
                 bg: '#EEEDFE',
                 icon: 'fa-brain',
                 title: 'Multi-source LLM call',
-                lay: 'Only NOW does Gemini get involved. And it doesn\'t just see the file — it sees the file content, the filename, who sent it, when, in which group, plus the list of folders that already exist. Real context, real decision.',
+                lay: 'Only NOW does Gemini get involved. And it doesn\'t just see the file. It sees the file content, the filename, who sent it, when, in which group, plus the list of folders that already exist. Real context, real decision.',
                 tech: ['Gemini 2.5 Flash with inline document blocks (PDFs)', 'Pre-extracted text payload for office docs', 'Sender + timestamp + group + existing-folders metadata in prompt', 'Strict JSON response mode with thinking-budget=0 for speed'],
-                why: 'A naive system would ask "what subject is this PDF?" and get a generic answer. Reyna asks "given that Mohit usually shares Python files in the BPLC105B group, and the existing folders are X/Y/Z, where should this go?" — and gets a precise one.',
+                why: 'A naive system would ask "what subject is this PDF?" and get a generic answer. Reyna asks "given that Mohit usually shares Python files in the BPLC105B group, and the existing folders are X/Y/Z, where should this go?" and gets a precise one.',
               },
               {
                 num: '07',
@@ -308,7 +308,7 @@ export default function Landing() {
                 bg: '#E1F5EE',
                 icon: 'fa-cloud-arrow-up',
                 title: 'Drive sync + auto-public links',
-                lay: "Once classified, the file is uploaded to your Google Drive in the right folder, and Reyna automatically makes it shareable by link — so when she drops a link in WhatsApp, it just works. No \"request access\" popups.",
+                lay: "Once classified, the file is uploaded to your Google Drive in the right folder, and Reyna automatically makes it shareable by link so when she drops a link in WhatsApp, it just works. No \"request access\" popups.",
                 tech: ['Google Drive API v3 with OAuth 2.0', 'Multipart upload with name + parents metadata', 'Idempotent permissions.create with role=reader, type=anyone', 'Eventual-consistency-aware folder lookup (DB-first, Drive-second)'],
                 why: 'Most "save to Drive" tools leave you fighting Drive\'s sharing settings. Reyna handles it once, automatically, on every upload.',
               },
@@ -385,7 +385,7 @@ export default function Landing() {
               Out of 7 stages in the pipeline, only ONE involves an LLM call.
             </div>
             <div style={{fontSize:14,lineHeight:1.7,opacity:0.95}}>
-              The other six are hand-built systems: cryptographic hashing, zip-archive parsing, stopword tokenization, ranked SQL retrieval, fuzzy folder matching, and Drive API permission management. The LLM is one tool in a real engineering stack — not the entire product.
+              The other six are hand-built systems: cryptographic hashing, zip-archive parsing, stopword tokenization, ranked SQL retrieval, fuzzy folder matching, and Drive API permission management. The LLM is one tool in a real engineering stack. Not the entire product.
             </div>
           </div>
 
@@ -396,7 +396,7 @@ export default function Landing() {
             </div>
             <h3 style={{fontSize:20,fontWeight:800,marginBottom:10,letterSpacing:-0.3}}>Your dashboard speaks SQL, not vibes.</h3>
             <p style={{fontSize:14,lineHeight:1.7,color:'#555',marginBottom:16}}>
-              Every stat on the Reyna dashboard comes from a real aggregation query. Subject distribution, top contributors, storage breakdown, group activity — all calculated in SQL on every page load.
+              Every stat on the Reyna dashboard comes from a real aggregation query. Subject distribution, top contributors, storage breakdown, group activity. All calculated in SQL on every page load.
             </p>
             <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10}}>
               {[
@@ -438,7 +438,7 @@ export default function Landing() {
         <div ref={nlpRef} className={`rl-s ${rv(nlpVis)}`}>
           <div style={{fontSize:12,fontWeight:700,color:'#D85A30',letterSpacing:2.5,textTransform:'uppercase',marginBottom:16}}><i className="fas fa-comments" style={{marginRight:6}}/>Killer feature #1</div>
           <h2 style={{fontSize:'clamp(24px,3.5vw,36px)',fontWeight:800,lineHeight:1.2,marginBottom:12,letterSpacing:-1}}>Ask for files like you'd ask a friend.</h2>
-          <p style={{fontSize:17,lineHeight:1.8,color:'#555',marginBottom:36}}>Not keyword search. Reyna's NLP engine resolves <strong>who</strong> shared it, <strong>what</strong> it's about, <strong>when</strong> it was shared, and <strong>why</strong> you're asking — from a single natural sentence.</p>
+          <p style={{fontSize:17,lineHeight:1.8,color:'#555',marginBottom:36}}>Not keyword search. Reyna's NLP engine resolves <strong>who</strong> shared it, <strong>what</strong> it's about, <strong>when</strong> it was shared, and <strong>why</strong> you're asking. From a single natural sentence.</p>
 
           <div style={{textAlign:'center',marginBottom:24}}>
             <div style={{display:'inline-block',fontSize:17,fontWeight:500,padding:'14px 28px',borderRadius:28,background:'#fff',border:'1px solid #ddd',boxShadow:'0 2px 12px rgba(0,0,0,0.04)'}}>
@@ -467,11 +467,11 @@ export default function Landing() {
           <div style={{background:'#fff',border:'1px solid #e0ddd5',borderRadius:12,padding:'16px 24px',maxWidth:560,margin:'0 auto 36px',fontSize:14,color:'#555',lineHeight:1.8,boxShadow:'0 2px 12px rgba(0,0,0,0.03)'}}>
             <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}><i className="fas fa-crown" style={{color:'#25D366',fontSize:12}}/><strong style={{color:'#1a1a1a'}}>Reyna responds:</strong></div>
             Found <strong>2 files</strong> from <strong>Rahul</strong> matching <strong>"drones"</strong> in the last 7 days:<br/>
-            <code style={{fontFamily:'JetBrains Mono,monospace',fontSize:12,background:'#f5f5f5',padding:'2px 6px',borderRadius:4}}>Drone_Regulation_India_2024.pdf</code> — Robotics folder<br/>
-            <code style={{fontFamily:'JetBrains Mono,monospace',fontSize:12,background:'#f5f5f5',padding:'2px 6px',borderRadius:4}}>UAV_Project_Proposal_v2.docx</code> — Projects folder
+            <code style={{fontFamily:'JetBrains Mono,monospace',fontSize:12,background:'#f5f5f5',padding:'2px 6px',borderRadius:4}}>Drone_Regulation_India_2024.pdf</code> · Robotics folder<br/>
+            <code style={{fontFamily:'JetBrains Mono,monospace',fontSize:12,background:'#f5f5f5',padding:'2px 6px',borderRadius:4}}>UAV_Project_Proposal_v2.docx</code> · Projects folder
           </div>
 
-          <div style={{fontSize:11,fontWeight:700,color:'#888',letterSpacing:2,textTransform:'uppercase',textAlign:'center',marginBottom:16}}>More examples — every query is a conversation</div>
+          <div style={{fontSize:11,fontWeight:700,color:'#888',letterSpacing:2,textTransform:'uppercase',textAlign:'center',marginBottom:16}}>More examples</div>
           <div style={{maxWidth:600,margin:'0 auto'}}>
             {nlpExamples.map((ex,i)=>(
               <div key={i} className={nlpVis?'rl-dim':''} style={{display:'flex',alignItems:'center',gap:14,marginBottom:8,padding:'10px 16px',background:'#fff',borderRadius:10,border:'1px solid #eee',animationDelay:`${800+i*120}ms`}}>
@@ -489,9 +489,9 @@ export default function Landing() {
       {/* ═══ S4: CLASSIFICATION PIPELINE ═══ */}
       <div id="features">
         <div ref={pipeRef} className={`rl-s ${rv(pipeVis)}`}>
-          <div style={{fontSize:12,fontWeight:700,color:'#534AB7',letterSpacing:2.5,textTransform:'uppercase',marginBottom:16}}><i className="fas fa-brain" style={{marginRight:6}}/>Killer feature #2 — Autonomous pipeline</div>
+          <div style={{fontSize:12,fontWeight:700,color:'#534AB7',letterSpacing:2.5,textTransform:'uppercase',marginBottom:16}}><i className="fas fa-brain" style={{marginRight:6}}/>Killer feature #2: Autonomous pipeline</div>
           <h2 style={{fontSize:'clamp(24px,3.5vw,36px)',fontWeight:800,lineHeight:1.2,marginBottom:12,letterSpacing:-1}}>Drop a file. Five agents handle everything.</h2>
-          <p style={{fontSize:17,lineHeight:1.8,color:'#555',marginBottom:36}}>No commands. No folder selection. Reyna reads the file, understands what it's about, finds the best folder in your Drive, and syncs it — autonomously.</p>
+          <p style={{fontSize:17,lineHeight:1.8,color:'#555',marginBottom:36}}>No commands. No folder selection. Reyna reads the file, understands what it's about, finds the best folder in your Drive, and syncs it. Autonomously.</p>
 
           <div className="rl-prow" style={{display:'flex',gap:0,marginBottom:32}}>
             {pipeStages.map((s,i)=>(
@@ -512,8 +512,8 @@ export default function Landing() {
               <i className="fas fa-file-pdf" style={{color:'#dc2626'}}/> Module3_Compiler_Design_Unit2.pdf
             </div>
             {[
-              {icon:'fa-download',c:'#534AB7',bg:'#EEEDFE',t:'File shared in "CSE 2026 — Section B". <strong>Auto-track on</strong> — captured.'},
-              {icon:'fa-file-alt',c:'#534AB7',bg:'#EEEDFE',t:'<strong>Content extracted</strong>: 42 pages — <strong>syntax analysis, parsing tables, LL(1) grammars</strong>.'},
+              {icon:'fa-download',c:'#534AB7',bg:'#EEEDFE',t:'File shared in "CSE 2026 Section B". <strong>Auto-track on</strong>. Captured.'},
+              {icon:'fa-file-alt',c:'#534AB7',bg:'#EEEDFE',t:'<strong>Content extracted</strong>: 42 pages about <strong>syntax analysis, parsing tables, LL(1) grammars</strong>.'},
               {icon:'fa-brain',c:'#534AB7',bg:'#EEEDFE',t:'Claude receives extracted content + filename + user\'s existing folders:'},
             ].map((step,i)=>(
               <div key={i} style={{display:'flex',alignItems:'flex-start',gap:10,marginBottom:8}}>
@@ -588,10 +588,10 @@ export default function Landing() {
 
       {/* ═══ S6: NOTES Q&A (replaces Insights) ═══ */}
       <div ref={qaRef} className={`rl-s ${rv(qaVis)}`}>
-        <div style={{fontSize:12,fontWeight:700,color:'#7F77DD',letterSpacing:2.5,textTransform:'uppercase',marginBottom:16}}><i className="fas fa-graduation-cap" style={{marginRight:6}}/>Killer feature #3 — Notes Q&A</div>
+        <div style={{fontSize:12,fontWeight:700,color:'#7F77DD',letterSpacing:2.5,textTransform:'uppercase',marginBottom:16}}><i className="fas fa-graduation-cap" style={{marginRight:6}}/>Killer feature #3: Notes Q&A</div>
         <h2 style={{fontSize:'clamp(24px,3.5vw,36px)',fontWeight:800,lineHeight:1.2,marginBottom:12,letterSpacing:-1}}>Ask anything from your notes.</h2>
         <p style={{fontSize:17,lineHeight:1.8,color:'#555',marginBottom:36}}>
-          Ask Reyna about shared notes directly in WhatsApp. She fetches the relevant files from Drive, sends the content to Claude, and replies with a clear answer — instantly. No need to open any other app or copy files elsewhere.
+          Ask Reyna about shared notes directly in WhatsApp. She fetches the relevant files from Drive, sends the content to Claude, and replies with a clear answer. Instantly. No need to open any other app or copy files elsewhere.
         </p>
 
         {/* Chat-style Q&A demo */}
@@ -619,7 +619,7 @@ export default function Landing() {
             <i className="fas fa-magic" style={{marginRight:6}}/>Powered by content extraction
           </div>
           <div style={{fontSize:12,color:'#888',lineHeight:1.6}}>
-            Reyna reads every page of every PDF and DOCX shared in your group. When you ask a question, it searches through all extracted content — not just filenames.
+            Reyna reads every page of every PDF and DOCX shared in your group. When you ask a question, it searches through all extracted content, not just filenames.
           </div>
         </div>
       </div>
@@ -631,12 +631,12 @@ export default function Landing() {
         <div ref={techRef} className={`rl-s ${rv(techVis)}`} style={{maxWidth:900}}>
           <div style={{fontSize:12,fontWeight:700,color:'#25D366',letterSpacing:2.5,textTransform:'uppercase',marginBottom:16}}><i className="fas fa-microchip" style={{marginRight:6}}/>Under the hood</div>
           <h2 style={{fontSize:'clamp(24px,3.5vw,36px)',fontWeight:800,lineHeight:1.2,marginBottom:12,letterSpacing:-1,color:'#fff'}}>Built for real-world scale.</h2>
-          <p style={{fontSize:17,lineHeight:1.8,color:'#888',marginBottom:36}}>Not a wrapper around ChatGPT. A purpose-built agentic pipeline with hand-rolled retrieval, parsing, and dedup — backed by a swappable LLM provider.</p>
+          <p style={{fontSize:17,lineHeight:1.8,color:'#888',marginBottom:36}}>Not a wrapper around ChatGPT. A purpose-built agentic pipeline with hand-rolled retrieval, parsing, and dedup. Backed by a swappable LLM provider.</p>
           <div className="rl-techg" style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:14}}>
             {[
               {icon:'fa-brands fa-whatsapp',t:'WhatsApp / Baileys',d:'Real-time message capture, file download, reaction tracking, wake-word session continuation.',c:'#25D366'},
-              {icon:'fa-server',t:'Go backend',d:'Single binary. SQLite + stdlib HTTP. Hash dedup, ranked SQL retrieval, zip-archive parsing — zero ORMs, zero deps.',c:'#0ea5e9'},
-              {icon:'fa-brain',t:'Gemini 2.5 Flash',d:'Inline document blocks for PDFs. Provider-agnostic interface — Claude, Grok, or OpenAI swappable via env var.',c:'#7F77DD'},
+              {icon:'fa-server',t:'Go backend',d:'Single binary. SQLite + stdlib HTTP. Hash dedup, ranked SQL retrieval, zip-archive parsing. Zero ORMs, zero deps.',c:'#0ea5e9'},
+              {icon:'fa-brain',t:'Gemini 2.5 Flash',d:'Inline document blocks for PDFs. Provider-agnostic interface. Claude, Grok, or OpenAI swappable via env var.',c:'#7F77DD'},
               {icon:'fa-brands fa-google-drive',t:'Google Drive API',d:'OAuth 2.0. Folder CRUD. Auto-public link permissions. Eventual-consistency-aware classification.',c:'#FBBC04'},
               {icon:'fa-brands fa-react',t:'React + Vite',d:'1.2k LOC, no component library. Conversational chat threads, markdown rendering, auto-grow textareas.',c:'#61DAFB'},
               {icon:'fa-database',t:'SQLite',d:'Files, hashes, group settings, extracted content, sessions. Partial UNIQUE indexes for dedup. Zero migration hell.',c:'#003B57'},
@@ -658,10 +658,10 @@ export default function Landing() {
             <i className="fas fa-shield-halved" style={{marginRight:6}}/>privacy & data handling
           </div>
           <p style={{fontSize:13,lineHeight:1.8,color:'#666',marginBottom:8}}>
-            Reyna processes your study materials to classify, search, and answer questions. File content is sent to Google Gemini for AI analysis and stored in <strong style={{color:'#1a1a1a'}}>your own Google Drive</strong> — not ours. Extracted summaries are cached locally for search and purged when you delete. We don't sell, share, or train on your data.
+            Reyna processes your study materials to classify, search, and answer questions. File content is sent to Google Gemini for AI analysis and stored in <strong style={{color:'#1a1a1a'}}>your own Google Drive</strong>, not ours. Extracted summaries are cached locally for search and purged when you delete. We don't sell, share, or train on your data.
           </p>
           <p style={{fontSize:12,lineHeight:1.7,color:'#999'}}>
-            For sensitive documents (financial, medical, personal), don't add them to Reyna-enabled groups. This is the same transparency model used by ChatGPT, Notion AI, and Grammarly — the utility requires processing your content, and we're upfront about it.
+            For sensitive documents (financial, medical, personal), don't add them to Reyna-enabled groups. This is the same transparency model used by ChatGPT, Notion AI, and Grammarly. The utility requires processing your content, and we're upfront about it.
           </p>
         </div>
       </div>
@@ -689,9 +689,9 @@ export default function Landing() {
       {/* Footer */}
       <footer style={{borderTop:'1px solid #222',background:'#111',padding:'24px 32px',textAlign:'center'}}>
         <p style={{fontSize:13,color:'#999',marginBottom:6}}>
-          <span style={{fontWeight:800,color:'#fff',letterSpacing:1}}><i className="fas fa-crown" style={{color:'#25D366',fontSize:11,marginRight:4}}/>REYNA</span>
+          <span style={{fontWeight:800,color:'#fff',letterSpacing:-0.5,fontSize:16,display:'inline-flex',alignItems:'center',gap:0}}><i className="fas fa-crown" style={{color:'#25D366',fontSize:16,marginRight:6,filter:'drop-shadow(0 0 6px rgba(37,211,102,0.4))'}}/> reyna <span style={{fontSize:10,color:'#666',fontWeight:400,marginLeft:3}}>v2</span></span>
           <span style={{margin:'0 12px',color:'#333'}}>|</span>
-          <a href="#" style={{color:'#666'}}><i className="fab fa-github" style={{marginRight:4}}/>GitHub</a> · <a href="#" style={{color:'#666'}}><i className="fab fa-twitter" style={{marginRight:4}}/>Twitter</a>
+          <a href="https://github.com/hurshnarayan/reyna" target="_blank" rel="noopener noreferrer" style={{color:'#666'}}><i className="fab fa-github" style={{marginRight:4}}/>GitHub</a>
         </p>
         <p style={{fontSize:12,color:'#555'}}>Built for people who are tired of losing files in group chats.</p>
       </footer>

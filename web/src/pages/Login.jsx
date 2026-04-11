@@ -27,12 +27,12 @@ export default function Login() {
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-color)' }}>
       <div style={{ maxWidth: 380, width: '100%', padding: 32 }}>
         <div style={{ textAlign: 'center', marginBottom: 40 }}>
-          <h1 style={{ fontSize: 34, fontWeight: 900, letterSpacing: -0.5, marginBottom: 6, color: 'var(--text-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-            <Fa icon={icons.crown} style={{ fontSize: 18 }} />
+          <h1 style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, marginBottom: 8, color: 'var(--text-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0 }}>
+            <Fa icon="fa-crown" style={{ fontSize: 20, color: 'var(--reyna-accent)', marginRight: 6, filter: 'drop-shadow(0 0 6px rgba(37,211,102,0.4))' }} />
             reyna
-            <span style={{ fontSize: 10, color: 'var(--sub-color)', fontWeight: 400 }}>v0.1</span>
+            <span style={{ fontSize: 10, color: 'var(--sub-color)', fontWeight: 400, marginLeft: 3 }}>v2</span>
           </h1>
-          <p style={{ fontSize: 15, color: 'var(--sub-color)' }}>git for your WhatsApp group.</p>
+          <p style={{ fontSize: 14, color: 'var(--sub-color)' }}>your group chat's knowledge base</p>
         </div>
 
         <div style={{ background: '#fff', border: '1px solid #ddd', borderRadius: '12px', padding: 32, boxShadow: '0 8px 30px rgba(0,0,0,0.08), 0 2px 8px rgba(0,0,0,0.04)' }}>
@@ -76,9 +76,6 @@ export default function Login() {
           </div>
         </div>
 
-        <p style={{ textAlign: 'center', fontSize: 10, color: 'var(--sub-color)', marginTop: 20 }}>
-          demo: use +919876543210 to login with seeded data
-        </p>
       </div>
     </div>
   )
