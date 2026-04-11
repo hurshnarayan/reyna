@@ -219,11 +219,22 @@ export default function Dashboard() {
     const resp = await api.googleConnect()
     if (resp?.url) {
       const popup = window.open(resp.url, 'google_auth', 'width=500,height=600,left=200,top=100')
+      // Fast popup-close detection (every 500ms) separate from the
+      // slower auth-status poll (every 2s) so the UI resets instantly
+      // when the user closes the dialog.
+      const closedCheck = setInterval(() => {
+        if (popup && popup.closed) {
+          clearInterval(closedCheck)
+          clearInterval(pollInterval)
+          setConnecting(false)
+        }
+      }, 500)
       const pollInterval = setInterval(async () => {
         try {
           const status = await api.googleStatus()
           if (status?.connected) {
             clearInterval(pollInterval)
+            clearInterval(closedCheck)
             setConnecting(false)
             setDriveStatus(status)
             refreshGroups(); refreshStaged()
@@ -232,7 +243,8 @@ export default function Dashboard() {
           }
         } catch {}
       }, 2000)
-      setTimeout(() => { clearInterval(pollInterval); setConnecting(false) }, 120000)
+      // Fallback timeout in case everything else fails
+      setTimeout(() => { clearInterval(pollInterval); clearInterval(closedCheck); setConnecting(false) }, 120000)
     } else setConnecting(false)
   }
   const disconnectDrive = async () => {
