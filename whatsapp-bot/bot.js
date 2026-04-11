@@ -270,14 +270,17 @@ async function refreshEnabledGroups() {
   }
 }
 
+// Returns { mode, enabled } — the bot must check BOTH.
+// mode='auto'|'reaction', enabled=true|false.
+// On network failure, defaults to DISABLED (safe side — don't track if unsure).
 async function getGroupMode(groupJid) {
-  // Always fetch fresh — dashboard mode changes must take effect immediately
   try {
     const res = await fetch(`${BACKEND_URL}/api/bot/group-mode?wa_id=${encodeURIComponent(groupJid)}`);
     const data = await res.json();
-    return data.mode || 'auto';
-  } catch {
-    return 'auto';
+    return { mode: data.mode || 'auto', enabled: data.enabled === true };
+  } catch (err) {
+    console.log(`  [MODE] failed to fetch for ${groupJid}: ${err.message} — defaulting to disabled`);
+    return { mode: 'auto', enabled: false };
   }
 }
 
@@ -449,45 +452,46 @@ function isReynaMessage(text) {
 const syncedGroups = new Set();
 
 async function ensureGroupSynced(sock, groupJid) {
-  // Always try to fetch the real name even if already in syncedGroups.
-  // Baileys sometimes returns empty metadata on first connect, so the
-  // group gets registered as "WhatsApp Group". We re-check every time
-  // until we get a real name, then stop re-checking.
-  const alreadySynced = syncedGroups.has(groupJid);
-
-  let groupName = 'WhatsApp Group';
+  let groupName = null;
   let memberCount = 0;
 
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const metadata = await sock.groupMetadata(groupJid);
-      if (metadata?.subject && metadata.subject !== '') {
-        groupName = metadata.subject;
-        memberCount = (metadata.participants || []).length;
-        break;
-      }
-    } catch (err) {
-      if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
+  // Single attempt — no retries. Retries cause extra groupMetadata calls
+  // which trigger 440 disconnects.
+  try {
+    const metadata = await sock.groupMetadata(groupJid);
+    if (metadata?.subject && metadata.subject !== '') {
+      groupName = metadata.subject;
+      memberCount = (metadata.participants || []).length;
     }
-  }
+  } catch {}
 
-  // If we already synced with a real name and nothing changed, skip the API call
-  if (alreadySynced && groupName === 'WhatsApp Group') return;
+  // NEVER send "WhatsApp Group" to the backend — it overwrites real names.
+  // If we couldn't get the name, just register the group JID without a name
+  // update and let refreshGroupNames handle it later.
+  if (!groupName) {
+    if (!syncedGroups.has(groupJid)) {
+      // First time seeing this group — register it with a placeholder
+      // but the backend will only store it if it doesn't already exist
+      try {
+        await fetch(`${BACKEND_URL}/api/bot/sync-group`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ wa_id: groupJid, name: '', member_count: 0 }),
+        });
+        syncedGroups.add(groupJid);
+      } catch {}
+    }
+    return;
+  }
 
   try {
     await fetch(`${BACKEND_URL}/api/bot/sync-group`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        wa_id: groupJid,
-        name: groupName,
-        member_count: memberCount,
-      }),
+      body: JSON.stringify({ wa_id: groupJid, name: groupName, member_count: memberCount }),
     });
     syncedGroups.add(groupJid);
-    if (groupName !== 'WhatsApp Group') {
-      console.log(`  Synced group: ${groupName} (${groupJid})`);
-    }
+    console.log(`  Synced group: ${groupName} (${groupJid})`);
   } catch (err) {
     console.error(`  Group sync failed for ${groupJid}: ${err.message}`);
   }
@@ -495,28 +499,27 @@ async function ensureGroupSynced(sock, groupJid) {
 
 // Refresh group names from WhatsApp metadata for all known groups
 async function refreshGroupNames(sock) {
-  for (const groupJid of syncedGroups) {
+  const groups = [...syncedGroups];
+  for (let i = 0; i < groups.length; i++) {
+    const groupJid = groups[i];
     try {
       const metadata = await sock.groupMetadata(groupJid);
       const name = metadata?.subject;
-      console.log(`  [GROUP-NAME] ${groupJid} → "${name}"`);
-      if (name && name !== 'WhatsApp Group') {
+      if (name && name !== 'WhatsApp Group' && name !== '') {
+        console.log(`  [GROUP-NAME] ${groupJid} → "${name}"`);
         await fetch(`${BACKEND_URL}/api/bot/sync-group`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            wa_id: groupJid,
-            name,
-            member_count: (metadata?.participants || []).length,
-          }),
+          body: JSON.stringify({ wa_id: groupJid, name, member_count: (metadata?.participants || []).length }),
         });
-        console.log(`  [GROUP-NAME] Updated: ${groupJid} → "${name}"`);
       }
     } catch (err) {
       console.log(`  [GROUP-NAME] Failed for ${groupJid}: ${err.message}`);
     }
+    // Delay between groups to avoid 440 disconnects
+    if (i < groups.length - 1) await new Promise(r => setTimeout(r, 2000));
   }
-  console.log(`  Refreshed names for ${syncedGroups.size} groups.`);
+  console.log(`  Refreshed names for ${groups.length} groups.`);
 }
 
 async function preloadSyncedGroups() {
@@ -868,10 +871,21 @@ async function handleMessage(sock, msg) {
       console.error(`  [INIT] failed to send init message: ${sendErr.message}`);
     }
 
-    // Now do the heavy backend sync in the background — if the connection
-    // drops (440) during this, the user already has the confirmation message.
+    // Sync the group name + explicitly enable it in the backend.
+    // ensureGroupSynced registers the group, then we call the command
+    // endpoint with "/reyna enable" to force-enable the group settings.
     syncedGroups.delete(chat);
-    ensureGroupSynced(sock, chat).catch(() => {});
+    await ensureGroupSynced(sock, chat);
+    try {
+      await fetch(`${BACKEND_URL}/api/bot/command`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          group_wa_id: chat, command: '/reyna enable',
+          user_phone: senderPhone, user_name: pushName,
+        }),
+      });
+    } catch {}
     refreshEnabledGroups().catch(() => {});
     return;
   }
@@ -889,6 +903,7 @@ async function handleMessage(sock, msg) {
         }),
       });
       syncedGroups.delete(chat);
+      enabledGroups.delete(chat);
       await sock.sendMessage(chat, {
         text: '*Reyna:* Tracking disabled for this group. Files will no longer be captured.\n\nTo re-enable, send /reyna init.',
       });
@@ -910,7 +925,14 @@ async function handleMessage(sock, msg) {
     ensureGroupSynced(sock, chat).catch(() => {});
   }
 
-  const mode = await getGroupMode(chat);
+  const { mode, enabled } = await getGroupMode(chat);
+  console.log(`  [MODE] ${chat.slice(0,12)}... enabled=${enabled} mode=${mode}`);
+
+  // If the group is disabled (toggle off in dashboard or /reyna stop), skip everything
+  if (!enabled) {
+    console.log(`  [SKIP] group disabled, ignoring message`);
+    return;
+  }
 
   // ── Track document shares ──
   if (messageType === 'documentMessage' || messageType === 'documentWithCaptionMessage') {
@@ -1200,7 +1222,9 @@ async function startBot() {
       // Refresh every 5 minutes
       setInterval(refreshEnabledGroups, 5 * 60 * 1000);
       // Refresh group names every 30 minutes
-      setInterval(() => refreshGroupNames(sock), 5 * 60 * 1000);
+      // Don't refresh names on an interval — it causes too many groupMetadata
+      // calls which trigger 440 disconnects. Names are synced on-demand when
+      // messages arrive (throttled to once per 10 min per group).
     }
     if (connection === 'close') {
       const code = lastDisconnect?.error?.output?.statusCode;

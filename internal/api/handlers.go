@@ -507,6 +507,18 @@ func (s *Server) handleBotCommand(w http.ResponseWriter, r *http.Request) {
 	case "help":
 		resp.Reply = s.reyna.HelpResponse()
 
+	case "enable":
+		if groupID > 0 {
+			gs := s.store.GetGroupSettings(groupID)
+			gs.GroupID = groupID
+			gs.Enabled = true
+			s.store.UpsertGroupSettings(gs)
+			log.Printf("[BOT] Enabled tracking for group %d via /reyna init", groupID)
+			resp.Reply = "Tracking enabled."
+		} else {
+			resp.Reply = "Group not found."
+		}
+
 	case "disable":
 		if groupID > 0 {
 			gs := s.store.GetGroupSettings(groupID)
@@ -1359,10 +1371,15 @@ func (s *Server) handleGroupSettings(w http.ResponseWriter, r *http.Request) {
 		var result []map[string]interface{}
 		for _, g := range groups {
 			gs := s.store.GetGroupSettings(g.ID)
-			result = append(result, map[string]interface{}{
-				"group":    g,
-				"settings": gs,
-			})
+			// Only show groups that have settings and are enabled (or were
+			// never explicitly disabled). "Removed" groups stay in the DB
+			// for history but don't appear in the active groups panel.
+			if !s.store.GroupSettingsExist(g.ID) || gs.Enabled {
+				result = append(result, map[string]interface{}{
+					"group":    g,
+					"settings": gs,
+				})
+			}
 		}
 		if result == nil {
 			result = []map[string]interface{}{}
@@ -1459,7 +1476,8 @@ func (s *Server) handleBotSyncGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 	if req.WAID == "" { http.Error(w, `{"error":"wa_id required"}`, 400); return }
-	if req.Name == "" { req.Name = "WhatsApp Group" }
+	// Don't default to "WhatsApp Group" — if the bot couldn't get the name,
+	// keep whatever name the DB already has. Only update if we got a real one.
 
 	// Try to get existing group first, create if not exists
 	group, err := s.store.GetGroupByWAID(req.WAID)
@@ -1470,8 +1488,8 @@ func (s *Server) handleBotSyncGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if group != nil {
-		// Always update name if we have a real one
-		if req.Name != "" && req.Name != "WhatsApp Group" {
+		// Only update name if we got a real one — never overwrite with empty or placeholder
+		if req.Name != "" && req.Name != "WhatsApp Group" && req.Name != group.Name {
 			s.store.UpdateGroupName(group.ID, req.Name)
 			log.Printf("[SYNC-GROUP] Updated group %d name: %q → %q", group.ID, group.Name, req.Name)
 		}

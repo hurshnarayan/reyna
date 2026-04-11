@@ -217,7 +217,9 @@ func (s *Store) UpdateUserGoogleExpiry(userID int64, expiresAt int64) error {
 func (s *Store) UpsertGroup(waID, name string, createdBy int64) (*model.Group, error) {
 	_, err := s.db.Exec(
 		`INSERT INTO groups_ (wa_id, name, created_by, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-		 ON CONFLICT(wa_id) DO UPDATE SET name=excluded.name, updated_at=CURRENT_TIMESTAMP`,
+		 ON CONFLICT(wa_id) DO UPDATE SET
+		   name=CASE WHEN excluded.name != '' AND excluded.name != 'WhatsApp Group' THEN excluded.name ELSE groups_.name END,
+		   updated_at=CURRENT_TIMESTAMP`,
 		waID, name, createdBy,
 	)
 	if err != nil {
@@ -241,9 +243,16 @@ func (s *Store) UpdateGroupMemberCount(groupID int64, count int) error {
 }
 
 func (s *Store) InsertGroupRaw(waID, name string, memberCount int) error {
+	// Only update the name if we actually have one — never overwrite a real name with empty
+	if name == "" || name == "WhatsApp Group" {
+		name = "WhatsApp Group"
+	}
 	_, err := s.db.Exec(
 		`INSERT INTO groups_ (wa_id, name, member_count, created_by, updated_at) VALUES (?, ?, ?, NULL, CURRENT_TIMESTAMP)
-		 ON CONFLICT(wa_id) DO UPDATE SET name=excluded.name, member_count=excluded.member_count, updated_at=CURRENT_TIMESTAMP`,
+		 ON CONFLICT(wa_id) DO UPDATE SET
+		   name=CASE WHEN excluded.name != '' AND excluded.name != 'WhatsApp Group' THEN excluded.name ELSE groups_.name END,
+		   member_count=CASE WHEN excluded.member_count > 0 THEN excluded.member_count ELSE groups_.member_count END,
+		   updated_at=CURRENT_TIMESTAMP`,
 		waID, name, memberCount,
 	)
 	return err
