@@ -30,7 +30,7 @@ func (r *Reyna) ProcessCommand(cmd string) (action string, args string) {
 			args = strings.Trim(args, "\"'")
 		}
 		switch action {
-		case "add", "find", "log", "status", "help", "commit", "rm", "staged", "tracking", "push", "save", "search":
+		case "add", "find", "log", "status", "help", "commit", "rm", "staged", "tracking", "push", "save", "search", "disable", "stop":
 			// Normalize aliases
 			if action == "push" {
 				action = "commit"
@@ -40,6 +40,9 @@ func (r *Reyna) ProcessCommand(cmd string) (action string, args string) {
 			}
 			if action == "search" {
 				action = "find"
+			}
+			if action == "stop" {
+				action = "disable"
 			}
 			return action, args
 		default:

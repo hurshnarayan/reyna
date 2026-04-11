@@ -507,6 +507,18 @@ func (s *Server) handleBotCommand(w http.ResponseWriter, r *http.Request) {
 	case "help":
 		resp.Reply = s.reyna.HelpResponse()
 
+	case "disable":
+		if groupID > 0 {
+			gs := s.store.GetGroupSettings(groupID)
+			gs.GroupID = groupID
+			gs.Enabled = false
+			s.store.UpsertGroupSettings(gs)
+			log.Printf("[BOT] Disabled tracking for group %d via /reyna stop", groupID)
+			resp.Reply = "Tracking disabled."
+		} else {
+			resp.Reply = "Group not found."
+		}
+
 	case "tracking":
 		// Handled by bot directly, but provide a fallback
 		resp.Reply = "📊 Use this in WhatsApp to see tracked/untracked files in real time."
