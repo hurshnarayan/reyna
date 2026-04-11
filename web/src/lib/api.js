@@ -22,8 +22,10 @@ async function req(path, opts = {}) {
       return null;
     }
     const data = await res.json();
-    // Only show error toasts for user-initiated mutations, not background polling GETs
-    if (!res.ok && data?.error && isMutation) {
+    // Only show error toasts for user-initiated mutations, not background polling GETs.
+    // Skip auth endpoints — the Login page handles those errors inline.
+    const isAuthPath = path.startsWith('/auth/login') || path.startsWith('/auth/register')
+    if (!res.ok && data?.error && isMutation && !isAuthPath) {
       notify.error(data.error)
     }
     return data;

@@ -17,7 +17,10 @@ export default function Login() {
     e.preventDefault(); setError(''); setLoading(true)
     try {
       const data = isRegister ? await api.register(phone, name) : await api.login(phone)
-      if (data?.error) { setError(data.error); if (data.error.includes('not found')) setIsRegister(true) }
+      if (data?.error) {
+        if (data.error.includes('not found')) { setIsRegister(true) }
+        else { setError(data.error) }
+      }
       else { saveAuth(data); navigate('/dashboard') }
     } catch { setError('Connection failed. Is the backend running?') }
     setLoading(false)

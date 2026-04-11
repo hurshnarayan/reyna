@@ -349,14 +349,16 @@ export default function Dashboard() {
         {[
           { label: 'total files', value: stats.total_files, icon: icons.totalFiles, color: '#1a1a1a' },
           { label: 'groups', value: stats.total_groups, icon: icons.groups, color: '#2563eb' },
-          { label: 'storage used', value: driveStatus?.connected ? formatBytes(storageUsed) : '–', icon: icons.storage, color: '#d97706' },
-          { label: 'drive free', value: driveStatus?.connected ? formatBytes(Math.max(0, storageLimit - storageUsed)) : '–', icon: icons.cloud, color: '#25D366' },
+          { label: 'storage used', value: driveStatus === null ? null : driveStatus?.connected ? formatBytes(storageUsed) : '–', icon: icons.storage, color: '#d97706' },
+          { label: 'drive free', value: driveStatus === null ? null : driveStatus?.connected ? formatBytes(Math.max(0, storageLimit - storageUsed)) : '–', icon: icons.cloud, color: '#25D366' },
         ].map((s, i) => (
           <div key={i} style={{ ...cardStyle, borderTop: `3px solid ${s.color}` }}>
             <div style={{ marginBottom: 12 }}>
               <Fa icon={s.icon} style={{ fontSize: 22, color: s.color }} />
             </div>
-            <div style={{ fontSize: 34, fontWeight: 800, color: '#1a1a1a', letterSpacing: -1.5, lineHeight: 1 }}>{s.value}</div>
+            <div style={{ fontSize: 34, fontWeight: 800, color: '#1a1a1a', letterSpacing: -1.5, lineHeight: 1 }}>
+              {s.value === null ? <Fa icon={icons.loading} spin style={{ fontSize: 18, color: '#ccc' }} /> : s.value}
+            </div>
             <div style={{ fontSize: 12, color: '#999', fontWeight: 600, letterSpacing: 0.5, marginTop: 8 }}>{s.label}</div>
           </div>
         ))}
