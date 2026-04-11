@@ -16,6 +16,7 @@ const logger = pino({ level: 'silent' });
 let enabledGroups = new Set();   // WA group JIDs that Reyna is active in
 let groupModes = new Map();      // groupJid → "auto" | "reaction"
 const groupFiles = new Map();    // groupJid → Map<msgId, fileInfo>
+const groupLastSyncTime = new Map(); // groupJid → timestamp (throttle re-syncs)
 
 // dmContext caches per-user conversation state for private DM follow-ups.
 // Keyed by senderPhone. Stores the most recent search results so messages
@@ -779,9 +780,16 @@ async function handleMessage(sock, msg) {
     return handleDM(sock, msg);
   }
 
-  // For groups, fromMe is always skipped (group bots don't reply to themselves
-  // and the linked user shouldn't be replied to in groups).
-  if (msg.key.fromMe) return;
+  // Check for /reyna init BEFORE the fromMe filter — the linked user
+  // (whose messages are fromMe) needs to be able to initialize groups.
+  const initText = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
+  const isInit = initText.trim().toLowerCase() === '/reyna init';
+  if (isInit) {
+    console.log(`  [INIT] detected /reyna init from ${msg.key.participant || chat} fromMe=${msg.key.fromMe}`);
+  } else if (msg.key.fromMe) {
+    // For all other group messages, skip fromMe (bot's own replies)
+    return;
+  }
 
   const sender = msg.key.participant || chat;
   let senderPhone = phoneFromJid(sender);
@@ -844,35 +852,63 @@ async function handleMessage(sock, msg) {
 
   // ── Handle /reyna init — works in ANY group, registers it ──
   const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
-  if (text.trim().toLowerCase() === '/reyna init') {
-    console.log(`  ${pushName}: /reyna init in ${chat}`);
-    syncedGroups.delete(chat); // Force re-sync to update name from WhatsApp metadata
-    await ensureGroupSynced(sock, chat);
-    // Refresh enabled groups so this group is now recognized
-    await refreshEnabledGroups();
+  if (isInit || text.trim().toLowerCase() === '/reyna init') {
+    console.log(`  [INIT] ${pushName}: /reyna init in ${chat}`);
+
+    // Send the confirmation message FIRST, before any heavy API calls.
+    // The 440 disconnects happen because groupMetadata + backend sync +
+    // refreshEnabledGroups all fire rapidly and WhatsApp kills the connection
+    // before sendMessage gets a chance to run.
     try {
-      await fetch(`${BACKEND_URL}/api/bot/command`, {
+      await sock.sendMessage(chat, {
+        text: '*Reyna:* Initialized! This group is now being monitored.\n\nHow to use:\n• Share a file and it gets auto-saved (or react 📌 in reaction mode)\n• DM me for search and Q&A\n• "reyna save" / "reyna push" / "reyna status"\n• "/reyna stop" to disable tracking\n\nManage settings on your dashboard.',
+      });
+      console.log(`  [INIT] sent init message to ${chat}`);
+    } catch (sendErr) {
+      console.error(`  [INIT] failed to send init message: ${sendErr.message}`);
+    }
+
+    // Now do the heavy backend sync in the background — if the connection
+    // drops (440) during this, the user already has the confirmation message.
+    syncedGroups.delete(chat);
+    ensureGroupSynced(sock, chat).catch(() => {});
+    refreshEnabledGroups().catch(() => {});
+    return;
+  }
+
+  // ── Handle /reyna stop — disable tracking from WhatsApp ──
+  if (text.trim().toLowerCase() === '/reyna stop') {
+    try {
+      // Find group ID and disable it
+      const res = await fetch(`${BACKEND_URL}/api/bot/command`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          group_wa_id: chat, command: '/reyna help',
+          group_wa_id: chat, command: '/reyna disable',
           user_phone: senderPhone, user_name: pushName,
         }),
       });
-    } catch {}
-    await sock.sendMessage(chat, {
-      text: '*Reyna:* Initialized! This group is now being monitored.\n\nHow to use:\n• Share a file → auto-saved (or react 📌 in reaction mode)\n• "reyna find [topic]" → search files\n• "reyna push" → commit to Drive now\n• "reyna status" → see what\'s new\n\nManage settings on your dashboard.',
-    });
+      syncedGroups.delete(chat);
+      await sock.sendMessage(chat, {
+        text: '*Reyna:* Tracking disabled for this group. Files will no longer be captured.\n\nTo re-enable, send /reyna init.',
+      });
+      console.log(`  [STOP] disabled tracking for ${chat}`);
+    } catch (err) {
+      console.error(`  [STOP] failed: ${err.message}`);
+    }
     return;
   }
 
   // ── Only process messages from initialized groups ──
   if (!syncedGroups.has(chat)) return;
 
-  // Re-sync group name in background on every message — catches the case
-  // where Baileys didn't have metadata on first connect and the group got
-  // registered as "WhatsApp Group". This is fire-and-forget, non-blocking.
-  ensureGroupSynced(sock, chat).catch(() => {});
+  // Re-sync group name in background — but throttled to once per group
+  // per 10 minutes to avoid 440 disconnects from too many groupMetadata calls.
+  const lastSync = groupLastSyncTime.get(chat) || 0;
+  if (Date.now() - lastSync > 10 * 60 * 1000) {
+    groupLastSyncTime.set(chat, Date.now());
+    ensureGroupSynced(sock, chat).catch(() => {});
+  }
 
   const mode = await getGroupMode(chat);
 
@@ -1179,9 +1215,20 @@ async function startBot() {
   sock.ev.on('creds.update', saveCreds);
 
   // ── Message handler ──
+  // Process messages sequentially with a small gap between each one.
+  // When 6 files land in one batch, this spaces out the downloads +
+  // uploads + reactions so WhatsApp doesn't throttle the reactions.
   sock.ev.on('messages.upsert', async ({ messages }) => {
-    for (const m of messages) {
-      try { await handleMessage(sock, m); } catch (err) { console.error('Error:', err.message); }
+    for (let i = 0; i < messages.length; i++) {
+      try {
+        await handleMessage(sock, messages[i]);
+      } catch (err) {
+        console.error('Error:', err.message);
+      }
+      // Small gap between messages in a batch to avoid WhatsApp throttling
+      if (messages.length > 1 && i < messages.length - 1) {
+        await new Promise(r => setTimeout(r, 800));
+      }
     }
   });
 
