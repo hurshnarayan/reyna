@@ -135,6 +135,7 @@ func (s *Store) migrate() error {
 		// even if the in-process upload mutex ever misses a race. Excludes
 		// rows with empty content_hash so historical rows aren't affected.
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_files_hash_unique ON files(group_id, content_hash) WHERE content_hash != ''`,
+		`ALTER TABLE group_settings ADD COLUMN hidden INTEGER DEFAULT 0`,
 	}
 	for _, m := range migrations {
 		s.db.Exec(m) // ignore errors if columns already exist
@@ -887,11 +888,11 @@ func (s *Store) CountWaitlist() int {
 // ── Group Settings ──
 
 func (s *Store) GetGroupSettings(groupID int64) *model.GroupSettings {
-	gs := &model.GroupSettings{GroupID: groupID, Enabled: false, TrackingMode: "auto", AutoCommitHours: 24, ReactionEmoji: "📌"}
+	gs := &model.GroupSettings{GroupID: groupID, Enabled: false, Hidden: false, TrackingMode: "auto", AutoCommitHours: 24, ReactionEmoji: "📌"}
 	err := s.db.QueryRow(
-		`SELECT group_id, enabled, tracking_mode, auto_commit_hours, reaction_emoji FROM group_settings WHERE group_id=?`,
+		`SELECT group_id, enabled, tracking_mode, auto_commit_hours, reaction_emoji, COALESCE(hidden, 0) FROM group_settings WHERE group_id=?`,
 		groupID,
-	).Scan(&gs.GroupID, &gs.Enabled, &gs.TrackingMode, &gs.AutoCommitHours, &gs.ReactionEmoji)
+	).Scan(&gs.GroupID, &gs.Enabled, &gs.TrackingMode, &gs.AutoCommitHours, &gs.ReactionEmoji, &gs.Hidden)
 	if err != nil {
 		return gs // return defaults
 	}
@@ -900,11 +901,12 @@ func (s *Store) GetGroupSettings(groupID int64) *model.GroupSettings {
 
 func (s *Store) UpsertGroupSettings(gs *model.GroupSettings) error {
 	_, err := s.db.Exec(
-		`INSERT INTO group_settings (group_id, enabled, tracking_mode, auto_commit_hours, reaction_emoji)
-		 VALUES (?, ?, ?, ?, ?)
-		 ON CONFLICT(group_id) DO UPDATE SET enabled=excluded.enabled, tracking_mode=excluded.tracking_mode,
+		`INSERT INTO group_settings (group_id, enabled, hidden, tracking_mode, auto_commit_hours, reaction_emoji)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(group_id) DO UPDATE SET enabled=excluded.enabled, hidden=excluded.hidden,
+		   tracking_mode=excluded.tracking_mode,
 		   auto_commit_hours=excluded.auto_commit_hours, reaction_emoji=excluded.reaction_emoji`,
-		gs.GroupID, gs.Enabled, gs.TrackingMode, gs.AutoCommitHours, gs.ReactionEmoji,
+		gs.GroupID, gs.Enabled, gs.Hidden, gs.TrackingMode, gs.AutoCommitHours, gs.ReactionEmoji,
 	)
 	return err
 }

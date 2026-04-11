@@ -512,6 +512,7 @@ func (s *Server) handleBotCommand(w http.ResponseWriter, r *http.Request) {
 			gs := s.store.GetGroupSettings(groupID)
 			gs.GroupID = groupID
 			gs.Enabled = true
+			gs.Hidden = false // un-hide so it reappears in dashboard
 			s.store.UpsertGroupSettings(gs)
 			log.Printf("[BOT] Enabled tracking for group %d via /reyna init", groupID)
 			resp.Reply = "Tracking enabled."
@@ -1327,6 +1328,7 @@ func (s *Server) handleGroupSettings(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			GroupID         int64  `json:"group_id"`
 			Enabled         *bool  `json:"enabled"`
+			Hidden          *bool  `json:"hidden"`
 			TrackingMode    string `json:"tracking_mode"`
 			AutoCommitHours int    `json:"auto_commit_hours"`
 			ReactionEmoji   string `json:"reaction_emoji"`
@@ -1340,6 +1342,9 @@ func (s *Server) handleGroupSettings(w http.ResponseWriter, r *http.Request) {
 		gs := s.store.GetGroupSettings(req.GroupID)
 		if req.Enabled != nil {
 			gs.Enabled = *req.Enabled
+		}
+		if req.Hidden != nil {
+			gs.Hidden = *req.Hidden
 		}
 		if req.TrackingMode == "auto" || req.TrackingMode == "reaction" {
 			gs.TrackingMode = req.TrackingMode
@@ -1371,10 +1376,10 @@ func (s *Server) handleGroupSettings(w http.ResponseWriter, r *http.Request) {
 		var result []map[string]interface{}
 		for _, g := range groups {
 			gs := s.store.GetGroupSettings(g.ID)
-			// Only show groups that have settings and are enabled (or were
-			// never explicitly disabled). "Removed" groups stay in the DB
-			// for history but don't appear in the active groups panel.
-			if !s.store.GroupSettingsExist(g.ID) || gs.Enabled {
+			// Only show groups that aren't hidden. Hidden groups were removed
+			// via the "remove group" button and only come back via /reyna init.
+			// Disabled (toggle off) groups still show — just with the toggle off.
+			if !gs.Hidden {
 				result = append(result, map[string]interface{}{
 					"group":    g,
 					"settings": gs,

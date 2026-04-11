@@ -567,11 +567,9 @@ export default function Dashboard() {
                     </div>
                   )}
                   <button onClick={async () => {
-                    const gs2 = { group_id: gs.group?.id, enabled: false }
-                    await api.updateGroupSettings(gs.group?.id, gs2)
-                    // Remove from local state
+                    await api.updateGroupSettings(gs.group?.id, { enabled: false, hidden: true })
                     setGroupSettings(prev => prev.filter(g => g.group?.id !== gs.group?.id))
-                    notify.success('Group removed')
+                    notify.success('Group removed. Use /reyna init in WhatsApp to add it back.')
                   }} style={{ ...btnBase, fontSize: 10, color: '#aaa', marginTop: 10, padding: '4px 10px' }}>
                     <Fa icon={icons.close} style={{ fontSize: 8 }} /> remove group
                   </button>

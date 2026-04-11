@@ -29,8 +29,9 @@ type Group struct {
 // GroupSettings holds per-group configuration
 type GroupSettings struct {
 	GroupID          int64  `json:"group_id"`
-	Enabled          bool   `json:"enabled"`
-	TrackingMode     string `json:"tracking_mode"`      // "auto" | "reaction"
+	Enabled          bool   `json:"enabled"`             // toggle: tracking on/off
+	Hidden           bool   `json:"hidden"`              // remove button: hides from dashboard until /reyna init
+	TrackingMode     string `json:"tracking_mode"`       // "auto" | "reaction"
 	AutoCommitHours  int    `json:"auto_commit_hours"`   // 0 = use server default
 	ReactionEmoji    string `json:"reaction_emoji"`      // default "📌"
 }
