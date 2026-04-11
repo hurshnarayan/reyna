@@ -473,9 +473,16 @@ export default function Dashboard() {
               <Fa icon={icons.staging} style={{ fontSize: 13 }} /> staging area
             </h2>
             {stagedFiles.length > 0 && (
-              <button onClick={commitAllStaged} disabled={committing} style={{ ...btnPrimary, fontSize: 11, opacity: committing ? 0.6 : 1 }}>
-                {committing ? <><Fa icon={icons.loading} spin style={{ fontSize: 9 }} /> pushing...</> : <>push all to drive <Fa icon={icons.arrowRight} style={{ fontSize: 9 }} /></>}
-              </button>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button onClick={async () => {
+                  for (const f of stagedFiles) await removeFromStaging(f.id)
+                }} style={{ ...btnBase, fontSize: 11, color: 'var(--error-color)' }}>
+                  <Fa icon={icons.close} style={{ fontSize: 8 }} /> clear all
+                </button>
+                <button onClick={commitAllStaged} disabled={committing} style={{ ...btnPrimary, fontSize: 11, opacity: committing ? 0.6 : 1 }}>
+                  {committing ? <><Fa icon={icons.loading} spin style={{ fontSize: 9 }} /> pushing...</> : <>push all to drive <Fa icon={icons.arrowRight} style={{ fontSize: 9 }} /></>}
+                </button>
+              </div>
             )}
           </div>
           {stagedFiles.length === 0 ? (
@@ -559,6 +566,15 @@ export default function Dashboard() {
                         : 'only files that get a pin reaction are staged. everything else is ignored.'}
                     </div>
                   )}
+                  <button onClick={async () => {
+                    const gs2 = { group_id: gs.group?.id, enabled: false }
+                    await api.updateGroupSettings(gs.group?.id, gs2)
+                    // Remove from local state
+                    setGroupSettings(prev => prev.filter(g => g.group?.id !== gs.group?.id))
+                    notify.success('Group removed')
+                  }} style={{ ...btnBase, fontSize: 10, color: '#aaa', marginTop: 10, padding: '4px 10px' }}>
+                    <Fa icon={icons.close} style={{ fontSize: 8 }} /> remove group
+                  </button>
                 </div>
               )})}
             </div>
