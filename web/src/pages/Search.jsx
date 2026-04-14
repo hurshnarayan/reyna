@@ -84,13 +84,17 @@ function renderInline(text) {
   return parts
 }
 
+
 const btnBase = { background: '#fff', border: '1.5px solid #ccc', borderRadius: 'var(--roundness)', padding: '8px 16px', fontSize: 14, fontWeight: 600, cursor: 'pointer', color: 'var(--text-secondary, #555)', transition: 'all 0.15s', display: 'inline-flex', alignItems: 'center', gap: 6 }
 const btnPrimary = { ...btnBase, background: 'var(--reyna-accent)', color: '#fff', border: '1.5px solid var(--reyna-accent)', fontWeight: 700 }
 const btnDanger = { ...btnBase, background: '#fef2f2', color: 'var(--error-color)', border: '1.5px solid rgba(220,38,38,0.15)' }
 const cardStyle = { background: 'var(--card-bg)', border: '1.5px solid #ccc', borderRadius: 'var(--roundness)', boxShadow: 'var(--card-shadow)' }
 
 export default function Search() {
-  const [mode, setMode] = useState('search') // 'search' | 'nlp' | 'qa'
+  // mode — 'search' is filename keyword search; 'recall' is the unified
+  // Recall mode that merges NLP retrieval + Notes Q&A into one thread
+  // (semantic-backed when Qdrant is configured).
+  const [mode, setMode] = useState('recall')
   const [query, setQuery] = useState('')
   const [results, setResults] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -103,17 +107,15 @@ export default function Search() {
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [deleting, setDeleting] = useState(false)
   const [isContentSearch, setIsContentSearch] = useState(false)
-  // NLP state
-  const [nlpParsed, setNlpParsed] = useState(null)
-  const [nlpReply, setNlpReply] = useState('')
-  // Q&A state — multi-turn conversation. Each turn = { question, answer, sources, ts }.
-  // The newest turn is always at the END so the chat thread reads top-to-bottom.
-  const [qaConversation, setQaConversation] = useState([])
+  // Recall conversation — merged NLP retrieval + Q&A. Each turn =
+  //   { question, answer, sources, files, drive_sources, ts, pending? }
+  // Newest turn is at the END so the thread reads top-to-bottom.
+  const [recallConversation, setRecallConversation] = useState([])
   const [llmStatus, setLlmStatus] = useState(null)
   const qaEndRef = useRef(null)
   useEffect(() => {
     if (qaEndRef.current) qaEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' })
-  }, [qaConversation])
+  }, [recallConversation])
 
   const inputRef = useRef(null)
   const debounceRef = useRef(null)
@@ -126,21 +128,18 @@ export default function Search() {
     const files = await api.search(q.trim()); setResults(files || []); setLoading(false); notify.hideLoader()
   }, [])
 
-  const doNLPSearch = async (q) => {
-    if (!q.trim()) return
-    setLoading(true); notify.showLoader(); setNlpParsed(null); setNlpReply('')
-    const resp = await api.nlpRetrieve(q.trim())
-    setResults(resp?.files || [])
-    setNlpParsed(resp?.parsed_query || null)
-    setNlpReply(resp?.reply || '')
-    setLoading(false); notify.hideLoader()
+  // Legacy NLP-only handler. Kept as dead code for reference — the unified
+  // Recall mode now covers everything it did plus Q&A and semantic search.
+  // eslint-disable-next-line no-unused-vars
+  const doNLPSearch = async (_q) => {
+    // Intentionally disabled. See doRecall below.
   }
 
-  // doQA appends a new turn to the conversation. If there's a recent prior
-  // turn (within 30 min) AND the new question looks like a follow-up — short,
-  // pronoun-led, refinement words, multi-language follow-up cues — we pass
-  // the previous turn through to the backend so Gemini threads the answer.
-  // Otherwise it's treated as a fresh question.
+  // doRecall appends a new turn to the recall conversation. If there's a
+  // recent prior turn (within 30 min) AND the new question looks like a
+  // follow-up — short, pronoun-led, refinement cues, multi-language — we
+  // pass the previous turn through so Gemini threads the answer.
+  // Otherwise it's a fresh question.
   const isQAFollowup = (text) => {
     const t = text.toLowerCase().trim()
     if (t.length > 80) return false
@@ -160,32 +159,37 @@ export default function Search() {
     return false
   }
 
-  const doQA = async (q) => {
+  const doRecall = async (q) => {
     if (!q.trim()) return
     const question = q.trim()
     setLoading(true); notify.showLoader()
-    // Decide whether to thread this as a follow-up
+
+    // Follow-up detection — same 30-min window used for Q&A threading.
     let prevTurn = null
-    if (qaConversation.length > 0) {
-      const last = qaConversation[qaConversation.length - 1]
+    if (recallConversation.length > 0) {
+      const last = recallConversation[recallConversation.length - 1]
       const fresh = (Date.now() - (last.ts || 0)) < 30 * 60 * 1000
       if (fresh && isQAFollowup(question)) {
         prevTurn = { question: last.question, answer: last.answer, sources: last.sources }
       }
     }
-    // Optimistic placeholder so the user sees their question land instantly
-    const placeholder = { question, answer: '', sources: [], ts: Date.now(), pending: true }
-    setQaConversation(prev => [...prev, placeholder])
+    const placeholder = { question, answer: '', sources: [], files: [], drive_sources: [], ts: Date.now(), pending: true }
+    setRecallConversation(prev => [...prev, placeholder])
     setQuery('')
 
-    const resp = await api.notesQA(question, '', prevTurn)
+    // Recall endpoint merges retrieval + Q&A, returning answer + files +
+    // sources + drive_sources in one shot. Backend does semantic search via
+    // Qdrant when configured and injects Reyna's Memory context.
+    const resp = await api.recallAsk(question, '', prevTurn)
     const entry = {
       question,
       answer: resp?.answer || 'No answer',
       sources: resp?.sources || [],
+      files: resp?.files || [],
+      drive_sources: resp?.drive_sources || [],
       ts: Date.now(),
     }
-    setQaConversation(prev => {
+    setRecallConversation(prev => {
       const copy = [...prev]
       copy[copy.length - 1] = entry
       return copy
@@ -193,7 +197,11 @@ export default function Search() {
     setLoading(false); notify.hideLoader()
   }
 
-  const clearQA = () => { setQaConversation([]); setQuery('') }
+  // Alias kept so existing callers (like the old mode === 'qa' check below)
+  // continue to work while the UI transitions to 'recall'.
+  const doQA = doRecall
+
+  const clearQA = () => { setRecallConversation([]); setQuery('') }
 
   const fetchSuggestions = useCallback(async (q) => {
     if (!q.trim() || q.startsWith('/content:')) { setSuggestions([]); return }
@@ -218,8 +226,7 @@ export default function Search() {
     if (e.key === 'Enter') {
       setShowSuggestions(false)
       if (mode === 'search') { if (selectedSuggestion >= 0 && suggestions[selectedSuggestion]) { setQuery(suggestions[selectedSuggestion]); doLiveSearch(suggestions[selectedSuggestion]) } else { doLiveSearch(query) } }
-      else if (mode === 'nlp') { doNLPSearch(query) }
-      else if (mode === 'qa') { doQA(query) }
+      else if (mode === 'recall') { doRecall(query) }
       return
     }
     if (e.key === 'Escape') { setShowSuggestions(false) }
@@ -248,31 +255,45 @@ export default function Search() {
     fetch(api.downloadUrl(f.id), { headers: { 'Authorization': `Bearer ${getToken()}` } }).then(r => r.blob()).then(blob => { const u = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = u; a.download = f.file_name; a.click(); URL.revokeObjectURL(u) })
   }
   const confirmDelete = (f) => setDeleteTarget(f)
-  const doDelete = async () => { if (!deleteTarget) return; setDeleting(true); await api.deleteFile(deleteTarget.id); notify.success(`Deleted ${deleteTarget.file_name}`); setDeleteTarget(null); setDeleting(false); doLiveSearch(query) }
+  const doDelete = async () => { if (!deleteTarget) return; setDeleting(true); await api.deleteFile(deleteTarget.id); notify.success(`deleted ${deleteTarget.file_name}`); setDeleteTarget(null); setDeleting(false); doLiveSearch(query) }
 
-  const switchMode = (m) => { setMode(m); setResults(null); setNlpParsed(null); setNlpReply(''); setQaConversation([]); setQuery(''); setSuggestions([]); setShowSuggestions(false) }
+  const switchMode = (m) => { setMode(m); setResults(null); setRecallConversation([]); setQuery(''); setSuggestions([]); setShowSuggestions(false) }
 
   const placeholders = {
     search: 'search files by name...',
-    nlp: '"What did Rahul share about drones last week?"',
-    qa: '"Summarize Chapter 5" or "Explain photosynthesis from our notes"',
+    recall: 'ask by meaning, e.g. "summarize the dbms notes mohit sent last week"',
   }
 
   const tagColors = { WHO: '#D85A30', WHAT: '#7F77DD', WHEN: '#1D9E75', WHY: '#BA7517' }
 
   return (
-    <div style={{ padding: '32px 40px', maxWidth: 800 }} className="fade-in">
-      <h1 style={{ fontSize: 44, fontWeight: 900, letterSpacing: -0.5, marginBottom: 6, color: 'var(--text-color)', display: 'flex', alignItems: 'center', gap: 10 }}>
-        <Fa icon={icons.search} style={{ fontSize: 32 }} /> search
-      </h1>
-      <p style={{ fontSize: 15, color: '#888', marginBottom: 20 }}>find files, ask questions, or retrieve with natural language.</p>
+    <div style={{ padding: '32px 40px', maxWidth: 900, position: 'relative' }} className="fade-in">
+      <div style={{ position: 'relative', zIndex: 1 }}>
+      {/* Recall hero. Big hourglass icon anchors the heading, title-case
+          brand name. Subtext stays lowercase to match the rest of the UI. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 22 }}>
+        <Fa
+          icon={mode === 'recall' ? 'fa-clock-rotate-left' : icons.search}
+          style={{ fontSize: 42, color: mode === 'recall' ? 'var(--reyna-accent)' : 'var(--text-color)' }}
+        />
+        <div>
+          <h1 style={{ fontSize: 40, fontWeight: 800, letterSpacing: -0.5, margin: 0, color: 'var(--text-color)', lineHeight: 1.05 }}>
+            {mode === 'recall' ? "Reyna's Recall" : 'Search'}
+          </h1>
+          <p style={{ fontSize: 14, color: '#888', margin: '4px 0 0 0' }}>
+            {mode === 'recall'
+              ? 'ask by meaning, and reyna finds, summarises, and answers from your notes'
+              : 'keyword lookup by filename, fast and literal'}
+          </p>
+        </div>
+      </div>
 
-      {/* Mode tabs */}
-      <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: '#f5f5f5', borderRadius: 'var(--roundness)', padding: 3 }}>
+      {/* mode tabs. merged nlp retrieval + notes q&a into a single recall;
+          old 3-tab ui preserved as a commented block at the end of the file. */}
+      <div style={{ display: 'flex', gap: 4, margin: '0 0 20px', background: '#f5f5f5', borderRadius: 'var(--roundness)', padding: 3 }}>
         {[
-          { id: 'search', icon: icons.search, label: 'Search' },
-          { id: 'nlp', icon: 'fa-comments', label: 'NLP Retrieval' },
-          { id: 'qa', icon: 'fa-graduation-cap', label: 'Notes Q&A' },
+          { id: 'recall', icon: 'fa-clock-rotate-left', label: 'recall' },
+          { id: 'search', icon: icons.search, label: 'search by name' },
         ].map(tab => (
           <button key={tab.id} onClick={() => switchMode(tab.id)} style={{
             flex: 1, padding: '8px 12px', border: 'none', borderRadius: 'var(--roundness)', fontSize: 12, fontWeight: 600,
@@ -286,11 +307,11 @@ export default function Search() {
         ))}
       </div>
 
-      {/* LLM status badge */}
-      {(mode === 'nlp' || mode === 'qa') && llmStatus && (
+      {/* llm status badge. only relevant for recall. */}
+      {mode === 'recall' && llmStatus && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 14, fontSize: 11, color: llmStatus.enabled ? '#0F6E56' : '#BA7517' }}>
           <span style={{ width: 6, height: 6, borderRadius: '50%', background: llmStatus.enabled ? '#25D366' : '#f59e0b' }}/>
-          {llmStatus.enabled ? `AI powered by ${llmStatus.provider}` : 'AI not configured — keyword fallback only'}
+          {llmStatus.enabled ? `ai powered by ${llmStatus.provider}` : 'ai not configured, keyword fallback only'}
         </div>
       )}
 
@@ -318,47 +339,50 @@ export default function Search() {
             <div style={{
               position: 'relative',
               display: 'flex', alignItems: 'flex-end', gap: 10,
-              background: '#fff', border: '1.5px solid #ccc', borderRadius: 14,
+              background: '#fff',
+              border: '1.5px solid #ccc', borderRadius: 14,
               padding: '12px 12px 12px 18px',
-              transition: 'border-color 0.15s',
+              transition: 'border-color 0.15s, box-shadow 0.25s',
+              boxShadow: loading ? '0 0 0 3px rgba(37,211,102,0.15)' : 'none',
             }}
-              onFocusCapture={e => e.currentTarget.style.borderColor = '#2563eb'}
+              onFocusCapture={e => e.currentTarget.style.borderColor = 'var(--reyna-accent)'}
               onBlurCapture={e => e.currentTarget.style.borderColor = '#ccc'}
             >
-              <Fa icon={mode === 'qa' ? 'fa-graduation-cap' : 'fa-comments'} style={{ fontSize: 16, color: '#555', marginBottom: 8, flexShrink: 0 }} />
+              <Fa icon="fa-clock-rotate-left" style={{ fontSize: 16, color: 'var(--reyna-accent)', marginBottom: 8, flexShrink: 0 }} />
               <textarea ref={inputRef} value={query} onChange={handleChange}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
-                    if (mode === 'nlp') doNLPSearch(query); else doQA(query)
+                    doRecall(query)
                     return
                   }
                   handleKeyDown(e)
                 }}
                 onInput={(e) => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 280) + 'px' }}
                 rows={1}
-                placeholder={placeholders[mode]}
+                placeholder={placeholders[mode] || placeholders.recall}
                 style={{
                   flex: 1, minWidth: 0,
                   padding: '6px 4px', fontSize: 15,
                   background: 'transparent', border: 'none',
                   color: '#1a1a1a', outline: 'none',
                   resize: 'none',
-                  overflowY: 'hidden', // hide scrollbar — height auto-grows up to maxHeight
+                  overflowY: 'hidden',
                   minHeight: 24, maxHeight: 280,
                   fontFamily: 'inherit', lineHeight: 1.55,
                 }}
               />
-              <button onClick={() => mode === 'nlp' ? doNLPSearch(query) : doQA(query)}
+              <button onClick={() => doRecall(query)}
                 disabled={!query.trim() || loading}
                 style={{
                   ...btnPrimary,
+                  background: 'var(--reyna-accent)', border: '1.5px solid var(--reyna-accent)',
                   padding: '8px 16px', fontSize: 13,
                   opacity: (!query.trim() || loading) ? 0.5 : 1,
                   cursor: (!query.trim() || loading) ? 'not-allowed' : 'pointer',
                   flexShrink: 0, alignSelf: 'flex-end',
                 }}>
-                <Fa icon={mode === 'qa' ? 'fa-paper-plane' : icons.search} style={{ fontSize: 11 }} /> {mode === 'qa' ? 'Ask' : 'Search'}
+                <Fa icon="fa-clock-rotate-left" style={{ fontSize: 11 }} /> use recall
               </button>
             </div>
           )}
@@ -388,38 +412,18 @@ export default function Search() {
         )}
       </div>
 
-      {/* NLP parsed query display */}
-      {mode === 'nlp' && nlpParsed && (
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-          {[
-            { k: 'WHO', v: nlpParsed.who },
-            { k: 'WHAT', v: nlpParsed.what },
-            { k: 'WHEN', v: nlpParsed.when },
-            { k: 'WHY', v: nlpParsed.why },
-          ].filter(t => t.v).map(t => (
-            <span key={t.k} style={{
-              padding: '4px 12px', borderRadius: 20, fontSize: 11, fontWeight: 600,
-              background: tagColors[t.k] + '15', color: tagColors[t.k],
-            }}>{t.k}: {t.v}</span>
-          ))}
-        </div>
-      )}
-      {mode === 'nlp' && nlpReply && (
-        <div style={{ ...cardStyle, padding: '14px 18px', marginBottom: 16, fontSize: 14, color: 'var(--text-color)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-            <Fa icon="fa-crown" style={{ fontSize: 11, color: 'var(--reyna-accent)' }} />
-            <strong style={{ fontSize: 12 }}>Reyna</strong>
-          </div>
-          <div>{renderMarkdown(cleanReply(nlpReply))}</div>
-        </div>
-      )}
-
-      {/* Q&A — multi-turn conversation thread */}
-      {mode === 'qa' && qaConversation.length > 0 && (
+      {/* ── Unified Recall thread — merged NLP retrieval + Q&A ──
+          Every turn renders:
+            (1) the user's question bubble
+            (2) a row of file cards (who/when/subject) retrieved for the turn
+            (3) Reyna's answer, with source citations
+          Follow-up questions thread automatically (see isQAFollowup). */}
+      {mode === 'recall' && recallConversation.length > 0 && (
         <div style={{ marginBottom: 20 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--sub-color)', letterSpacing: 1, textTransform: 'uppercase' }}>
-              Conversation
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--sub-color)', letterSpacing: 1, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Fa icon="fa-clock-rotate-left" style={{ fontSize: 11, color: 'var(--reyna-accent)' }} />
+              recall thread
             </div>
             <button onClick={clearQA} style={{
               ...btnBase, fontSize: 11, padding: '4px 12px', color: 'var(--sub-color)',
@@ -427,27 +431,96 @@ export default function Search() {
               <Fa icon="fa-arrow-rotate-left" style={{ fontSize: 9 }} /> new conversation
             </button>
           </div>
-          {qaConversation.map((turn, i) => (
-            <div key={i} style={{ marginBottom: 14 }}>
-              {/* user question bubble */}
+          {recallConversation.map((turn, i) => (
+            <div key={i} style={{ marginBottom: 22 }}>
+              {/* user question */}
               <div style={{
-                background: 'rgba(37,211,102,0.10)',
+                background: 'rgba(37,211,102,0.08)',
                 border: '1px solid rgba(37,211,102,0.25)',
-                borderRadius: 14, padding: '10px 16px', marginBottom: 8,
+                borderRadius: 14, padding: '10px 16px', marginBottom: 10,
                 maxWidth: '85%', marginLeft: 'auto',
                 fontSize: 14, color: '#1a1a1a', lineHeight: 1.55,
                 whiteSpace: 'pre-wrap', wordBreak: 'break-word',
               }}>
                 {turn.question}
               </div>
-              {/* reyna answer bubble */}
-              <div style={{ ...cardStyle, padding: '14px 18px', maxWidth: '92%' }}>
+
+              {/* Files retrieved — unified list of DB files (turn.files, have
+                  full metadata + can preview/download/delete) AND Drive matches
+                  (turn.drive_sources, files sitting in the user's Drive that
+                  the bot never captured — still useful, open directly in Drive).
+                  Earlier bug: drive_sources were returned by the backend but
+                  never rendered, so searches that only matched Drive looked
+                  like "no files found" in the UI. */}
+              {!turn.pending && ((turn.files?.length || 0) + (turn.drive_sources?.length || 0)) > 0 && (
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--sub-color)', letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 6 }}>
+                    found {(turn.files?.length || 0) + (turn.drive_sources?.length || 0)} file{((turn.files?.length || 0) + (turn.drive_sources?.length || 0)) !== 1 ? 's' : ''}
+                  </div>
+                  <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
+                    {/* DB files with full metadata + action buttons */}
+                    {(turn.files || []).slice(0, 6).map((f, j) => (
+                      <div key={'db' + j} style={{
+                        ...cardStyle, padding: '10px 12px',
+                        display: 'flex', gap: 10, alignItems: 'flex-start',
+                        transition: 'transform 0.12s, border-color 0.12s',
+                      }}
+                        onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.borderColor = 'var(--reyna-accent)' }}
+                        onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.borderColor = '#ccc' }}
+                      >
+                        <IconBox icon={fileIconClass(f.mime_type, f.file_name)} color="var(--reyna-accent)" bg="rgba(37,211,102,0.08)" size={32} iconSize={12} />
+                        <div style={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={() => openPreview(f)}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-color)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.file_name}</div>
+                          <div style={{ fontSize: 11, color: 'var(--sub-color)', marginTop: 2 }}>
+                            {f.shared_by_name || 'unknown'} · {timeAgo(f.created_at)}
+                          </div>
+                          {f.subject && <div style={{ fontSize: 10, color: 'var(--reyna-accent)', marginTop: 2, fontWeight: 600 }}>{f.subject}</div>}
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0 }}>
+                          <button onClick={(e) => { e.stopPropagation(); openPreview(f) }} title="preview" style={{ ...btnBase, padding: '4px 7px', fontSize: 10 }}><Fa icon={icons.preview} style={{ fontSize: 10 }} /></button>
+                          <button onClick={(e) => { e.stopPropagation(); downloadFile(f) }} title="download" style={{ ...btnBase, padding: '4px 7px', fontSize: 10 }}><Fa icon={icons.download} style={{ fontSize: 10 }} /></button>
+                          <button onClick={(e) => { e.stopPropagation(); confirmDelete(f) }} title="delete" style={{ ...btnDanger, padding: '4px 7px', fontSize: 10 }}><Fa icon={icons.delete} style={{ fontSize: 10 }} /></button>
+                        </div>
+                      </div>
+                    ))}
+                    {/* Drive-only matches — open in Drive, no local actions */}
+                    {(turn.drive_sources || []).slice(0, 6).map((m, j) => (
+                      <div key={'dr' + j} style={{
+                        ...cardStyle, padding: '10px 12px',
+                        display: 'flex', gap: 10, alignItems: 'flex-start',
+                        transition: 'transform 0.12s, border-color 0.12s',
+                      }}
+                        onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.borderColor = 'var(--reyna-accent)' }}
+                        onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.borderColor = '#ccc' }}
+                      >
+                        <IconBox icon={fileIconClass(m.mime_type, m.file_name)} color="#888" bg="rgba(0,0,0,0.04)" size={32} iconSize={12} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-color)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.file_name}</div>
+                          <div style={{ fontSize: 11, color: 'var(--sub-color)', marginTop: 2 }}>
+                            in drive · {m.folder_name || 'root'}
+                          </div>
+                          {m.sender_name && <div style={{ fontSize: 10, color: 'var(--reyna-accent)', marginTop: 2, fontWeight: 600 }}>by {m.sender_name}</div>}
+                        </div>
+                        <a href={`https://drive.google.com/file/d/${m.file_id}/view`} target="_blank" rel="noreferrer"
+                          title="open in drive"
+                          style={{ ...btnBase, padding: '4px 7px', fontSize: 10, textDecoration: 'none', alignSelf: 'flex-start' }}>
+                          <Fa icon={icons.link} style={{ fontSize: 10 }} />
+                        </a>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* reyna answer */}
+              <div style={{ ...cardStyle, padding: '14px 18px', maxWidth: '96%' }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--reyna-accent)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Fa icon="fa-crown" style={{ fontSize: 11 }} /> Reyna
+                  <Fa icon="fa-clock-rotate-left" style={{ fontSize: 11 }} /> reyna's recall
                 </div>
                 {turn.pending ? (
-                  <div style={{ fontSize: 13, color: 'var(--sub-color)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <Fa icon={icons.loading} spin style={{ fontSize: 12 }} /> thinking…
+                  <div style={{ fontSize: 13, color: 'var(--sub-color)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Fa icon={icons.loading} spin style={{ fontSize: 12 }} />
+                    recalling…
                   </div>
                 ) : (
                   <>
@@ -465,8 +538,8 @@ export default function Search() {
               </div>
             </div>
           ))}
-          {/* Follow-up call-to-action — clearly tells the user they can keep asking */}
-          {qaConversation.length > 0 && !qaConversation[qaConversation.length - 1].pending && (
+          {/* Follow-up call-to-action — unchanged shortcut chips + "ask another" button */}
+          {recallConversation.length > 0 && !recallConversation[recallConversation.length - 1].pending && (
             <div style={{
               display: 'flex', gap: 8, marginTop: 4, marginBottom: 8, flexWrap: 'wrap',
               alignItems: 'center',
@@ -496,6 +569,16 @@ export default function Search() {
         </div>
       )}
 
+      {/* ── OLD UI — kept commented for reference (NLP parsed tags + separate Q&A thread).
+          The render above replaces both. Uncomment only if you need to A/B compare. */}
+      {false && mode === 'nlp' && (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+          {[{ k: 'WHO' }, { k: 'WHAT' }, { k: 'WHEN' }, { k: 'WHY' }].map(t => (
+            <span key={t.k} style={{ padding: '4px 12px', borderRadius: 20, fontSize: 11, background: tagColors[t.k] + '15', color: tagColors[t.k] }}>{t.k}</span>
+          ))}
+        </div>
+      )}
+
       {/* Empty state */}
       {results === null && mode === 'search' ? (
         <div style={{ textAlign: 'center', padding: 60, color: 'var(--sub-color)' }}>
@@ -511,39 +594,34 @@ export default function Search() {
             ))}
           </div>
         </div>
-      ) : results === null && mode === 'nlp' ? (
-        <div style={{ textAlign: 'center', padding: 60, color: 'var(--sub-color)' }}>
-          <Fa icon="fa-comments" style={{ fontSize: 48, marginBottom: 14, opacity: 0.3 }} />
-          <p style={{ fontSize: 14 }}>ask naturally, like you would ask a friend</p>
-          <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 400, margin: '16px auto 0' }}>
-            {[
-              'What did Priya upload yesterday?',
-              'Do we have any OS notes?',
-              'Find the compiler lab manual',
-              "What's new since Monday?",
-            ].map(q => (
-              <button key={q} onClick={() => { setQuery(q); doNLPSearch(q) }} style={{
-                padding: '8px 14px', background: '#fff', border: '1px solid #eee', borderRadius: 'var(--roundness)',
-                fontSize: 12, cursor: 'pointer', color: 'var(--text-secondary)', textAlign: 'left',
-              }}>{q}</button>
-            ))}
+      ) : results === null && mode === 'recall' && recallConversation.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '40px 20px 60px', color: 'var(--sub-color)' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 18 }}>
+            <Fa icon="fa-clock-rotate-left" style={{ fontSize: 64, color: 'var(--reyna-accent)', opacity: 0.35 }} />
           </div>
-        </div>
-      ) : results === null && mode === 'qa' ? (
-        <div style={{ textAlign: 'center', padding: 60, color: 'var(--sub-color)' }}>
-          <Fa icon="fa-graduation-cap" style={{ fontSize: 48, marginBottom: 14, opacity: 0.3 }} />
-          <p style={{ fontSize: 14 }}>ask anything from your shared notes</p>
-          <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 400, margin: '16px auto 0' }}>
+          <p style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-color)', marginBottom: 4 }}>
+            one recall, everything your notes know
+          </p>
+          <p style={{ fontSize: 13, maxWidth: 460, margin: '0 auto' }}>
+            ask by meaning and reyna finds the files, summarises them properly, and answers in one reply. memories you've taught her shape every answer.
+          </p>
+          <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 460, margin: '20px auto 0' }}>
             {[
-              'Summarize Chapter 5',
-              'What are the types of scheduling algorithms?',
-              'Explain photosynthesis from our bio notes',
-              'What did the teacher say about integrals?',
+              'summarize the dbms notes mohit sent last week',
+              'what does the os syllabus say about scheduling?',
+              'find anything about compiler design',
+              'explain transactions from our notes',
             ].map(q => (
-              <button key={q} onClick={() => { setQuery(q); doQA(q) }} style={{
-                padding: '8px 14px', background: '#fff', border: '1px solid #eee', borderRadius: 'var(--roundness)',
-                fontSize: 12, cursor: 'pointer', color: 'var(--text-secondary)', textAlign: 'left',
-              }}>{q}</button>
+              <button key={q} onClick={() => { setQuery(q); doRecall(q) }} style={{
+                padding: '9px 14px', background: '#fff',
+                border: '1px solid #eee', borderLeft: '3px solid var(--reyna-accent)',
+                borderRadius: 'var(--roundness)',
+                fontSize: 12, cursor: 'pointer', color: '#444', textAlign: 'left',
+                transition: 'background 0.12s, border-color 0.12s',
+              }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#f5fdf8' }}
+                onMouseLeave={e => { e.currentTarget.style.background = '#fff' }}
+              >{q}</button>
             ))}
           </div>
         </div>
@@ -579,9 +657,9 @@ export default function Search() {
                   {f.content_summary && <div style={{ fontSize: 11, color: '#8b5cf6', marginTop: 2 }}><Fa icon="fa-brain" style={{ fontSize: 9, marginRight: 4 }} />{f.content_summary}</div>}
                 </div>
                 <div style={{ display: 'flex', gap: 3, flexShrink: 0 }}>
-                  <button onClick={() => openPreview(f)} title="Preview" style={{ ...btnBase, padding: '5px 8px' }}><Fa icon={icons.preview} style={{ fontSize: 11 }} /></button>
-                  <button onClick={() => downloadFile(f)} title="Download" style={{ ...btnBase, padding: '5px 8px' }}><Fa icon={icons.download} style={{ fontSize: 11 }} /></button>
-                  <button onClick={() => confirmDelete(f)} title="Delete" style={{ ...btnDanger, padding: '5px 8px' }}><Fa icon={icons.delete} style={{ fontSize: 11 }} /></button>
+                  <button onClick={() => openPreview(f)} title="preview" style={{ ...btnBase, padding: '5px 8px' }}><Fa icon={icons.preview} style={{ fontSize: 11 }} /></button>
+                  <button onClick={() => downloadFile(f)} title="download" style={{ ...btnBase, padding: '5px 8px' }}><Fa icon={icons.download} style={{ fontSize: 11 }} /></button>
+                  <button onClick={() => confirmDelete(f)} title="delete" style={{ ...btnDanger, padding: '5px 8px' }}><Fa icon={icons.delete} style={{ fontSize: 11 }} /></button>
                 </div>
               </div>
             ))}
@@ -605,7 +683,7 @@ export default function Search() {
           </div>
           <div style={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             {previewLoading ? <div style={{ color: 'var(--sub-color)' }}><Fa icon={icons.loading} spin /> loading...</div>
-            : previewData?.type === 'drive' ? <iframe src={previewData.url} style={{ width: '100%', height: '100%', border: 'none' }} title="Preview" />
+            : previewData?.type === 'drive' ? <iframe src={previewData.url} style={{ width: '100%', height: '100%', border: 'none' }} title="preview" />
             : previewData?.type === 'image' ? <img src={previewData.url} alt="" style={{ maxWidth: '95%', maxHeight: '95%', borderRadius: 'var(--roundness)', objectFit: 'contain' }} />
             : previewData?.type === 'text' ? <div style={{ width: '100%', height: '100%', overflow: 'auto', padding: '20px 28px', background: '#fff' }}><pre style={{ fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.7, whiteSpace: 'pre-wrap', color: 'var(--text-color)', margin: 0 }}>{previewData.content}</pre></div>
             : <div style={{ color: 'var(--sub-color)', textAlign: 'center' }}><Fa icon={icons.file} style={{ fontSize: 48, color: '#1a1a1a', marginBottom: 12 }} /><p>no preview available</p><button onClick={() => downloadFile(previewFile)} style={{ ...btnPrimary, marginTop: 12 }}><Fa icon={icons.download} /> download</button></div>}
@@ -617,7 +695,7 @@ export default function Search() {
       {deleteTarget && createPortal(
         <div onClick={() => setDeleteTarget(null)} style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 99999 }}>
           <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 'var(--roundness)', padding: 28, maxWidth: 420, width: '90vw', border: '1.5px solid #ccc', boxShadow: '0 25px 60px rgba(0,0,0,0.15), 0 8px 20px rgba(0,0,0,0.1)' }}>
-            <h3 style={{ fontSize: 20, fontWeight: 700, letterSpacing: -0.3, color: 'var(--error-color)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}><Fa icon={icons.warning} style={{ fontSize: 14 }} /> Delete File?</h3>
+            <h3 style={{ fontSize: 20, fontWeight: 700, letterSpacing: -0.3, color: 'var(--error-color)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}><Fa icon={icons.warning} style={{ fontSize: 14 }} /> delete file?</h3>
             <p style={{ fontSize: 14, color: 'var(--text-secondary, #555)', lineHeight: 1.6, marginBottom: 24 }}>delete <strong style={{ color: 'var(--text-color)' }}>{deleteTarget.file_name}</strong>? moves to drive trash (30 day recovery).</p>
             <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
               <button onClick={() => setDeleteTarget(null)} style={btnBase}>cancel</button>
@@ -626,6 +704,7 @@ export default function Search() {
           </div>
         </div>, document.body
       )}
+      </div>{/* ← closes the zIndex:1 content wrapper */}
     </div>
   )
 }

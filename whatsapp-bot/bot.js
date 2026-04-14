@@ -10,7 +10,23 @@ const path = require('path');
 
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8080';
 const AUTH_DIR = process.env.AUTH_DIR || './auth_state';
+// Optional STT keys — if both are empty, WhatsApp voice notes are ignored
+// (documents and text messages still work normally).
+const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || '';
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const logger = pino({ level: 'silent' });
+
+// Silence libsignal's "Closing session: SessionEntry { ... }" console.log
+// spam that happens during normal key rotation. It leaks past pino because
+// it's a direct console.log in the crypto library. Harmless but very noisy.
+const _origConsoleLog = console.log;
+console.log = (...args) => {
+  const first = typeof args[0] === 'string' ? args[0] : '';
+  if (first.startsWith('Closing session:') || first.startsWith('Closing open session in favor of')) {
+    return;
+  }
+  _origConsoleLog(...args);
+};
 
 // ─── State ───
 let enabledGroups = new Set();   // WA group JIDs that Reyna is active in
@@ -171,6 +187,68 @@ async function sendCommand(groupJid, command, userPhone, userName, extra) {
   } catch (err) {
     console.error('Backend error:', err.message);
     return { reply: 'Could not reach backend.' };
+  }
+}
+
+// transcribeVoiceNote converts a WhatsApp voice-note buffer to text. Tries
+// Deepgram first (cheap, fast, great for phone audio), then OpenAI Whisper.
+// Returns '' when no provider is configured — the caller should no-op.
+async function transcribeVoiceNote(buffer, mimeType) {
+  if (DEEPGRAM_API_KEY) {
+    try {
+      const res = await fetch('https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&language=en', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Token ${DEEPGRAM_API_KEY}`,
+          'Content-Type': mimeType || 'audio/ogg',
+        },
+        body: buffer,
+      });
+      const data = await res.json();
+      const transcript = data?.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
+      return transcript.trim();
+    } catch (err) {
+      console.error('  [STT] Deepgram error:', err.message);
+      return '';
+    }
+  }
+  if (OPENAI_API_KEY) {
+    try {
+      const form = new FormData();
+      form.append('file', new Blob([buffer], { type: mimeType || 'audio/ogg' }), 'voice.ogg');
+      form.append('model', 'whisper-1');
+      const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}` },
+        body: form,
+      });
+      const data = await res.json();
+      return (data?.text || '').trim();
+    } catch (err) {
+      console.error('  [STT] Whisper error:', err.message);
+      return '';
+    }
+  }
+  return '';
+}
+
+// forwardVoiceNote sends the transcript to Reyna's voice-note endpoint.
+// The backend runs the usual Recall + Memory pipeline and returns an answer
+// we can reply with in-chat.
+async function forwardVoiceNote(groupJid, userPhone, userName, transcript) {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/bot/voice-note`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        group_wa_id: groupJid, user_phone: userPhone, user_name: userName || '',
+        transcript,
+      }),
+    });
+    return await res.json();
+  } catch (err) {
+    console.error('  [VOICE-NOTE] forward error:', err.message);
+    return null;
   }
 }
 
@@ -1012,6 +1090,40 @@ async function handleMessage(sock, msg) {
     return;
   }
 
+  // ── Voice notes (Reyna Live over WhatsApp) ──
+  // Users can send a voice note asking Reyna anything — we transcribe it
+  // via Deepgram/Whisper, run Recall, and reply with the answer as text.
+  if (messageType === 'audioMessage') {
+    const audio = msg.message.audioMessage;
+    if (!audio) return;
+    if (!DEEPGRAM_API_KEY && !OPENAI_API_KEY) {
+      console.log(`  [VOICE-NOTE] ignored — no STT provider configured`);
+      return;
+    }
+    try {
+      const buffer = await downloadMediaMessage(msg, 'buffer', {}, {
+        logger, reuploadRequest: sock.updateMediaMessage,
+      });
+      console.log(`  [VOICE-NOTE] from ${pushName} (${(buffer.length / 1024).toFixed(0)}KB) — transcribing…`);
+      const transcript = await transcribeVoiceNote(buffer, audio.mimetype || 'audio/ogg');
+      if (!transcript) {
+        console.log(`  [VOICE-NOTE] empty transcript — skipping`);
+        return;
+      }
+      console.log(`  [VOICE-NOTE] transcript: "${transcript}"`);
+      const result = await forwardVoiceNote(chat, senderPhone, pushName, transcript);
+      if (result?.answer) {
+        await sock.sendMessage(chat, {
+          text: `🎙️ *"${transcript}"*\n\n${result.answer}`,
+        }, { quoted: msg });
+        console.log(`  [VOICE-NOTE] replied (${result.answer.length} chars)`);
+      }
+    } catch (err) {
+      console.error(`  [VOICE-NOTE] error: ${err.message}`);
+    }
+    return;
+  }
+
   // ── Track document shares ──
   if (messageType === 'documentMessage' || messageType === 'documentWithCaptionMessage') {
     const doc = msg.message.documentMessage ||
@@ -1316,7 +1428,18 @@ async function startBot() {
   // Process messages sequentially with a small gap between each one.
   // When 6 files land in one batch, this spaces out the downloads +
   // uploads + reactions so WhatsApp doesn't throttle the reactions.
-  sock.ev.on('messages.upsert', async ({ messages }) => {
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    // Baileys fires this event for BOTH live messages AND history sync.
+    //   notify  — real live message, needs processing
+    //   append  — old history being replayed into the store (can be a huge
+    //             flood on first connect, days worth of chats)
+    //   prepend — same, older direction
+    //   replace — message update (edit)
+    // We only ever want to act on notify. Skipping the rest avoids (a) log
+    // spam on startup and (b) re-processing old commands like /reyna init
+    // that show up in history.
+    if (type !== 'notify') return;
+
     for (let i = 0; i < messages.length; i++) {
       try {
         await handleMessage(sock, messages[i]);

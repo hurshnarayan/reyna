@@ -17,9 +17,11 @@ import (
 	"github.com/hurshnarayan/reyna/internal/config"
 	"github.com/hurshnarayan/reyna/internal/repository"
 	"github.com/hurshnarayan/reyna/internal/integrations/gdrive"
+	"github.com/hurshnarayan/reyna/internal/integrations/llm"
 	"github.com/hurshnarayan/reyna/internal/model"
 	"github.com/hurshnarayan/reyna/internal/nlp"
 	"github.com/hurshnarayan/reyna/internal/reyna"
+	"github.com/hurshnarayan/reyna/internal/search"
 )
 
 type Server struct {
@@ -28,6 +30,9 @@ type Server struct {
 	drive       *gdrive.Service
 	reyna       *reyna.Reyna
 	classifier  *nlp.Classifier
+	search      *search.Service
+	llm         llm.Provider
+	jobs        *jobRegistry
 	mux         *http.ServeMux
 	uploadLocks sync.Map // groupID(int64) → *sync.Mutex — serializes bot uploads per-group to prevent race-condition duplicates
 }
@@ -62,8 +67,8 @@ func looksLikePhoneOrLID(s string) bool {
 	return false
 }
 
-func NewServer(cfg *config.Config, store *repository.Store, drive *gdrive.Service, classifier *nlp.Classifier) *Server {
-	s := &Server{cfg: cfg, store: store, drive: drive, reyna: reyna.New(), classifier: classifier, mux: http.NewServeMux()}
+func NewServer(cfg *config.Config, store *repository.Store, drive *gdrive.Service, classifier *nlp.Classifier, searchSvc *search.Service, llmProvider llm.Provider) *Server {
+	s := &Server{cfg: cfg, store: store, drive: drive, reyna: reyna.New(), classifier: classifier, search: searchSvc, llm: llmProvider, jobs: newJobRegistry(), mux: http.NewServeMux()}
 	s.routes()
 	return s
 }
@@ -130,6 +135,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/drive/folder/create", protected(s.handleDriveFolderCreate))
 	s.mux.HandleFunc("/api/drive/folder/rename", protected(s.handleDriveFolderRename))
 	s.mux.HandleFunc("/api/drive/folder/delete", protected(s.handleDriveFolderDelete))
+	s.mux.HandleFunc("/api/drive/ingest", protected(s.handleDriveIngest))
+	s.mux.HandleFunc("/api/drive/ingest/status", protected(s.handleDriveIngestStatus))
+	s.mux.HandleFunc("/api/jobs/status", protected(s.handleJobsStatus))
 
 	// v3 — NLP Retrieval + Q&A + LLM status
 	// retrieve and qa use wrap (not protected) so bot can call them too,
@@ -137,6 +145,42 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/nlp/retrieve", wrap(s.handleNLPRetrieve))
 	s.mux.HandleFunc("/api/nlp/qa", wrap(s.handleNotesQA))
 	s.mux.HandleFunc("/api/llm/status", wrap(s.handleLLMStatus))
+
+	// v4 — Qdrant backfill. Re-embeds every file in the user's accessible
+	// groups that has extracted_content but isn't yet in the vector DB.
+	// Rate-limited internally (~5 files/sec) so it doesn't thrash Gemini.
+	s.mux.HandleFunc("/api/recall/backfill", protected(s.handleRecallBackfill))
+
+	// v4 — Reyna's Recall (semantic-enabled aliases of retrieve/qa) and
+	// Reyna's Memory (persistent user context).
+	s.mux.HandleFunc("/api/recall/search", wrap(s.handleNLPRetrieve))
+	s.mux.HandleFunc("/api/recall/ask", wrap(s.handleNotesQA))
+	s.mux.HandleFunc("/api/memory", protected(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			s.handleMemoryList(w, r)
+		case "POST":
+			s.handleMemoryCreate(w, r)
+		default:
+			http.Error(w, `{"error":"method not allowed"}`, 405)
+		}
+	}))
+	s.mux.HandleFunc("/api/memory/update", protected(s.handleMemoryUpdate))
+	s.mux.HandleFunc("/api/memory/toggle", protected(s.handleMemoryToggle))
+	s.mux.HandleFunc("/api/memory/delete", protected(s.handleMemoryDelete))
+
+	// v4 — Reyna Live (Vapi voice tool webhooks). Secret-authed via header.
+	s.mux.HandleFunc("/api/voice/config", wrap(s.handleVoiceConfig))
+	s.mux.HandleFunc("/api/voice/tools/recall-search", wrap(s.handleVoiceRecallSearch))
+	s.mux.HandleFunc("/api/voice/tools/recall-ask", wrap(s.handleVoiceRecallAsk))
+	s.mux.HandleFunc("/api/voice/tools/list-recent", wrap(s.handleVoiceListRecent))
+	s.mux.HandleFunc("/api/voice/tools/list-memories", wrap(s.handleVoiceListMemories))
+	s.mux.HandleFunc("/api/voice/tools/add-memory", wrap(s.handleVoiceAddMemory))
+	s.mux.HandleFunc("/api/voice/tools/toggle-memory", wrap(s.handleVoiceToggleMemory))
+	s.mux.HandleFunc("/api/voice/tools/commit-staged", wrap(s.handleVoiceCommitStaged))
+
+	// Bot: handle incoming WhatsApp voice notes for Recall.
+	s.mux.HandleFunc("/api/bot/voice-note", wrap(s.handleBotVoiceNote))
 }
 
 // ── Health ──
@@ -219,7 +263,16 @@ func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
 	}
 	groups, _ := s.store.GetUserGroups(uid)
 	if groups == nil { groups = []model.Group{} }
-	json.NewEncoder(w).Encode(groups)
+	// Hide synthetic "My Drive" personal groups from the WhatsApp-groups
+	// list. Same reason as the group-settings endpoint: they're not chats.
+	filtered := groups[:0]
+	for _, g := range groups {
+		if strings.HasPrefix(g.WAID, "personal:") {
+			continue
+		}
+		filtered = append(filtered, g)
+	}
+	json.NewEncoder(w).Encode(filtered)
 }
 
 // ── Files ──
@@ -753,14 +806,41 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Content extraction
-		if extractedContent != "" {
-			s.store.UpdateFileContent(fileID, extractedContent, contentSummary)
-			log.Printf("[EXTRACT] Combined: %s → %s", fName, contentSummary)
+		finalContent := extractedContent
+		finalSummary := contentSummary
+		if finalContent != "" {
+			s.store.UpdateFileContent(fileID, finalContent, finalSummary)
+			log.Printf("[EXTRACT] Combined: %s → %s", fName, finalSummary)
 		} else {
 			content, summary := s.classifier.ExtractContent(fName, mime, fSize, data)
 			if content != "" {
 				s.store.UpdateFileContent(fileID, content, summary)
+				finalContent = content
+				finalSummary = summary
 				log.Printf("[EXTRACT] Async: %s → %s", fName, summary)
+			}
+		}
+
+		// Index to Qdrant for Reyna's Recall (semantic search). No-op if search
+		// service is disabled. Done after extraction so we index the richest text.
+		if s.search.IsEnabled() && finalContent != "" {
+			file, _ := s.store.GetFileByID(fileID)
+			if file != nil {
+				groupName := ""
+				if group != nil {
+					groupName = group.Name
+				}
+				meta := search.FileMetadata{
+					FileID: file.ID, UserID: file.UserID, GroupID: file.GroupID,
+					FileName: file.FileName, Subject: file.Subject,
+					SenderName: file.SharedByName, GroupName: groupName,
+					SharedAt: file.CreatedAt, Summary: finalSummary,
+				}
+				if err := s.search.IndexFile(meta, finalContent); err != nil {
+					log.Printf("[RECALL] index file %d failed: %v", file.ID, err)
+				} else {
+					log.Printf("[RECALL] indexed %s", fName)
+				}
 			}
 		}
 	}(saved.ID, groupID, fileName, mimeType, fileSize, fileBytes, group)
@@ -944,11 +1024,43 @@ func (s *Server) handleRemoveStaged(w http.ResponseWriter, r *http.Request) {
 }
 
 // ── Commit Staged Files (from dashboard) ──
+// handleCommitStaged kicks off an async "push staged files to Drive" job
+// and returns immediately. The actual upload work happens in a goroutine
+// so the UI can switch tabs or sit idle without aborting the push. The
+// frontend polls /api/jobs/status to surface a sticky progress pill.
 func (s *Server) handleCommitStaged(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
 	uid := auth.GetUserID(r)
+	job, fresh := s.jobs.start(uid, JobKindPushStaged)
+	if !fresh {
+		// Already in progress — return the existing job so the frontend
+		// can show the pill without starting a duplicate push.
+		json.NewEncoder(w).Encode(job)
+		return
+	}
+	go s.runCommitStaged(uid)
+	json.NewEncoder(w).Encode(job)
+}
 
+// runCommitStaged is the goroutine body for push-staged. Mirrors the old
+// sync handler's semantics — walks every group the user has staged files
+// in, uploads what's eligible to Drive, then marks the DB rows committed.
+// Differs only in that it reports progress into the job registry so the
+// dashboard can show "pushing 7/12..." even after the user leaves the
+// Files tab.
+func (s *Server) runCommitStaged(uid int64) {
 	gids := s.store.GetUserGroupIDs(uid)
+	// Total = sum of staged across all groups. Seed it so the progress
+	// bar has a meaningful denominator from the first frame.
+	total := 0
+	for _, gid := range gids {
+		staged, _ := s.store.GetStagedFiles(gid)
+		total += len(staged)
+	}
+	s.jobs.update(uid, JobKindPushStaged, func(j *Job) {
+		j.Total = total; j.Message = "starting push..."
+	})
+
 	totalCommitted := int64(0)
 	totalUploaded := 0
 
@@ -968,18 +1080,21 @@ func (s *Server) handleCommitStaged(w http.ResponseWriter, r *http.Request) {
 			token, terr := s.drive.GetValidToken(driveUser.GoogleToken, driveUser.GoogleRefresh, 0)
 			if terr == nil {
 				s.store.UpdateUserGoogle(driveUser.ID, driveUser.Email, token, driveUser.GoogleRefresh, driveUser.DriveRootID)
-				// Upload all files concurrently
 				sem := make(chan struct{}, 10)
 				var uploadMu sync.Mutex
 				var wg sync.WaitGroup
 				for _, f := range staged {
-					// Skip files still being classified
 					if f.Subject == "classifying..." { continue }
 					wg.Add(1)
 					go func(f model.File) {
 						defer wg.Done()
 						sem <- struct{}{}
 						defer func() { <-sem }()
+						// Note the file we're working on so the pill can
+						// show "pushing <filename>".
+						s.jobs.update(uid, JobKindPushStaged, func(j *Job) {
+							j.Message = "pushing " + f.FileName
+						})
 						folderID, ferr := s.drive.EnsureSubjectFolder(token, driveUser.DriveRootID, f.Subject)
 						if ferr != nil { return }
 						fileData, _ := s.drive.GetLocalFileData(f.ID)
@@ -991,8 +1106,12 @@ func (s *Server) handleCommitStaged(w http.ResponseWriter, r *http.Request) {
 							uploadMu.Lock()
 							totalUploaded++
 							uploadMu.Unlock()
+							s.jobs.update(uid, JobKindPushStaged, func(j *Job) {
+								j.Done = totalUploaded
+							})
 						} else if uerr != nil {
 							log.Printf("⚠️  Drive upload failed for %s: %v", f.FileName, uerr)
+							s.jobs.update(uid, JobKindPushStaged, func(j *Job) { j.Errored++ })
 						}
 					}(f)
 				}
@@ -1005,10 +1124,34 @@ func (s *Server) handleCommitStaged(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[DASHBOARD-COMMIT] user=%d committed=%d uploaded=%d", uid, totalCommitted, totalUploaded)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"committed": totalCommitted,
-		"uploaded":  totalUploaded,
+	s.jobs.update(uid, JobKindPushStaged, func(j *Job) {
+		j.Done = totalUploaded
+		j.Total = total
 	})
+	msg := "committed " + fmt.Sprintf("%d", totalCommitted) + " files"
+	if totalUploaded > 0 {
+		msg += ", " + fmt.Sprintf("%d", totalUploaded) + " uploaded to drive"
+	}
+	s.jobs.finish(uid, JobKindPushStaged, JobStateDone, msg)
+}
+
+// handleJobsStatus returns the current state of every kind of background
+// job for the caller in one roundtrip. Frontend polls this once to render
+// the progress pill regardless of which tab is active.
+func (s *Server) handleJobsStatus(w http.ResponseWriter, r *http.Request) {
+	uid := auth.GetUserID(r)
+	if uid == 0 {
+		http.Error(w, `{"error":"unauthorized"}`, 401)
+		return
+	}
+	out := map[string]any{}
+	if j := s.jobs.get(uid, JobKindIngestDrive); j != nil {
+		out["ingest_drive"] = j
+	}
+	if j := s.jobs.get(uid, JobKindPushStaged); j != nil {
+		out["push_staged"] = j
+	}
+	json.NewEncoder(w).Encode(out)
 }
 
 // ── File Suggest (autocomplete) ──
@@ -1376,6 +1519,12 @@ func (s *Server) handleGroupSettings(w http.ResponseWriter, r *http.Request) {
 		groups, _ := s.store.GetAllGroups()
 		var result []map[string]interface{}
 		for _, g := range groups {
+			// Skip synthetic "My Drive" personal groups. They exist in the
+			// schema so Recall can scope files, but they're not WhatsApp
+			// groups — the Active Groups UI is about bot-monitored chats.
+			if strings.HasPrefix(g.WAID, "personal:") {
+				continue
+			}
 			gs := s.store.GetGroupSettings(g.ID)
 			// Only show groups that aren't hidden. Hidden groups were removed
 			// via the "remove group" button and only come back via /reyna init.
@@ -1614,11 +1763,21 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 		}
 		if userID > 0 {
 			groupIDs = s.store.GetUserGroupIDs(userID)
+			// Auto-link fallback — mirrors handleFiles's behaviour so a
+			// dashboard user who hasn't yet been stitched into group_members
+			// doesn't see empty Recall results even though their files exist.
+			if len(groupIDs) == 0 {
+				if user, _ := s.store.GetUserByID(userID); user != nil {
+					s.store.AutoLinkUserToGroups(userID, user.Phone)
+					groupIDs = s.store.GetUserGroupIDs(userID)
+				}
+			}
 		}
 		// Fallback: if from bot (no JWT), get groups from phone
 		if len(groupIDs) == 0 && req.UserPhone != "" {
 			user, err := s.store.GetUserByPhone(req.UserPhone)
 			if err == nil {
+				s.store.AutoLinkUserToGroups(user.ID, user.Phone)
 				groupIDs = s.store.GetUserGroupIDs(user.ID)
 			}
 		}
@@ -1647,12 +1806,42 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("[NLP-RETRIEVE] db_files=%d drive_matches=%d (after metadata pass)", len(files), len(driveMatches))
 
+	// ── Semantic search via Qdrant (Reyna's Recall) ──
+	// Augments the keyword/metadata search above with meaning-based matches.
+	// A file called asn2_v3.pdf about gradient descent will surface here for
+	// a query like "that ML assignment on gradients" even though no token
+	// matches. When semantic finds hits we skip the expensive deep retrieve.
+	semanticFound := false
+	if s.search.IsEnabled() {
+		if hits, err := s.search.SearchFiles(req.Query, groupIDs, 10); err == nil && len(hits) > 0 {
+			seen := map[int64]bool{}
+			merged := make([]model.File, 0, len(hits)+len(files))
+			for _, h := range hits {
+				file, err := s.store.GetFileByID(h.FileID)
+				if err == nil && file != nil && !seen[file.ID] {
+					merged = append(merged, *file)
+					seen[file.ID] = true
+				}
+			}
+			for _, f := range files {
+				if !seen[f.ID] {
+					merged = append(merged, f)
+					seen[f.ID] = true
+				}
+			}
+			files = merged
+			semanticFound = true
+			log.Printf("[RECALL] merged %d semantic hits → %d total", len(hits), len(files))
+		}
+	}
+
 	// ── Deep content retrieval (Fix 3 from earlier) ──
-	// If metadata search returned nothing, OR the query has specific content
+	// If metadata + semantic both missed, OR the query has specific content
 	// cues that metadata can't catch ("the diagram with R1 R2", "the page
 	// mentioning Wien bridge"), send candidate PDFs to Gemini and ask which
 	// ones actually match. Cost: ~₹0.05 per candidate, capped at 5.
-	if len(files) == 0 || hasContentCues(req.Query) {
+	// Skipped when semantic already found strong hits — Qdrant is cheaper.
+	if (!semanticFound && len(files) == 0) || hasContentCues(req.Query) {
 		log.Printf("[NLP-RETRIEVE] triggering deep content retrieval")
 		deepHits := s.deepContentRetrieve(groupIDs, req.Query, who, sinceTime, 5)
 		if len(deepHits) > 0 {
@@ -2206,8 +2395,16 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get group IDs
+	// Get group IDs + resolve userID (needed for Memory context below).
 	var groupIDs []int64
+	userID := int64(0)
+	if authHeader := r.Header.Get("Authorization"); authHeader != "" {
+		if parts := strings.SplitN(authHeader, " ", 2); len(parts) == 2 {
+			if uid, err := auth.ValidateToken(parts[1], s.cfg.JWTSecret); err == nil {
+				userID = uid
+			}
+		}
+	}
 	if req.GroupWAID != "" {
 		group, err := s.store.GetGroupByWAID(req.GroupWAID)
 		if err == nil {
@@ -2215,21 +2412,28 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(groupIDs) == 0 {
-		userID := int64(0)
-		if authHeader := r.Header.Get("Authorization"); authHeader != "" {
-			if parts := strings.SplitN(authHeader, " ", 2); len(parts) == 2 {
-				if uid, err := auth.ValidateToken(parts[1], s.cfg.JWTSecret); err == nil {
-					userID = uid
-				}
-			}
-		}
 		if userID > 0 {
 			groupIDs = s.store.GetUserGroupIDs(userID)
+			// Auto-link: if the user hasn't yet been stitched into group_members
+			// for the groups they own files in, do it now based on their phone.
+			// Without this, dashboard users who hadn't used /reyna init from
+			// within the group end up with groupIDs=[] here, which silently
+			// returns "no notes found" even when files clearly exist.
+			if len(groupIDs) == 0 {
+				if user, _ := s.store.GetUserByID(userID); user != nil {
+					s.store.AutoLinkUserToGroups(userID, user.Phone)
+					groupIDs = s.store.GetUserGroupIDs(userID)
+				}
+			}
 		}
 		if len(groupIDs) == 0 && req.UserPhone != "" {
 			user, err := s.store.GetUserByPhone(req.UserPhone)
 			if err == nil {
+				s.store.AutoLinkUserToGroups(user.ID, user.Phone)
 				groupIDs = s.store.GetUserGroupIDs(user.ID)
+				if userID == 0 {
+					userID = user.ID
+				}
 			}
 		}
 	}
@@ -2267,13 +2471,46 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 	//    like "what did mohit share about oscillators today?" filters by sender
 	//    AND time AND topic, not just topic.
 	relevantFiles, _ := s.store.SearchFilesNLP(groupIDs, who, what, sinceTime, 5)
+	// Loosening ladder — each step drops a constraint so we don't bail to
+	// "no files found" just because the keyword fallback produced junk
+	// tokens. Order matters: we peel off the least-informative filter first.
+	if len(relevantFiles) == 0 && who != "" {
+		// WHO alone — "anything by harsh" should return harsh's files even
+		// if the junk tokens ("anything") match nothing in filename/content.
+		relevantFiles, _ = s.store.SearchFilesNLP(groupIDs, who, "", nil, 5)
+	}
 	if len(relevantFiles) == 0 {
-		// Loosen: drop the time/who filter and try content-only
+		// Drop time/who, try content-only.
 		relevantFiles, _ = s.store.SearchFilesContent(groupIDs, what, 5)
 	}
 	if len(relevantFiles) == 0 {
-		// Last loosening: drop everything but recency
+		// Last loosening: content only, no time filter.
 		relevantFiles, _ = s.store.SearchFilesNLP(groupIDs, "", what, nil, 5)
+	}
+	if len(relevantFiles) == 0 && who == "" && strings.TrimSpace(what) != "" {
+		// Very last resort: fall back to most-recent files in the user's
+		// groups so vague questions ("hi", "any notes?") at least get context.
+		relevantFiles, _ = s.store.GetGroupsFiles(groupIDs, 3)
+	}
+
+	// 1b. Semantic search (Reyna's Recall). Merge Qdrant hits with the
+	//     metadata-ranked files so meaning-based matches surface too.
+	if s.search.IsEnabled() {
+		if hits, err := s.search.SearchFiles(req.Question, groupIDs, 5); err == nil && len(hits) > 0 {
+			seen := map[int64]bool{}
+			for _, f := range relevantFiles {
+				seen[f.ID] = true
+			}
+			for _, h := range hits {
+				if seen[h.FileID] {
+					continue
+				}
+				if file, err := s.store.GetFileByID(h.FileID); err == nil && file != nil {
+					relevantFiles = append(relevantFiles, *file)
+					seen[file.ID] = true
+				}
+			}
+		}
 	}
 
 	// 2. Drive folder walker — files organised in Drive that the bot never captured.
@@ -2285,6 +2522,10 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 	//    summary to keep cost/latency sane.
 	var qaSources []nlp.QASource
 	var sourceNames []string
+	// filesUsed mirrors qaSources for DB-backed files. Powers the unified
+	// Recall UI so the frontend can render sender/timestamp/subject cards
+	// alongside the answer without a second round-trip.
+	var filesUsed []model.File
 
 	for i, f := range relevantFiles {
 		if i >= 3 {
@@ -2330,6 +2571,7 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 			SharedAt:   f.CreatedAt.In(istLocation),
 		})
 		sourceNames = append(sourceNames, f.FileName)
+		filesUsed = append(filesUsed, f)
 	}
 
 	// 4. Drive-only hits: download the top 2 matching PDFs and extract live.
@@ -2383,6 +2625,19 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ── Inject Reyna's Memory as pseudo-sources ──
+	// Always-include memories go first (prepended to every Recall). Then, if
+	// Qdrant is up, semantically-relevant memory chunks get added so large
+	// memories (a full syllabus) only bring in the parts that matter.
+	if userID > 0 {
+		memSources := s.collectMemorySources(userID, req.Question)
+		if len(memSources) > 0 {
+			// Prepend so they appear first in the LLM's context (higher weight).
+			qaSources = append(memSources, qaSources...)
+			log.Printf("[QA] injected %d memory sources for user %d", len(memSources), userID)
+		}
+	}
+
 	var prev *nlp.QAFollowup
 	if req.PreviousQuestion != "" && req.PreviousAnswer != "" {
 		prev = &nlp.QAFollowup{
@@ -2397,6 +2652,7 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(model.NotesQAResponse{
 		Answer:       answer,
 		Sources:      sourceNames,
+		Files:        filesUsed,
 		DriveSources: driveMatches,
 		Question:     req.Question,
 	})

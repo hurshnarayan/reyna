@@ -15,6 +15,7 @@ import (
 	"github.com/hurshnarayan/reyna/internal/integrations/gdrive"
 	"github.com/hurshnarayan/reyna/internal/integrations/llm"
 	"github.com/hurshnarayan/reyna/internal/nlp"
+	"github.com/hurshnarayan/reyna/internal/search"
 )
 
 func main() {
@@ -41,8 +42,18 @@ func main() {
 		log.Printf("   LLM: keyword-only (set ANTHROPIC_API_KEY, GEMINI_API_KEY, or XAI_API_KEY)")
 	}
 
+	// Initialize semantic search (Qdrant + Gemini embeddings)
+	// Powers Reyna's Recall and Memory. Disabled gracefully if QDRANT_URL
+	// or GEMINI_API_KEY is empty — falls back to keyword search.
+	searchSvc := search.New(cfg.QdrantURL, cfg.QdrantAPIKey, cfg.GeminiAPIKey)
+	if searchSvc.IsEnabled() {
+		log.Printf("   Search: Qdrant (semantic) at %s", cfg.QdrantURL)
+	} else {
+		log.Printf("   Search: keyword-only (set QDRANT_URL + GEMINI_API_KEY for Recall)")
+	}
+
 	// Initialize API server
-	server := api.NewServer(cfg, store, drive, classifier)
+	server := api.NewServer(cfg, store, drive, classifier, searchSvc, llmProvider)
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
 	log.Printf("Reyna backend starting on %s", addr)

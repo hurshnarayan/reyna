@@ -100,6 +100,24 @@ type WaitlistEntry struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// UserMemory is a persistent piece of context a user has asked Reyna to
+// remember — their syllabus, exam schedule, study style, etc. Powers
+// Reyna's Memory feature. Small entries with always_include=true are
+// prepended to every Recall prompt; larger entries are embedded to Qdrant
+// and recalled semantically when relevant.
+type UserMemory struct {
+	ID             int64     `json:"id"`
+	UserID         int64     `json:"user_id"`
+	Title          string    `json:"title"`
+	Content        string    `json:"content"`
+	Source         string    `json:"source"`           // "paste" | "file_upload" | "voice"
+	SourceFileName string    `json:"source_file_name"` // original filename if uploaded
+	IsActive       bool      `json:"is_active"`
+	AlwaysInclude  bool      `json:"always_include"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
 // --- API Request/Response types ---
 
 type LoginRequest struct {
@@ -258,6 +276,11 @@ type NotesQARequest struct {
 type NotesQAResponse struct {
 	Answer       string       `json:"answer"`
 	Sources      []string     `json:"sources"` // filenames used
+	// Files carries the full metadata (sender, timestamp, subject, id) for
+	// the files that informed the answer. Powers the unified Recall UI that
+	// shows who shared what, when, alongside the answer. Never includes the
+	// synthetic [Memory] pseudo-sources — those are not real files.
+	Files        []File       `json:"files,omitempty"`
 	DriveSources []DriveMatch `json:"drive_sources,omitempty"`
 	Question     string       `json:"question"`
 }

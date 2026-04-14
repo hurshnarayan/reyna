@@ -111,6 +111,18 @@ func (s *Store) migrate() error {
 		auto_commit_hours INTEGER DEFAULT 24,
 		reaction_emoji TEXT DEFAULT '📌'
 	);
+	CREATE TABLE IF NOT EXISTS user_memories (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL REFERENCES users(id),
+		title TEXT NOT NULL,
+		content TEXT DEFAULT '',
+		source TEXT DEFAULT 'paste',
+		source_file_name TEXT DEFAULT '',
+		is_active INTEGER DEFAULT 1,
+		always_include INTEGER DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
 	CREATE INDEX IF NOT EXISTS idx_files_group ON files(group_id);
 	CREATE INDEX IF NOT EXISTS idx_files_user ON files(user_id);
 	CREATE INDEX IF NOT EXISTS idx_files_name ON files(file_name);
@@ -118,6 +130,7 @@ func (s *Store) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);
 	CREATE INDEX IF NOT EXISTS idx_files_created ON files(created_at);
 	CREATE INDEX IF NOT EXISTS idx_activity_group ON activity_log(group_id);
+	CREATE INDEX IF NOT EXISTS idx_memories_user ON user_memories(user_id);
 	`
 	_, err := s.db.Exec(schema)
 	if err != nil {
@@ -1506,4 +1519,231 @@ func (s *Store) GetFileExtractedContent(fileIDs []int64) map[int64]string {
 		result[id] = content
 	}
 	return result
+}
+
+// OnlyUserIfSingle returns the sole user in the DB when exactly one exists,
+// otherwise nil. Used by the voice-tool fallback path so a dev environment
+// with a single dashboard user still works even if the web SDK forgot to
+// stash a phone in variableValues.
+func (s *Store) OnlyUserIfSingle() *model.User {
+	var n int
+	s.db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n)
+	if n != 1 {
+		return nil
+	}
+	u := &model.User{}
+	err := s.db.QueryRow(
+		`SELECT id, phone, name, email, google_token, google_refresh, drive_root_id, created_at, updated_at FROM users LIMIT 1`,
+	).Scan(&u.ID, &u.Phone, &u.Name, &u.Email, &u.GoogleToken, &u.GoogleRefresh, &u.DriveRootID, &u.CreatedAt, &u.UpdatedAt)
+	if err != nil {
+		return nil
+	}
+	return u
+}
+
+// FindUserByPhoneLoose matches a phone even if the caller-provided form
+// differs in punctuation, country-code presence, or uses a LID. Tries:
+//   1. exact match (normalised)
+//   2. suffix match on the last 10 digits (handles +91xxx vs xxx)
+// Returns nil if no plausible user is found.
+func (s *Store) FindUserByPhoneLoose(phone string) *model.User {
+	clean := strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return r
+		}
+		return -1
+	}, phone)
+	if clean == "" {
+		return nil
+	}
+	// Take the last 10 digits for suffix matching (standard mobile length).
+	suffix := clean
+	if len(suffix) > 10 {
+		suffix = suffix[len(suffix)-10:]
+	}
+	rows, err := s.db.Query(
+		`SELECT id, phone, name, email, google_token, google_refresh, drive_root_id, created_at, updated_at
+		 FROM users WHERE REPLACE(REPLACE(REPLACE(phone,'+',''),' ',''),'-','') LIKE ?`,
+		"%"+suffix,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	if rows.Next() {
+		u := &model.User{}
+		if err := rows.Scan(&u.ID, &u.Phone, &u.Name, &u.Email, &u.GoogleToken, &u.GoogleRefresh, &u.DriveRootID, &u.CreatedAt, &u.UpdatedAt); err == nil {
+			return u
+		}
+	}
+	return nil
+}
+
+// FileExistsByDriveID returns true if a file with the given Drive file ID is
+// already stored in the DB. Used by the Drive-ingest path to skip files that
+// were already pulled in on an earlier sync.
+func (s *Store) FileExistsByDriveID(driveFileID string) bool {
+	if strings.TrimSpace(driveFileID) == "" {
+		return false
+	}
+	var n int
+	s.db.QueryRow(`SELECT COUNT(*) FROM files WHERE drive_file_id=?`, driveFileID).Scan(&n)
+	return n > 0
+}
+
+// EnsureUserPersonalGroup returns a dedicated "My Drive" group for files
+// the user pulls in directly from their Google Drive (not captured from any
+// WhatsApp chat). Keeps ingested Drive files isolated from WhatsApp-group
+// files so Recall queries can still distinguish "what did Mohit share in
+// the class group" from "what's in my personal notes folder".
+// Identified by a deterministic wa_id (`personal:<phone>`) so repeat syncs
+// land in the same group idempotently.
+func (s *Store) EnsureUserPersonalGroup(userID int64, phone string) (int64, error) {
+	waID := "personal:" + phone
+	if phone == "" {
+		waID = fmt.Sprintf("personal:user-%d", userID)
+	}
+	grp, err := s.UpsertGroup(waID, "My Drive", userID)
+	if err != nil {
+		return 0, err
+	}
+	// Link the user so retrieval's GetUserGroupIDs surfaces this group.
+	_ = s.AddGroupMember(grp.ID, userID, phone, "owner")
+	// Enable tracking so Recall considers it.
+	_ = s.UpsertGroupSettings(&model.GroupSettings{
+		GroupID: grp.ID, Enabled: true, TrackingMode: "auto",
+	})
+	return grp.ID, nil
+}
+
+// ── Reyna's Memory — user-level persistent context ──
+
+func (s *Store) CreateMemory(m *model.UserMemory) (*model.UserMemory, error) {
+	active := 1
+	if !m.IsActive {
+		active = 0
+	}
+	alwaysInc := 0
+	if m.AlwaysInclude {
+		alwaysInc = 1
+	}
+	if m.Source == "" {
+		m.Source = "paste"
+	}
+	res, err := s.db.Exec(
+		`INSERT INTO user_memories (user_id, title, content, source, source_file_name, is_active, always_include)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		m.UserID, m.Title, m.Content, m.Source, m.SourceFileName, active, alwaysInc,
+	)
+	if err != nil {
+		return nil, err
+	}
+	id, _ := res.LastInsertId()
+	return s.GetMemory(id, m.UserID)
+}
+
+func (s *Store) GetMemory(id, userID int64) (*model.UserMemory, error) {
+	m := &model.UserMemory{}
+	var active, alwaysInc int
+	err := s.db.QueryRow(
+		`SELECT id, user_id, title, content, source, source_file_name, is_active, always_include, created_at, updated_at
+		 FROM user_memories WHERE id=? AND user_id=?`, id, userID,
+	).Scan(&m.ID, &m.UserID, &m.Title, &m.Content, &m.Source, &m.SourceFileName, &active, &alwaysInc, &m.CreatedAt, &m.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	m.IsActive = active == 1
+	m.AlwaysInclude = alwaysInc == 1
+	return m, nil
+}
+
+func (s *Store) ListMemories(userID int64) ([]model.UserMemory, error) {
+	rows, err := s.db.Query(
+		`SELECT id, user_id, title, content, source, source_file_name, is_active, always_include, created_at, updated_at
+		 FROM user_memories WHERE user_id=? ORDER BY updated_at DESC`, userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.UserMemory{}
+	for rows.Next() {
+		var m model.UserMemory
+		var active, alwaysInc int
+		rows.Scan(&m.ID, &m.UserID, &m.Title, &m.Content, &m.Source, &m.SourceFileName, &active, &alwaysInc, &m.CreatedAt, &m.UpdatedAt)
+		m.IsActive = active == 1
+		m.AlwaysInclude = alwaysInc == 1
+		out = append(out, m)
+	}
+	return out, nil
+}
+
+// ActiveAlwaysIncludeMemories returns memories that should be prepended to
+// every Recall prompt (is_active=1 AND always_include=1).
+func (s *Store) ActiveAlwaysIncludeMemories(userID int64) ([]model.UserMemory, error) {
+	rows, err := s.db.Query(
+		`SELECT id, user_id, title, content, source, source_file_name, is_active, always_include, created_at, updated_at
+		 FROM user_memories WHERE user_id=? AND is_active=1 AND always_include=1 ORDER BY updated_at DESC`, userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.UserMemory{}
+	for rows.Next() {
+		var m model.UserMemory
+		var active, alwaysInc int
+		rows.Scan(&m.ID, &m.UserID, &m.Title, &m.Content, &m.Source, &m.SourceFileName, &active, &alwaysInc, &m.CreatedAt, &m.UpdatedAt)
+		m.IsActive = true
+		m.AlwaysInclude = true
+		out = append(out, m)
+	}
+	return out, nil
+}
+
+// MemoryIsActive checks whether a given memory is active. Used before
+// returning semantic Qdrant hits — a chunk from a toggled-off memory must
+// not leak into the prompt.
+func (s *Store) MemoryIsActive(id int64) bool {
+	var active int
+	err := s.db.QueryRow(`SELECT is_active FROM user_memories WHERE id=?`, id).Scan(&active)
+	if err != nil {
+		return false
+	}
+	return active == 1
+}
+
+func (s *Store) UpdateMemory(m *model.UserMemory) error {
+	active := 1
+	if !m.IsActive {
+		active = 0
+	}
+	alwaysInc := 0
+	if m.AlwaysInclude {
+		alwaysInc = 1
+	}
+	_, err := s.db.Exec(
+		`UPDATE user_memories
+		 SET title=?, content=?, is_active=?, always_include=?, updated_at=CURRENT_TIMESTAMP
+		 WHERE id=? AND user_id=?`,
+		m.Title, m.Content, active, alwaysInc, m.ID, m.UserID,
+	)
+	return err
+}
+
+func (s *Store) ToggleMemory(id, userID int64, active bool) error {
+	a := 0
+	if active {
+		a = 1
+	}
+	_, err := s.db.Exec(
+		`UPDATE user_memories SET is_active=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?`,
+		a, id, userID,
+	)
+	return err
+}
+
+func (s *Store) DeleteMemory(id, userID int64) error {
+	_, err := s.db.Exec(`DELETE FROM user_memories WHERE id=? AND user_id=?`, id, userID)
+	return err
 }

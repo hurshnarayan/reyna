@@ -3,11 +3,13 @@ import { isLoggedIn, logout, getUser, api } from '../lib/api'
 import { useEffect, useState, useRef } from 'react'
 import { NotificationBell } from './Notifications'
 import { Fa, icons } from './icons'
+import CallReyna from './CallReyna'
 
 const navItems = [
   { to: '/dashboard', label: 'dashboard', icon: icons.dashboard },
   { to: '/files', label: 'files', icon: icons.files },
-  { to: '/search', label: 'search', icon: icons.search },
+  { to: '/search', label: 'recall', icon: icons.search },
+  { to: '/memory', label: 'memory', icon: 'fa-brain' },
 ]
 const navAfterAlerts = [
   // { to: '/bot', label: 'bot demo', icon: icons.bot },  // Removed — bot demo disabled
@@ -286,6 +288,7 @@ export default function Layout() {
         <div style={{ position: 'relative', zIndex: 1 }}>
           <Outlet />
         </div>
+        <CallReyna />
       </main>
     </div>
     </div>

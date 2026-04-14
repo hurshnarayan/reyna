@@ -24,6 +24,18 @@ type Config struct {
 	GeminiAPIKey    string // GEMINI_API_KEY   — for Gemini Flash (free tier: 1500 req/day)
 	XAIAPIKey       string // XAI_API_KEY      — for Grok
 	OpenAIAPIKey    string // OPENAI_API_KEY   — for GPT-4o-mini
+
+	// Qdrant — vector DB for Reyna's Recall (semantic search) and Memory.
+	// QDRANT_URL empty = semantic search disabled, falls back to keyword-only.
+	QdrantURL    string // e.g. https://xxx.cloud.qdrant.io:6333 or http://localhost:6333
+	QdrantAPIKey string // required for Qdrant Cloud, empty for local
+
+	// Vapi — voice agent webhooks. VAPI_WEBHOOK_SECRET is the shared token we
+	// verify on every incoming tool call. VAPI_PUBLIC_KEY is exposed to the
+	// frontend to initialize the web SDK.
+	VapiWebhookSecret string // VAPI_WEBHOOK_SECRET
+	VapiPublicKey     string // VAPI_PUBLIC_KEY (web SDK, safe to expose)
+	VapiAssistantID   string // VAPI_ASSISTANT_ID (assistant to dial on web calls)
 }
 
 func Load() *Config {
@@ -48,6 +60,13 @@ func Load() *Config {
 		GeminiAPIKey:    getEnv("GEMINI_API_KEY", ""),
 		XAIAPIKey:       getEnv("XAI_API_KEY", ""),
 		OpenAIAPIKey:    getEnv("OPENAI_API_KEY", ""),
+
+		QdrantURL:    getEnv("QDRANT_URL", ""),
+		QdrantAPIKey: getEnv("QDRANT_API_KEY", ""),
+
+		VapiWebhookSecret: getEnv("VAPI_WEBHOOK_SECRET", ""),
+		VapiPublicKey:     getEnv("VAPI_PUBLIC_KEY", ""),
+		VapiAssistantID:   getEnv("VAPI_ASSISTANT_ID", ""),
 	}
 
 	// Auto-detect provider from available keys if not explicitly set

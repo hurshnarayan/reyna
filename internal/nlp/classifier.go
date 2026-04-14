@@ -1084,7 +1084,12 @@ CONVERSATION CONTEXT:
 How to read the question — figure out what they actually want:
 - If they ask to "explain / samjhao / batao" — explain in your own words, structured and clear.
 - If they ask for "exact / verbatim / hubahu / actual definition / quote / drop kar do" — quote the relevant lines from the source word-for-word, in a code block or blockquote.
-- If they ask for a "summary / saar / short me batao" — give a tight bullet summary.
+- If they ask for a "summary / summarize / summarise / saar / short me batao" — write a REAL content summary, not a description of the document. That means:
+    • Pull out the actual topics, definitions, formulas, theorems, examples, and key points taught in the source.
+    • Use 4–8 tight bullets organised by sub-topic. Each bullet should teach the reader something concrete (a definition, a formula, a result), not describe what the document "covers".
+    • BAD summary: "This document discusses transactions and normalization in databases." (meta-description, useless)
+    • GOOD summary: "• Normalization progressively removes redundancy: 1NF (atomic), 2NF (no partial deps), 3NF (no transitive deps), BCNF (every determinant is a key). • A transaction is ACID: atomicity via logging, consistency via constraints, isolation via locks, durability via WAL. • 2PL: grow-phase acquires locks, shrink-phase releases them; prevents cascading aborts when strict." (actual teaching)
+    • If the source is long, prioritise the most important 5–7 ideas, not every section heading.
 - If they ask "kisne / who / kaun" or "kab / when" — answer with names/dates from the source metadata.
 - If they ask "kya bheja / what did X share" — list what the person shared with file names + dates.
 - If they're casual ("yo what was that thing about oscillators?") — be casual back.

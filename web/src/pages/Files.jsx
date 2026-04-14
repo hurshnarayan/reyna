@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { api, getToken } from '../lib/api'
 import { notify } from '../components/Notifications'
 import { Fa, icons, fileIconClass, IconBox } from '../components/icons'
+import { useJobs } from '../components/BackgroundJobs'
 
 function formatBytes(b) {
   if (b < 1024) return b + ' B'
@@ -77,6 +78,35 @@ export default function Files() {
   const [showBatchDelete, setShowBatchDelete] = useState(false)
   const [sortBy, setSortBy] = useState('date')
   const [sortOrder, setSortOrder] = useState('desc')
+  // Sync/push status comes from the global JobsProvider, so leaving this
+  // page (or never visiting it) doesn't interrupt work that's in flight.
+  // The button mirrors whatever the global ingest-drive job reports.
+  const { jobs, refresh: refreshJobs } = useJobs()
+  const ingestJob = jobs.ingest_drive
+  const syncing = ingestJob?.state === 'running'
+
+  // Kicks off the async Drive ingest. Server returns immediately with a
+  // job handle; the JobsProvider starts polling and the sticky pill
+  // appears globally. Survives tab switches — the goroutine on the
+  // server doesn't know (or care) that we navigated away.
+  const handleSyncDrive = async () => {
+    if (syncing) return
+    notify.success('syncing from drive in the background')
+    const res = await api.syncFromDrive()
+    if (!res) return
+    refreshJobs()
+    // Refetch files every ~3s while sync is running so newly-ingested
+    // files start appearing in the list without needing a reload.
+    const poller = setInterval(async () => {
+      const s = await api.jobsStatus()
+      if (!s?.ingest_drive || s.ingest_drive.state !== 'running') {
+        clearInterval(poller)
+        fetchFiles()
+        return
+      }
+      fetchFiles()
+    }, 3000)
+  }
 
   const fetchFiles = () => api.files('', 200, sortBy, sortOrder).then(f => { setFiles(f || []); setLoading(false); notify.hideLoader() })
 
@@ -132,12 +162,33 @@ export default function Files() {
     setFiles(prev => prev.filter(f => f.status !== 'staged')); const resp = await api.removeStagedAll()
     if (resp?.removed > 0) notify.success(`${resp.removed} file(s) removed`); fetchFiles()
   }
-  const [committing, setCommitting] = useState(false)
+  // Push-to-Drive state is also global now — same pattern as sync.
+  // The button mirrors the job registry rather than local state, so
+  // navigating away mid-push keeps the global pill alive and the upload
+  // continuing on the server.
+  const pushJob = jobs.push_staged
+  const committing = pushJob?.state === 'running'
   const commitAllStaged = async () => {
-    setCommitting(true)
-    try { const resp = await api.commitStaged(); if (resp?.committed > 0) notify.success(`${resp.committed} file(s) committed${resp.uploaded > 0 ? `, ${resp.uploaded} pushed to Drive` : ''}`) }
-    catch (e) { notify.error('Commit failed: ' + e.message) }
-    setCommitting(false); fetchFiles()
+    if (committing) return
+    try {
+      const resp = await api.commitStaged()
+      if (resp) {
+        notify.success('pushing to drive in the background')
+        refreshJobs()
+        // Refetch files periodically so the staging list empties as uploads finish.
+        const poller = setInterval(async () => {
+          const s = await api.jobsStatus()
+          if (!s?.push_staged || s.push_staged.state !== 'running') {
+            clearInterval(poller)
+            fetchFiles()
+            return
+          }
+          fetchFiles()
+        }, 3000)
+      }
+    } catch (e) {
+      notify.error('commit failed: ' + e.message)
+    }
   }
   function hoursUntilCommit(createdAt) {
     const created = new Date(createdAt).getTime(); const remaining = Math.max(0, created + 86400000 - Date.now())
@@ -164,9 +215,19 @@ export default function Files() {
           <p style={{ fontSize: 13, color: 'var(--sub-color)' }}>{committed.length} committed · {staged.length} staged</p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button onClick={handleSyncDrive} disabled={syncing}
+            title="pull every file from your drive root into reyna so recall can search them"
+            style={{
+              ...btnBase,
+              opacity: syncing ? 0.65 : 1,
+              cursor: syncing ? 'progress' : 'pointer',
+            }}>
+            <Fa icon={syncing ? icons.loading : 'fa-rotate'} spin={syncing} style={{ fontSize: 11 }} />
+            {syncing ? 'syncing...' : 'sync from drive'}
+          </button>
           {selected.size > 0 && (
             <button onClick={() => setShowBatchDelete(true)} style={btnDanger}>
-              <Fa icon={icons.delete} style={{ fontSize: 10 }} /> Delete {selected.size}
+              <Fa icon={icons.delete} style={{ fontSize: 10 }} /> delete {selected.size}
             </button>
           )}
           <div style={{ display: 'flex', gap: 3, background: 'var(--card-bg)', borderRadius: 'var(--roundness)', padding: 3 }}>

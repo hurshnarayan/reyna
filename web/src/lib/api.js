@@ -97,6 +97,12 @@ export const api = {
   createDriveFolder: (name, parentId, setAsRoot) => req('/drive/folder/create', { method: 'POST', body: JSON.stringify({ name, parent_id: parentId || '', set_as_root: !!setAsRoot }) }),
   renameDriveFolder: (folderId, newName) => req('/drive/folder/rename', { method: 'POST', body: JSON.stringify({ folder_id: folderId, new_name: newName }) }),
   deleteDriveFolder: (folderId) => req('/drive/folder/delete', { method: 'POST', body: JSON.stringify({ folder_id: folderId }) }),
+  // v4 — Drive → Reyna sync. Now async: kicks off a background job on the
+  // server and returns immediately. Poll /api/jobs/status to watch progress.
+  syncFromDrive: () => req('/drive/ingest', { method: 'POST' }),
+  // Unified poll for all background jobs (sync-from-drive + push-staged).
+  // Returns { ingest_drive?: Job, push_staged?: Job }.
+  jobsStatus: () => req('/jobs/status'),
 
   // v2 — Group Settings
   groupSettings: (groupId) => req(`/groups/settings?group_id=${groupId || ''}`),
@@ -120,6 +126,26 @@ export const api = {
 
   // v3 — LLM Status
   llmStatus: () => req('/llm/status'),
+
+  // v4 — Reyna's Recall (semantic-enabled aliases of retrieve/qa)
+  recallSearch: (query, groupWaId) => req('/recall/search', { method: 'POST', body: JSON.stringify({ query, group_wa_id: groupWaId || '' }) }),
+  recallAsk: (question, groupWaId, prev) => req('/recall/ask', { method: 'POST', body: JSON.stringify({
+    question,
+    group_wa_id: groupWaId || '',
+    previous_question: prev?.question || '',
+    previous_answer: prev?.answer || '',
+    previous_sources: prev?.sources || [],
+  }) }),
+
+  // v4 — Reyna's Memory
+  listMemories: () => req('/memory'),
+  createMemory: (data) => req('/memory', { method: 'POST', body: JSON.stringify(data) }),
+  updateMemory: (data) => req('/memory/update', { method: 'POST', body: JSON.stringify(data) }),
+  toggleMemory: (id, isActive) => req('/memory/toggle', { method: 'POST', body: JSON.stringify({ id, is_active: isActive }) }),
+  deleteMemory: (id) => req('/memory/delete', { method: 'POST', body: JSON.stringify({ id }) }),
+
+  // v4 — Reyna Live (voice config for web SDK)
+  voiceConfig: () => req('/voice/config'),
 };
 
 export function saveAuth(data) {

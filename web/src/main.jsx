@@ -7,10 +7,12 @@ import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Files from './pages/Files'
 import Search from './pages/Search'
+import Memory from './pages/Memory'
 // import BotDemo from './pages/BotDemo'  // Removed — bot demo disabled
 import NotFound from './pages/NotFound'
 import Layout from './components/Layout'
 import NotificationContainer from './components/Notifications'
+import { JobsProvider } from './components/BackgroundJobs'
 
 /* ══ Global Lusion button hover — radial gradient, no fill div ══ */
 ;(function() {
@@ -106,17 +108,21 @@ ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <BrowserRouter>
       <NotificationContainer />
-      <Routes>
-        <Route path="/" element={<Landing />} />
-        <Route path="/login" element={<Login />} />
-        <Route element={<Layout />}>
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/files" element={<Files />} />
-          <Route path="/search" element={<Search />} />
-          {/* <Route path="/bot" element={<BotDemo />} /> */}
-        </Route>
-        <Route path="*" element={<NotFound />} />
-      </Routes>
+      <JobsProvider>
+        <Routes>
+          <Route path="/" element={<Landing />} />
+          <Route path="/login" element={<Login />} />
+          <Route element={<Layout />}>
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/files" element={<Files />} />
+            <Route path="/search" element={<Search />} />
+            <Route path="/recall" element={<Search />} />
+            <Route path="/memory" element={<Memory />} />
+            {/* <Route path="/bot" element={<BotDemo />} /> */}
+          </Route>
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </JobsProvider>
     </BrowserRouter>
   </React.StrictMode>
 )
