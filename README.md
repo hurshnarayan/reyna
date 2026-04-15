@@ -1,178 +1,92 @@
 # reyna
 
-a whatsapp bot + web dashboard that captures files from your study groups, reads whats inside them, classifies them into your google drive, and lets you search and ask questions from those notes later -- in any language.
+a whatsapp bot + web dashboard + voice assistant that captures files from your study groups, reads whats inside them, classifies them into your google drive, and lets you search, summarise, and talk to your notes in plain english.
 
-built this because every group chat i've been in has the same problem: someone shares notes, 200 messages later its gone, and then "bro send that pyq again" becomes everyones daily routine.
+**demo:** https://www.youtube.com/watch?v=XB-DCYWbtRQ
 
----
+built for the vapi x qdrant hackathon, problem statement PS-1 (voice-first knowledge and workflow agent).
+
+## the problem
+
+two billion people use whatsapp. a huge chunk are students. every class group turns into a file graveyard. someone shares a pyq on monday, someone drops a syllabus on wednesday, and by friday its buried under five hundred messages of "bhai send that again."
+
+devs solved this years back with git. students have nothing. reyna is that missing piece.
+
+## current features
+
+**reyna bot**
+drops into any whatsapp group. `/reyna init` registers it. every file anyone shares after that gets caught, subject classified, and staged for your drive. works on pdfs, docx, pptx, xlsx, images.
+
+**files dashboard**
+web ui showing every staged and committed file with preview, download, delete, versioning, and one click push to google drive. files page also has a sync-from-drive button that pulls in existing notes reyna didnt capture via the bot.
+
+**reyna's recall**
+ask in plain english. "summarise the c programming notes mohit sent last week" returns the actual condensed explanation, grounded in the real file content, with sources cited. works on meaning, not keywords. built on qdrant.
+
+**reyna's memory**
+persistent user level context. pin your syllabus, exam dates, study style. reyna uses them to shape every answer. toggle off when you dont want them, delete when done.
+
+**reyna live**
+the voice layer. click call reyna on the dashboard or drop a voice note in whatsapp. reyna listens, finds files, summarises, saves memories, all by voice. built on vapi.
+
+**background jobs**
+push to drive and sync from drive run as background jobs. close the tab, switch pages, the work keeps going on the server. a progress pill tracks every live job across every page.
+
+## how it works
+
+### how qdrant helps
+
+normal search needs the exact word. if your file says "pointers" and you search "ml memory allocation", keyword search misses it. qdrant is a vector database. every file's text gets converted into a list of 768 numbers that describe its meaning. files about similar things end up with similar numbers, sitting near each other in that number space. when you ask a question, reyna converts the question into the same kind of numbers and qdrant finds the nearest files. pure meaning match, no keyword overlap required.
+
+the same trick powers memory. long memories like a full semester syllabus get chunked up, each chunk gets its own 768 numbers, and only the chunks relevant to the current question get pulled into the prompt. so a 40 page syllabus doesnt blow the context window.
+
+### how vapi helps
+
+vapi handles the voice. speech to text in real time, turn detection, interruption handling, text to speech, and function call routing. all reyna had to write was the backend functions (find files, answer from a file, add a memory, commit staged files) and vapi does everything between "user spoke" and "user heard the reply."
+
+the web sdk puts a "call reyna" button on the dashboard. click it, talk, get answers from your own notes spoken back. on whatsapp, voice notes go through the same pipeline.
+
+### the data flow
+
+1. file lands via bot or drive sync
+2. content extraction (zip + xml for office docs, gemini multimodal for pdf / images)
+3. content embedded into qdrant for semantic search
+4. search queries get embedded, qdrant returns nearest files, gemini writes the final answer grounded in retrieved text
+5. voice tool calls hit the same search path, reply gets spoken back via vapi
+
+## run it locally
+
+requires go 1.22+, node 18+, an api key pair from qdrant cloud, gemini, and vapi.
+
+```
+git clone https://github.com/hurshnarayan/reyna
+cd reyna
+cp .env.example .env
+# fill in GEMINI_API_KEY, QDRANT_URL, QDRANT_API_KEY,
+#             VAPI_PUBLIC_KEY, VAPI_ASSISTANT_ID, etc.
+make install
+```
+
+then in three terminals:
+
+```
+make backend     # go api on :8080
+make frontend    # react on :5173
+make bot         # whatsapp bot, scans qr on first run
+```
+
+`make fresh` wipes the local db and restarts the backend, handy for demos. full walkthrough for vapi and the voice tools is in `docs/reyna-live-setup.md`.
 
 ## privacy
 
-reyna processes your files to classify and search them. content gets sent to gemini for ai analysis and the files end up in your own google drive -- not on any third party server. extracted text summaries are cached locally in sqlite for search. we dont sell or train on your data.
+reyna only sees messages in groups where it has been initialized. files get sent to gemini for classification and content extraction, then live in your own google drive. extracted text is cached locally in sqlite. no third party storage, no training on your data.
 
-reyna can only see messages in groups where its been initialized. anything before that, or groups it hasnt been added to, it cant access. theres also a manual mode (pin reaction only) so if something sensitive gets shared just dont pin it.
+if a group has anything genuinely private (banking, medical, personal documents) just do not add reyna to it. same rule of thumb as chatgpt or notion ai.
 
-for anything actually private (bank stuff, medical docs etc) just dont add those groups to reyna. same deal as chatgpt, notion ai, grammarly -- the ai needs to read the content to be useful about it.
+## tech
 
----
-
-## what it does
-
-someone shares a file in your whatsapp study group. reyna picks it up, reads the actual content (not just the filename), figures out what subject it belongs to, and puts it in the right folder in your google drive. automatically. no commands.
-
-later you dm reyna something like "that pdf rakesh shared tuesday about circuit diagrams" and it finds it. drops you a drive link. you can ask follow up questions about the file and it answers from the actual content, cites which page, and replies in whatever language you asked in.
-
-you can also go to the web dashboard and do the same thing -- search, ask questions, browse files, manage which groups reyna tracks.
-
----
-
-## the pipeline (its not just "save file + call gemini")
-
-every file goes through 7 stages before hitting drive. only 1 of them is an llm call:
-
-**1 -- hash dedup**
-sha-256 of the file bytes. same file shared 5 times? saved once. different content same filename? auto v2. race condition safe with per-group mutex + unique index in sqlite.
-
-**2 -- office doc parsing**
-docx/pptx/xlsx files are actually zip archives with xml inside. reyna unzips them with go stdlib, walks the xml, pulls out the text. no external libraries. no api call. free.
-
-**3 -- tokenization**
-when you search "give me the exact oscillator definition mohit sent today" it strips the noise words (give, exact, definition, today) and keeps whats actually useful: `oscillator`. 80-word stopword filter covering english + hindi/hinglish.
-
-**4 -- ranked sql search**
-hand-built scoring in sqlite. `ORDER BY (CASE WHEN token1 THEN 1 ELSE 0 END + CASE WHEN token2 ...)`. the search ranking is sql, not llm. fast and free.
-
-**5 -- fuzzy folder matching**
-gemini suggests "C Programming Lab" but "C Programming Laboratory" already exists? jaccard similarity catches it and snaps to the existing folder. no duplicate folders.
-
-**6 -- gemini api call** (this is the one llm stage)
-gets the file content + filename + who sent it + when + which group + existing folder list. real context not just a blind prompt. strict json mode, retry on 5xx.
-
-**7 -- drive sync**
-uploads to google drive + sets permissions to "anyone with link can view" automatically so when reyna drops a link in chat it just works. no "request access" popups.
-
----
-
-## analytics
-
-the dashboard stats are real sql aggregation queries:
-- subject distribution -- `GROUP BY subject`
-- top contributors -- `ORDER BY count DESC LIMIT 5`
-- storage used -- `SUM(file_size)`
-- group count -- `COUNT(DISTINCT group_id)`
-
-nothing llm generated. just sql on every page load.
-
----
-
-## the features
-
-**nlp retrieval**
-
-you can ask things like:
-- "what did rakesh share about data structures last week?"
-- "that pdf from tuesday that had a circuit diagram"
-- "mohit ne kal kya bheja?" (hindi)
-- "the pptx about file handling in python"
-
-it parses who/what/when/why from the query, searches across filenames + subjects + extracted content, and returns ranked results. works in english hindi hinglish bhojpuri tamil bengali kannada telugu marathi and mixed scripts.
-
-**content-aware classification**
-
-doesnt classify by filename. reads whats inside the document and decides. a file called `IMG_2847.pdf` that contains compiler design content goes into "Compiler Design" folder, not "Unsorted". prioritizes your existing drive folders before creating new ones.
-
-**multi-turn q&a**
-
-ask a question about any shared file. follow up with "in simpler words" or "give me an example" or "aur asaan shabdon mein batao" and it keeps the conversation going, remembers context, switches language to match yours.
-
-```
-you:   explain wien bridge oscillator from mohits notes
-reyna: according to hii.pdf shared by mohit this morning, a wien bridge
-       oscillator uses a lead-lag RC network to produce zero phase shift
-       at the resonant frequency. formula: f = 1/(2*pi*R*C)
-
-you:   simpler?
-reyna: its basically a circuit that picks one specific frequency to
-       vibrate at. like a tuning fork but electronic.
-
-you:   aur formula bata do
-reyna: f = 1/(2*pi*R*C) -- yahi formula hai, page 3 pe hai mohit ki pdf me
-```
-
-**whatsapp dm**
-
-dm the bot number with `reyna find python notes` and it drops drive links right in chat. for 10 minutes after reyna replies you dont need the `reyna` prefix for follow ups. strangers who dm without the prefix get ignored.
-
----
-
-## project structure
-
-```
-reyna/
-├── cmd/server/main.go          -- go backend entry point
-├── internal/
-│   ├── api/                    -- http handlers
-│   ├── repository/             -- sqlite + tokenizer + ranked search
-│   ├── model/                  -- domain types
-│   ├── nlp/                    -- classifier, folder snap, office text extractor
-│   ├── integrations/
-│   │   ├── gdrive/             -- drive api + oauth + auto-public links
-│   │   └── llm/                -- provider-agnostic (gemini/claude/grok/openai)
-│   ├── auth/                   -- jwt
-│   ├── config/                 -- env loader
-│   └── reyna/                  -- bot reply generation
-├── web/                        -- react + vite dashboard
-├── whatsapp-bot/bot.js         -- baileys whatsapp bot
-├── go.mod
-├── .env.example
-└── Makefile
-```
-
----
-
-## running it
-
-need: go 1.22+, node 20+, a gemini api key, google oauth credentials
-
-```bash
-git clone https://github.com/hurshnarayan/reyna.git
-cd reyna
-cp .env.example .env
-# fill in GEMINI_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, JWT_SECRET
-```
-
-```bash
-make install    # installs js deps
-make backend    # starts go server on :8080
-make frontend   # starts react on :5173 (separate terminal)
-make bot        # starts whatsapp bot (separate terminal, scan qr)
-```
-
-`make fresh` wipes the db and starts the backend. thats probably what youll use day to day.
-
-the makefile auto-loads your .env so you dont need to manually export anything. works in bash zsh and fish.
-
----
-
-## cost
-
-new google cloud accounts get $300 in free credits (90 days). you need to add a payment method to activate it (they do a small verification charge thats refunded) but they dont actually charge until the credits run out. $300 is enough for months. after that its like 1-5 rs per day for a normal study group.
-
-get your api key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey), enable billing on the linked project at [console.cloud.google.com/billing](https://console.cloud.google.com/billing).
-
----
-
-## stack
-
-- backend: go, sqlite, stdlib http, zero orm
-- ai: gemini 2.5 flash (swappable to claude/grok/openai via env var)
-- storage: google drive api v3
-- frontend: react + vite, no component library
-- bot: node.js + baileys
-- auth: jwt
-
----
+go, react, sqlite, google drive api, gemini, qdrant, vapi, baileys (whatsapp).
 
 ## license
 
-mit. your data stays in your drive.
+mit.
