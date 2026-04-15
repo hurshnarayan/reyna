@@ -749,6 +749,19 @@ func (c *Classifier) ExtractContent(fileName, mimeType string, fileSize int64, f
 		return "", ""
 	}
 
+	// 1. Office docs (DOCX / PPTX / XLSX) — read the actual text via the
+	//    stdlib zip+xml extractor. Gemini doesn't accept these formats
+	//    natively; without this step DOCX summaries are filename-guesses
+	//    that look like a textbook outline and aren't grounded in the
+	//    real content.
+	if len(fileData) > 0 && IsOfficeDoc(mimeType) {
+		if rawText, err := ExtractOfficeText(fileData, mimeType, 8000); err == nil && len(rawText) > 40 {
+			return rawText, ""
+		}
+		// Couldn't read the docx (corrupt / unusual variant) — fall through
+		// to filename-only inference rather than fabricating from the name.
+	}
+
 	prompt := fmt.Sprintf(`You are a document analysis agent for a university study group file system.
 Analyze this document and extract:
 1. "content": detailed description of the topics, concepts, chapters, key terms it covers (max 800 chars)
@@ -762,13 +775,16 @@ Respond ONLY with JSON, no other text:
 	var result string
 	var err error
 
-	// Try sending actual file data for deep extraction (PDF, images).
-	// Never slice raw bytes — that corrupts the file. Only send if it fits inline.
+	// 2. PDFs / images — Gemini multimodal can read these inline.
+	//    Never slice raw bytes — that corrupts the file. Only send if it
+	//    fits inline.
 	if len(fileData) > 0 && len(fileData) <= geminiInlineMaxBytes && (strings.Contains(mimeType, "pdf") || strings.Contains(mimeType, "image")) {
 		result, err = c.llm.CompleteWithDoc(prompt, fileData, mimeType, 1500)
 	} else {
-		// For DOCXs and other types, use filename-based analysis
-		result, err = c.llm.Complete(prompt, 800)
+		// 3. Other types (or no file bytes available) — there's literally
+		//    nothing to ground on, drop straight to filename inference
+		//    (which marks itself as such so QA stays honest).
+		return c.extractFromFilename(fileName, mimeType, fileSize)
 	}
 
 	if err != nil {
@@ -789,6 +805,14 @@ Respond ONLY with JSON, no other text:
 }
 
 // extractFromFilename is the fallback when file data can't be sent to the LLM
+// FilenameOnlyMarker prefixes content that was inferred from the filename
+// alone (not extracted from the actual file body). The QA prompt looks for
+// this so the answering LLM can refuse to fabricate a detailed summary
+// from a stub. Without this marker the QA model treats the inferred
+// description as if it were real document content and synthesises
+// confident-sounding bullet lists from nothing.
+const FilenameOnlyMarker = "[FILENAME-ONLY-INFERENCE] "
+
 func (c *Classifier) extractFromFilename(fileName, mimeType string, fileSize int64) (string, string) {
 	prompt := fmt.Sprintf(`You are a document analysis agent. Given this filename and metadata, infer what the document likely contains:
 1. "content": detailed description of likely topics and concepts (max 500 chars)
@@ -809,6 +833,12 @@ Respond ONLY with JSON: {"content": "...", "summary": "..."}`, fileName, mimeTyp
 	result = llm.CleanJSON(result)
 	if err := json.Unmarshal([]byte(result), &resp); err != nil {
 		return "", ""
+	}
+	// Tag the content so downstream Q&A knows this is a filename-based
+	// guess, not real document text. Summary is left clean — it's a
+	// one-liner used in card UIs where the distinction doesn't matter.
+	if resp.Content != "" {
+		resp.Content = FilenameOnlyMarker + resp.Content
 	}
 	return resp.Content, resp.Summary
 }
@@ -1096,6 +1126,7 @@ How to read the question — figure out what they actually want:
 
 Source material rules:
 - Use ONLY the source content below. NEVER invent facts not in the sources.
+- If a SOURCE's Content begins with "[FILENAME-ONLY-INFERENCE]", we DO NOT have the actual document text — only an inference from its filename. Do NOT pretend to summarise or quote from it. Instead say honestly: "I don't have the contents of <filename> extracted yet, only its title. From the title, it looks like it's about <one short clause>. Try again later, or share it again so I can re-extract." Treat ALL [FILENAME-ONLY-INFERENCE] sources this way.
 - ALWAYS cite which source you used. Format: "From %sshared by %s on %s, …" — use the real filename, sender, and shared-at time from the SOURCE blocks.
 - If multiple sources are relevant, weave them together with citations.
 - If the sources truly don't contain the answer, say so honestly and suggest a follow-up they could try (e.g. "I don't see that in Mohit's PDF — try asking about [something close that IS in there]").

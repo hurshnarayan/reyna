@@ -466,8 +466,12 @@ func (s *Service) ListDriveFolders(token, parentID string) ([]map[string]string,
 
 // ListDriveFiles lists files (non-folders) inside a parent folder
 func (s *Service) ListDriveFiles(token, parentID string) ([]map[string]interface{}, error) {
+	// Pull the rich metadata Drive-ingest needs: timestamps so the file's
+	// real share-date is preserved (not "just now"), and owner info so we
+	// can attribute the file to whoever uploaded it (often the dashboard
+	// user themselves; shared folders may carry other names).
 	q := fmt.Sprintf("'%s' in parents and mimeType!='application/vnd.google-apps.folder' and trashed=false", parentID)
-	u := fmt.Sprintf("https://www.googleapis.com/drive/v3/files?q=%s&fields=files(id,name,mimeType,size)&orderBy=name", url.QueryEscape(q))
+	u := fmt.Sprintf("https://www.googleapis.com/drive/v3/files?q=%s&fields=files(id,name,mimeType,size,createdTime,modifiedTime,owners(displayName,emailAddress))&orderBy=name", url.QueryEscape(q))
 	req, _ := http.NewRequest("GET", u, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := http.DefaultClient.Do(req)
@@ -477,16 +481,36 @@ func (s *Service) ListDriveFiles(token, parentID string) ([]map[string]interface
 	defer resp.Body.Close()
 	var r struct {
 		Files []struct {
-			ID       string `json:"id"`
-			Name     string `json:"name"`
-			MimeType string `json:"mimeType"`
-			Size     string `json:"size"`
+			ID           string `json:"id"`
+			Name         string `json:"name"`
+			MimeType     string `json:"mimeType"`
+			Size         string `json:"size"`
+			CreatedTime  string `json:"createdTime"`
+			ModifiedTime string `json:"modifiedTime"`
+			Owners       []struct {
+				DisplayName  string `json:"displayName"`
+				EmailAddress string `json:"emailAddress"`
+			} `json:"owners"`
 		} `json:"files"`
 	}
 	json.NewDecoder(resp.Body).Decode(&r)
 	var files []map[string]interface{}
 	for _, f := range r.Files {
-		files = append(files, map[string]interface{}{"id": f.ID, "name": f.Name, "mime_type": f.MimeType, "size": f.Size})
+		ownerName, ownerEmail := "", ""
+		if len(f.Owners) > 0 {
+			ownerName = f.Owners[0].DisplayName
+			ownerEmail = f.Owners[0].EmailAddress
+		}
+		files = append(files, map[string]interface{}{
+			"id":            f.ID,
+			"name":          f.Name,
+			"mime_type":     f.MimeType,
+			"size":          f.Size,
+			"created_time":  f.CreatedTime,
+			"modified_time": f.ModifiedTime,
+			"owner_name":    ownerName,
+			"owner_email":   ownerEmail,
+		})
 	}
 	return files, nil
 }

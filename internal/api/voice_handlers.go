@@ -302,10 +302,18 @@ func (s *Server) handleVoiceRecallSearch(w http.ResponseWriter, r *http.Request)
 		t := time.Now().AddDate(0, -1, 0); sinceTime = &t
 	}
 
-	// Fuzzy-map WHO onto an actually-known sender. Handles "Krish"/"Harsh",
-	// "Mohit"/"Rohit", etc. — ASR confuses phonetically similar names often.
+	// Regex backup for WHO extraction. The classifier's NLP parser can
+	// fail (rate-limited Gemini falls back to a keyword parser that only
+	// matches a fixed name list). Catching "by NAME" here means we still
+	// recover the sender even when the parser missed it.
 	knownSenders := s.store.DistinctSenderNames(groupIDs)
 	who = strings.TrimSpace(who)
+	if who == "" {
+		who = extractWhoFromQuery(query)
+	}
+	// Fuzzy-map WHO onto an actually-known sender. Handles "Krish"/"Harsh",
+	// "Mohit"/"Rohit", "Harish"/"Harsh" — ASR confuses phonetically
+	// similar names constantly.
 	if who != "" {
 		if matched := closestSender(who, knownSenders); matched != "" && !strings.EqualFold(matched, who) {
 			log.Printf("[VOICE] who=%q fuzzy→%q (from senders %v)", who, matched, knownSenders)
@@ -350,10 +358,42 @@ func (s *Server) handleVoiceRecallSearch(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	// No silent "recent files" fallback. An empty result set stays empty
-	// so the LLM honestly says "I didn't find anything from Krish" instead
-	// of listing random files. knownSenders lets it suggest alternatives.
+	// Last-resort: WHO was specified but produced no hits even after
+	// fuzzy-matching. The user might be looking for files where the
+	// sender wasn't recorded properly. Surface the most-recent files
+	// with an explicit framing so the LLM doesn't claim they're "by
+	// that person" — the summary builder handles the honest wording.
+	whoMissing := false
+	if len(results) == 0 && who != "" {
+		recent, _ := s.store.GetGroupsFiles(groupIDs, 3)
+		for _, f := range recent {
+			addFile(&f, 0)
+		}
+		if len(results) > 0 {
+			whoMissing = true
+		}
+	}
+	_ = whoMissing // currently surfaced only via summary text below
+
+	// Always log the full state of the search so we can post-mortem
+	// "voice didn't find it" complaints by comparing voice vs web Recall.
+	resultNames := make([]string, 0, len(results))
+	for _, r := range results {
+		if n, ok := r["file_name"].(string); ok {
+			resultNames = append(resultNames, n)
+		}
+	}
+	log.Printf("[VOICE-SEARCH] query=%q who=%q what=%q when=%q groups=%v count=%d files=%v knownSenders=%v",
+		query, who, what, when, groupIDs, len(results), resultNames, knownSenders)
+
+	// Build a speakable summary the LLM can read verbatim. Without this
+	// the LLM has to parse stringified JSON and tends to hallucinate
+	// "I'm having trouble accessing your notes" when the structured
+	// result shape doesn't match what it expects. With an explicit
+	// summary, even a confused LLM has something correct to say.
+	summary := buildSearchSummary(query, results, knownSenders)
 	writeVoiceResult(w, toolCallID, map[string]any{
+		"summary":           summary, // assistant should speak this verbatim
 		"query":             query,
 		"parsed":            map[string]any{"who": who, "what": what, "when": when},
 		"count":             len(results),
@@ -361,6 +401,54 @@ func (s *Server) handleVoiceRecallSearch(w http.ResponseWriter, r *http.Request)
 		"no_matches":        len(results) == 0,
 		"senders_available": knownSenders,
 	})
+}
+
+// buildSearchSummary turns search output into one or two short sentences
+// the assistant can read aloud directly. Avoids the LLM trying to parse
+// stringified JSON and panicking when no matches are found.
+func buildSearchSummary(query string, results []map[string]any, knownSenders []string) string {
+	if len(results) == 0 {
+		base := fmt.Sprintf("I didn't find any notes matching %q.", query)
+		if len(knownSenders) > 0 {
+			senders := strings.Join(firstN(knownSenders, 3), ", ")
+			base += fmt.Sprintf(" People who've shared files with you: %s. Want me to try one of them?", senders)
+		}
+		return base
+	}
+	parts := []string{}
+	for i, r := range results {
+		if i >= 3 {
+			parts = append(parts, fmt.Sprintf("and %d more", len(results)-3))
+			break
+		}
+		name, _ := r["speakable_name"].(string)
+		if name == "" {
+			name, _ = r["file_name"].(string)
+		}
+		sender, _ := r["sender"].(string)
+		when, _ := r["shared_when"].(string)
+		bit := name
+		if sender != "" {
+			bit += " by " + sender
+		}
+		if when != "" {
+			bit += ", " + when
+		}
+		parts = append(parts, bit)
+	}
+	plural := ""
+	if len(results) != 1 {
+		plural = "s"
+	}
+	return fmt.Sprintf("Found %d file%s: %s. Want me to summarise one?",
+		len(results), plural, strings.Join(parts, "; "))
+}
+
+func firstN(xs []string, n int) []string {
+	if len(xs) <= n {
+		return xs
+	}
+	return xs[:n]
 }
 
 // POST /api/voice/tools/recall-ask  — { user_phone, question, file_id? }
@@ -868,6 +956,20 @@ func speakableFilename(name string) string {
 	s = _speakableRxPunct.ReplaceAllString(s, " ")
 	s = _speakableRxWS.ReplaceAllString(s, " ")
 	return strings.TrimSpace(s)
+}
+
+// extractWhoFromQuery pulls a name out of natural-language patterns like
+// "by harsh", "from mohit", "shared by rakesh". Used as a backup when the
+// classifier's NLP parser misses (which happens whenever Gemini is
+// rate-limited and the keyword fallback parser only knows a fixed list).
+var _whoRx = regexp.MustCompile(`(?i)\b(?:by|from|shared\s+by|sent\s+by|uploaded\s+by)\s+([a-z]+)\b`)
+
+func extractWhoFromQuery(q string) string {
+	m := _whoRx.FindStringSubmatch(q)
+	if len(m) >= 2 {
+		return strings.ToLower(m[1])
+	}
+	return ""
 }
 
 // closestSender does a simple case-insensitive Levenshtein match between

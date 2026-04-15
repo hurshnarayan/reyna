@@ -13,6 +13,49 @@ import (
 	"github.com/hurshnarayan/reyna/internal/search"
 )
 
+// handleDriveWipe removes every file row in the user's synthetic
+// "My Drive" group and purges those file IDs from Qdrant. Used to
+// recover from an earlier sync that captured wrong metadata or skipped
+// embedding — running it once + a fresh sync gives you a clean slate.
+//
+// Only touches the personal "My Drive" group. WhatsApp-group files are
+// untouched.
+func (s *Server) handleDriveWipe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
+	userID := auth.GetUserID(r)
+	if userID == 0 {
+		http.Error(w, `{"error":"unauthorized"}`, 401)
+		return
+	}
+	user, err := s.store.GetUserByID(userID)
+	if err != nil || user == nil {
+		http.Error(w, `{"error":"user not found"}`, 404)
+		return
+	}
+	personalGID, err := s.store.EnsureUserPersonalGroup(user.ID, user.Phone)
+	if err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, 500)
+		return
+	}
+	files, _ := s.store.GetGroupFiles(personalGID, 5000)
+	deleted := 0
+	for _, f := range files {
+		_ = s.store.DeleteFile(f.ID)
+		if s.search != nil {
+			_ = s.search.DeleteFile(f.ID)
+		}
+		deleted++
+	}
+	json.NewEncoder(w).Encode(map[string]any{
+		"deleted":  deleted,
+		"group_id": personalGID,
+		"note":     "run /api/drive/ingest now to re-sync with proper metadata",
+	})
+}
+
 // handleDriveIngest starts an async Drive → Reyna sync and returns
 // immediately with a job handle. The actual work runs in a goroutine and
 // reports progress via the in-memory job registry. The frontend polls
@@ -99,12 +142,22 @@ func (s *Server) runDriveIngest(userID int64, phone, name, email, token, refresh
 		return
 	}
 
-	type discovered struct{ ID, Name, MimeType, Size, ParentID, ParentName string }
+	type discovered struct {
+		ID, Name, MimeType, Size, ParentID, ParentName, OwnerName, OwnerEmail string
+		ModifiedTime, CreatedTime                                             time.Time
+	}
 	var queue []discovered
 	type qItem struct{ id, name string }
 	folderQueue := []qItem{{id: driveRootID, name: ""}}
 	seen := map[string]bool{}
 	walkStart := time.Now()
+	parseTime := func(s string) time.Time {
+		if s == "" {
+			return time.Time{}
+		}
+		t, _ := time.Parse(time.RFC3339, s)
+		return t
+	}
 	for len(folderQueue) > 0 && len(queue) < 500 {
 		curr := folderQueue[0]
 		folderQueue = folderQueue[1:]
@@ -118,9 +171,16 @@ func (s *Server) runDriveIngest(userID int64, phone, name, email, token, refresh
 			fn, _ := f["name"].(string)
 			mime, _ := f["mime_type"].(string)
 			sz, _ := f["size"].(string)
+			ownerName, _ := f["owner_name"].(string)
+			ownerEmail, _ := f["owner_email"].(string)
+			modT, _ := f["modified_time"].(string)
+			crtT, _ := f["created_time"].(string)
 			queue = append(queue, discovered{
 				ID: id, Name: fn, MimeType: mime, Size: sz,
 				ParentID: curr.id, ParentName: curr.name,
+				OwnerName: ownerName, OwnerEmail: ownerEmail,
+				ModifiedTime: parseTime(modT),
+				CreatedTime:  parseTime(crtT),
 			})
 		}
 		subs, _ := s.drive.ListDriveFolders(tok, curr.id)
@@ -176,10 +236,36 @@ func (s *Server) runDriveIngest(userID int64, phone, name, email, token, refresh
 		if subject == "" {
 			subject = "My Drive"
 		}
+		// Resolve the file's true "shared at" — prefer modifiedTime (a
+		// closer proxy for "when did the user last touch this file") and
+		// fall back to createdTime.
+		sharedAt := d.ModifiedTime
+		if sharedAt.IsZero() {
+			sharedAt = d.CreatedTime
+		}
+		// Resolve the sender with a fallback chain. Without this, files
+		// in personal Drive (where owners[] is sometimes empty in the
+		// API response) end up with shared_by_name="" and become
+		// invisible to "files by NAME" queries.
+		//   1. Drive owner.displayName
+		//   2. user.Name (dashboard-stored name)
+		//   3. user.Email local-part — "w3b.cats@gmail.com" → "w3b.cats"
+		//      (better than empty; the fuzzy matcher can still hit it)
+		senderName := d.OwnerName
+		if senderName == "" {
+			senderName = name
+		}
+		if senderName == "" && email != "" {
+			if at := strings.IndexByte(email, '@'); at > 0 {
+				senderName = email[:at]
+			} else {
+				senderName = email
+			}
+		}
 
 		file := &model.File{
 			GroupID: personalGID, UserID: userID,
-			SharedByPhone: phone, SharedByName: name,
+			SharedByPhone: phone, SharedByName: senderName,
 			FileName: d.Name, FileSize: size, MimeType: d.MimeType,
 			DriveFileID: d.ID, DriveFolderID: d.ParentID,
 			Subject: subject, Status: "committed",
@@ -190,29 +276,53 @@ func (s *Server) runDriveIngest(userID int64, phone, name, email, token, refresh
 			log.Printf("[INGEST] AddFile failed for %s: %v", d.Name, err)
 			continue
 		}
+		// Override CreatedAt with the Drive timestamp so Recall says
+		// "shared 3 days ago" if that's when the file was actually added,
+		// not "shared just now" (which is when WE inserted the row).
+		if !sharedAt.IsZero() {
+			_ = s.store.UpdateFileCreatedAt(saved.ID, sharedAt)
+			saved.CreatedAt = sharedAt
+		}
 		data, derr := s.drive.DownloadFromDrive(tok, d.ID)
 		if derr != nil || len(data) == 0 {
 			log.Printf("[INGEST] download failed for %s: %v", d.Name, derr)
-			indexed++
-			continue
 		}
-		content, summary := s.classifier.ExtractContent(d.Name, d.MimeType, size, data)
-		if content != "" {
-			_ = s.store.UpdateFileContent(saved.ID, content, summary)
-			extractedCount++
+		content, summary := "", ""
+		if len(data) > 0 {
+			content, summary = s.classifier.ExtractContent(d.Name, d.MimeType, size, data)
+			if content != "" {
+				_ = s.store.UpdateFileContent(saved.ID, content, summary)
+				extractedCount++
+			}
 		}
-		if s.search.IsEnabled() && content != "" {
+		// Always embed — even when content extraction failed. Use the
+		// filename + folder + owner as fallback text so the file is at
+		// least findable by name through semantic search. Otherwise a
+		// failed Gemini extraction means the file is invisible to
+		// Recall/Voice forever.
+		if s.search.IsEnabled() {
+			indexText := content
+			if indexText == "" {
+				indexText = strings.Join([]string{
+					speakableFilename(d.Name),
+					subject,
+					senderName,
+					d.MimeType,
+				}, " ")
+			}
 			meta := search.FileMetadata{
 				FileID: saved.ID, UserID: saved.UserID, GroupID: saved.GroupID,
 				FileName: saved.FileName, Subject: saved.Subject,
 				SenderName: saved.SharedByName, GroupName: "My Drive",
 				SharedAt: saved.CreatedAt, Summary: summary,
 			}
-			if err := s.search.IndexFile(meta, content); err != nil {
+			if err := s.search.IndexFile(meta, indexText); err != nil {
 				log.Printf("[INGEST] qdrant upsert failed for %s: %v", d.Name, err)
 			}
 		}
-		_ = s.drive.SaveLocalFileData(saved.ID, data)
+		if len(data) > 0 {
+			_ = s.drive.SaveLocalFileData(saved.ID, data)
+		}
 
 		indexed++
 		// Errored, indexed, skipped countered into job state so the UI

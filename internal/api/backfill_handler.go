@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hurshnarayan/reyna/internal/auth"
@@ -56,11 +57,17 @@ func (s *Server) handleRecallBackfill(w http.ResponseWriter, r *http.Request) {
 
 	for i, f := range files {
 		content, _ := s.store.GetFileContent(f.ID)
-		if content == "" {
-			skipped++
-			continue
+		// Always embed — even if extraction never produced text. Use
+		// the filename + folder/subject + sender as fallback so the
+		// file is at least findable by name. Without this, every
+		// rate-limited / unsupported-mime-type file stays invisible
+		// to Recall and voice forever.
+		indexText := content
+		if indexText == "" {
+			indexText = strings.Join([]string{
+				f.FileName, f.Subject, f.SharedByName, f.MimeType,
+			}, " ")
 		}
-		// Best-effort look up group name for nicer metadata.
 		groupName := ""
 		if g, err := s.store.GetGroupByWAID(""); err == nil && g != nil && g.ID == f.GroupID {
 			groupName = g.Name
@@ -76,7 +83,7 @@ func (s *Server) handleRecallBackfill(w http.ResponseWriter, r *http.Request) {
 			SharedAt:   f.CreatedAt,
 			Summary:    f.ContentSummary,
 		}
-		if err := s.search.IndexFile(meta, content); err != nil {
+		if err := s.search.IndexFile(meta, indexText); err != nil {
 			errored++
 			log.Printf("[BACKFILL] file %d (%s) failed: %v", f.ID, f.FileName, err)
 			continue

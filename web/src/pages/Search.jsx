@@ -452,10 +452,22 @@ export default function Search() {
                   Earlier bug: drive_sources were returned by the backend but
                   never rendered, so searches that only matched Drive looked
                   like "no files found" in the UI. */}
-              {!turn.pending && ((turn.files?.length || 0) + (turn.drive_sources?.length || 0)) > 0 && (
+              {!turn.pending && (() => {
+                const dbFiles = turn.files || []
+                const dbNames = new Set(dbFiles.map(f => f.file_name))
+                const driveOnly = (turn.drive_sources || []).filter(m => !dbNames.has(m.file_name))
+                const total = dbFiles.length + driveOnly.length
+                return total > 0
+              })() && (
                 <div style={{ marginBottom: 10 }}>
                   <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--sub-color)', letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 6 }}>
-                    found {(turn.files?.length || 0) + (turn.drive_sources?.length || 0)} file{((turn.files?.length || 0) + (turn.drive_sources?.length || 0)) !== 1 ? 's' : ''}
+                    {(() => {
+                      const dbFiles = turn.files || []
+                      const dbNames = new Set(dbFiles.map(f => f.file_name))
+                      const driveOnly = (turn.drive_sources || []).filter(m => !dbNames.has(m.file_name))
+                      const total = dbFiles.length + driveOnly.length
+                      return `found ${total} file${total !== 1 ? 's' : ''}`
+                    })()}
                   </div>
                   <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
                     {/* DB files with full metadata + action buttons */}
@@ -483,8 +495,15 @@ export default function Search() {
                         </div>
                       </div>
                     ))}
-                    {/* Drive-only matches — open in Drive, no local actions */}
-                    {(turn.drive_sources || []).slice(0, 6).map((m, j) => (
+                    {/* Drive-only matches — only render the ones we don't
+                        already have as DB files (preview/download/delete
+                        handles those better). Drive cards are useful only
+                        when a file exists in Drive but never made it into
+                        Reyna's DB. */}
+                    {(turn.drive_sources || [])
+                      .filter(m => !(turn.files || []).some(f => f.file_name === m.file_name))
+                      .slice(0, 6)
+                      .map((m, j) => (
                       <div key={'dr' + j} style={{
                         ...cardStyle, padding: '10px 12px',
                         display: 'flex', gap: 10, alignItems: 'flex-start',

@@ -1579,6 +1579,48 @@ func (s *Store) FindUserByPhoneLoose(phone string) *model.User {
 	return nil
 }
 
+// UpdateFileCreatedAt overrides the auto-set created_at on a file. Used
+// by the Drive ingest path so a file's recorded "shared at" mirrors the
+// actual Drive timestamp (createdTime / modifiedTime) instead of the
+// moment the row was inserted.
+func (s *Store) UpdateFileCreatedAt(fileID int64, t time.Time) error {
+	if t.IsZero() {
+		return nil
+	}
+	_, err := s.db.Exec(`UPDATE files SET created_at=? WHERE id=?`, t.Format("2006-01-02 15:04:05"), fileID)
+	return err
+}
+
+// DistinctSenderNames returns the unique non-empty sender names across the
+// given groups. Used by the voice tool to suggest "did you mean Harsh?"
+// when an ASR mishear like "Krish" doesn't match anyone — and to feed the
+// fuzzy-match helper that auto-corrects close calls.
+func (s *Store) DistinctSenderNames(groupIDs []int64) []string {
+	if len(groupIDs) == 0 {
+		return nil
+	}
+	placeholders, args := buildInClause(groupIDs)
+	rows, err := s.db.Query(
+		`SELECT DISTINCT shared_by_name FROM files
+		 WHERE group_id IN (`+placeholders+`)
+		   AND shared_by_name != ''
+		   AND shared_by_name NOT GLOB '+*'`, // skip files where name slot was a phone
+		args...,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err == nil && strings.TrimSpace(n) != "" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // FileExistsByDriveID returns true if a file with the given Drive file ID is
 // already stored in the DB. Used by the Drive-ingest path to skip files that
 // were already pulled in on an earlier sync.

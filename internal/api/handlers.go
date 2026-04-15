@@ -137,6 +137,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/drive/folder/delete", protected(s.handleDriveFolderDelete))
 	s.mux.HandleFunc("/api/drive/ingest", protected(s.handleDriveIngest))
 	s.mux.HandleFunc("/api/drive/ingest/status", protected(s.handleDriveIngestStatus))
+	s.mux.HandleFunc("/api/drive/wipe", protected(s.handleDriveWipe))
 	s.mux.HandleFunc("/api/jobs/status", protected(s.handleJobsStatus))
 
 	// v3 — NLP Retrieval + Q&A + LLM status
