@@ -162,31 +162,45 @@ export default function Files() {
     setFiles(prev => prev.filter(f => f.status !== 'staged')); const resp = await api.removeStagedAll()
     if (resp?.removed > 0) notify.success(`${resp.removed} file(s) removed`); fetchFiles()
   }
-  // Push-to-Drive state is also global now — same pattern as sync.
-  // The button mirrors the job registry rather than local state, so
-  // navigating away mid-push keeps the global pill alive and the upload
-  // continuing on the server.
+  // Push-to-Drive reads from the global job registry so navigating away
+  // mid-push doesn't stop the upload. Locally we also hold a short-lived
+  // "just-clicked" flag so the button reflects activity immediately even
+  // when the backend finishes faster than the next poll (a real case for
+  // zero-staged pushes — the goroutine completes in milliseconds and the
+  // job is already 'done' by the time JobsProvider polls again).
   const pushJob = jobs.push_staged
-  const committing = pushJob?.state === 'running'
+  const [pushLocal, setPushLocal] = useState(false)
+  const committing = pushLocal || pushJob?.state === 'running'
   const commitAllStaged = async () => {
     if (committing) return
+    if (staged.length === 0) {
+      notify.error('nothing to push — staging area is empty')
+      return
+    }
+    setPushLocal(true)
+    notify.success(`pushing ${staged.length} file${staged.length === 1 ? '' : 's'} to drive...`)
     try {
-      const resp = await api.commitStaged()
-      if (resp) {
-        notify.success('pushing to drive in the background')
-        refreshJobs()
-        // Refetch files periodically so the staging list empties as uploads finish.
-        const poller = setInterval(async () => {
-          const s = await api.jobsStatus()
-          if (!s?.push_staged || s.push_staged.state !== 'running') {
-            clearInterval(poller)
-            fetchFiles()
-            return
-          }
-          fetchFiles()
-        }, 3000)
-      }
+      await api.commitStaged()
+      refreshJobs()
+      // Watchdog: poll for completion and drop the local flag once either
+      // (a) the job ends or (b) we haven't seen a running state in 3
+      // consecutive polls (meaning it finished before we could see it).
+      let seenRunning = 0, notRunning = 0
+      const poller = setInterval(async () => {
+        const s = await api.jobsStatus()
+        const state = s?.push_staged?.state
+        if (state === 'running') seenRunning++
+        else notRunning++
+        fetchFiles()
+        if (state && state !== 'running') {
+          clearInterval(poller); setPushLocal(false)
+        } else if (notRunning > 3 && seenRunning === 0) {
+          // Push was too fast to observe — drop the flag.
+          clearInterval(poller); setPushLocal(false)
+        }
+      }, 1500)
     } catch (e) {
+      setPushLocal(false)
       notify.error('commit failed: ' + e.message)
     }
   }
