@@ -207,6 +207,10 @@ async function uploadFile(groupJid, userPhone, userName, fileInfo, fileBuffer) {
     form.append('file_size', String(fileInfo.fileSize));
     form.append('mime_type', fileInfo.mimeType);
     form.append('subject', fileInfo.subject || '');
+    // When the message was actually sent, in epoch seconds, straight from the
+    // WhatsApp envelope. Without this the backend can only record when it
+    // inserted the row, and shows that to the user as the share time.
+    if (fileInfo.postedAt) form.append('posted_at', String(fileInfo.postedAt));
     form.append('file', new Blob([fileBuffer], { type: fileInfo.mimeType }), fileInfo.fileName);
 
     console.log(`  Upload: ${fileInfo.fileName} (${(fileBuffer.length / 1024).toFixed(0)}KB)`);
@@ -390,6 +394,16 @@ async function getGroupMode(groupJid) {
 function getGroupTracker(groupJid) {
   if (!groupFiles.has(groupJid)) groupFiles.set(groupJid, new Map());
   return groupFiles.get(groupJid);
+}
+
+// messageTimestamp is the moment WhatsApp recorded the message, in epoch
+// seconds. Baileys hands it back as either a number or a Long, so normalise.
+// Returns 0 when absent, which the backend reads as "unknown".
+function postedAtOf(msg) {
+  const ts = msg?.messageTimestamp;
+  if (ts == null) return 0;
+  const n = typeof ts === 'object' && ts.toNumber ? ts.toNumber() : Number(ts);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
 }
 
 function trackFile(groupJid, msgId, info) {
@@ -1047,6 +1061,7 @@ async function handleMessage(sock, msg) {
           mimeType: doc.mimetype || 'application/octet-stream',
           fileSize: Number(doc.fileLength || buffer.length),
           sender: senderPhone, senderName: pushName,
+          postedAt: postedAtOf(msg),
           ts: Date.now(),
         });
 
@@ -1058,6 +1073,7 @@ async function handleMessage(sock, msg) {
           const resp = await uploadFile(chat, senderPhone, pushName, {
             fileName, fileSize: Number(doc.fileLength || buffer.length),
             mimeType: doc.mimetype || 'application/octet-stream',
+            postedAt: postedAtOf(msg),
           }, buffer);
           markStaged(chat, msgId);
 
@@ -1068,7 +1084,7 @@ async function handleMessage(sock, msg) {
               console.log(`  Auto-staging previously untracked: ${uf.fileName}`);
               await uploadFile(chat, uf.sender || senderPhone, uf.senderName || pushName, {
                 fileName: uf.fileName, fileSize: uf.fileSize,
-                mimeType: uf.mimeType,
+                mimeType: uf.mimeType, postedAt: uf.postedAt,
               }, uf.buffer);
               markStaged(chat, uf.msgId);
             }
@@ -1128,6 +1144,7 @@ async function handleMessage(sock, msg) {
         }
         const resp = await uploadFile(chat, senderPhone, pushName, {
           fileName: last.fileName, fileSize: last.fileSize, mimeType: last.mimeType,
+          postedAt: last.postedAt,
         }, last.buffer);
         markStaged(chat, last.msgId);
         await sock.sendMessage(chat, { text: `*Reyna:* Staged \`${last.fileName}\`. Say "reyna push" to commit to Drive.` });
@@ -1139,6 +1156,7 @@ async function handleMessage(sock, msg) {
       for (const f of untracked) {
         await uploadFile(chat, senderPhone, pushName, {
           fileName: f.fileName, fileSize: f.fileSize, mimeType: f.mimeType,
+          postedAt: f.postedAt,
         }, f.buffer);
         markStaged(chat, f.msgId);
         staged++;
@@ -1243,10 +1261,13 @@ async function handleReaction(sock, reaction) {
   console.log(`  ${emoji} reaction on ${fileInfo.fileName} by ${reactorName}`);
 
   // Upload file to backend (this stages it)
+  // postedAt comes from the tracked document message, not the reaction — the
+  // file was shared when it was posted, not when someone reacted to it.
   const resp = await uploadFile(chat, reactorPhone, reactorName, {
     fileName: fileInfo.fileName,
     fileSize: fileInfo.fileSize,
     mimeType: fileInfo.mimeType,
+    postedAt: fileInfo.postedAt,
   }, fileInfo.buffer);
 
   markStaged(chat, reactedMsgId);

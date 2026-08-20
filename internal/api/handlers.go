@@ -631,6 +631,14 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 	fileSizeStr := r.FormValue("file_size")
 	fileSize, _ := strconv.ParseInt(fileSizeStr, 10, 64)
 
+	// When the message was actually sent, epoch seconds, from the WhatsApp
+	// envelope. Zero when the client did not supply it, in which case the row
+	// keeps a NULL posted_at and reads fall back to the insert time.
+	postedAt := time.Time{}
+	if v, err := strconv.ParseInt(r.FormValue("posted_at"), 10, 64); err == nil && v > 0 {
+		postedAt = time.Unix(v, 0).UTC()
+	}
+
 	// Read uploaded file
 	file, _, err := r.FormFile("file")
 	if err != nil {
@@ -734,7 +742,16 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	localID, folderID, _ := s.drive.SmartUpload("", "", user.ID, subject, versionedName, mimeType, fileBytes)
-	dbFile := &model.File{GroupID: groupID, UserID: user.ID, SharedByPhone: userPhone, SharedByName: sharedByName, FileName: versionedName, FileSize: fileSize, MimeType: mimeType, Subject: subject, DriveFileID: localID, DriveFolderID: folderID, Status: "staged", ContentHash: contentHash}
+	// Baileys reports the sender from the WhatsApp envelope, so attribution here
+	// is authoritative. A capture path that infers the sender instead must set a
+	// lower confidence and a method describing how it guessed.
+	attrMethod, attrConfidence := model.AttrBaileys, 1.0
+	if sharedByName == "" && userPhone == "" {
+		attrMethod, attrConfidence = model.AttrNone, 0.0
+	}
+
+	dbFile := &model.File{GroupID: groupID, UserID: user.ID, SharedByPhone: userPhone, SharedByName: sharedByName, FileName: versionedName, FileSize: fileSize, MimeType: mimeType, Subject: subject, DriveFileID: localID, DriveFolderID: folderID, Status: "staged", ContentHash: contentHash,
+		PostedAt: postedAt, AttributionMethod: attrMethod, AttributionConfidence: attrConfidence}
 	saved, err := s.store.AddFile(dbFile)
 	if err != nil { log.Printf("❌ DB: %v", err); http.Error(w, `{"error":"db save failed"}`, 500); return }
 

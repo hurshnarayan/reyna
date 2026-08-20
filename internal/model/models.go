@@ -67,7 +67,52 @@ type File struct {
 	ExtractedContent string    `json:"extracted_content,omitempty"`
 	ContentSummary   string    `json:"content_summary,omitempty"`
 	ContentHash      string    `json:"content_hash,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
+
+	// CreatedAt is when Reyna inserted the row. PostedAt is when the message was
+	// actually sent. Under the Baileys bot these are seconds apart; once capture
+	// moves to the phone they can be days apart, because a file reaches the disk
+	// when the user taps download. Anything shown to a user must use PostedAt.
+	// Reads fall back to CreatedAt when PostedAt is unknown, so it is never zero.
+	CreatedAt time.Time `json:"created_at"`
+	PostedAt  time.Time `json:"posted_at"`
+
+	// How the sender was determined and how far to trust it. Callers must not
+	// name a person below AttributionMinNamed.
+	AttributionMethod     string  `json:"attribution_method,omitempty"`
+	AttributionConfidence float64 `json:"attribution_confidence"`
+}
+
+// Attribution methods, ordered by how much they can be trusted.
+const (
+	AttrBaileys      = "baileys"      // WhatsApp Web protocol. Authoritative.
+	AttrExport       = "export"       // Matched a chat export line. Authoritative.
+	AttrSelfSent     = "self_sent"    // File was in WhatsApp's /Sent/ folder.
+	AttrUser         = "user"         // The user told us.
+	AttrNotification = "notification" // Matched an observed notification.
+	AttrDateUnique   = "date_unique"  // Only one candidate message that day.
+	AttrTimeWindow   = "time_window"  // Nearest message in time. Ambiguous.
+	AttrNone         = ""             // Unattributed.
+)
+
+// AttributionMinNamed is the confidence floor for stating who shared a file.
+// Below it Reyna describes what it knows (the chat, the date) and stops. The
+// sender name is not passed to the language model either, because a model shown
+// a name will use it regardless of any hedging in the prompt.
+const AttributionMinNamed = 0.70
+
+// SenderKnown reports whether this file's sender is trustworthy enough to name.
+func (f *File) SenderKnown() bool {
+	return f.AttributionConfidence >= AttributionMinNamed &&
+		(f.SharedByName != "" || f.SharedByPhone != "")
+}
+
+// SharedAt returns the best available time for when the file was shared,
+// preferring the real message time over the insert time.
+func (f *File) SharedAt() time.Time {
+	if !f.PostedAt.IsZero() {
+		return f.PostedAt
+	}
+	return f.CreatedAt
 }
 
 // FileVersion tracks version history

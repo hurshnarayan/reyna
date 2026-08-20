@@ -141,7 +141,140 @@ func (s *Store) migrate() error {
 		s.db.Exec(m) // ignore errors if columns already exist
 	}
 
+	if err := s.migrateAttribution(); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// migrateAttribution adds the schema that lets a file's sender and share time
+// be recorded separately from the row's insert time, and be qualified by how
+// confident we are.
+//
+// Why this exists: created_at is when the server inserted the row. Under the
+// Baileys bot that is within seconds of when the message was sent, so the two
+// were used interchangeably and created_at is what every answer is timestamped
+// from. Once capture moves to the user's phone that stops being true — a file
+// lands on disk when someone taps download, which can be days after it was
+// posted — and Reyna would state the wrong date with no way for the user to
+// tell. posted_at holds the real message time; created_at keeps meaning what it
+// always meant.
+//
+// Sender attribution changes in the same way. Baileys supplies the sender as a
+// fact. On-device it is a join between a file and a notification or an export
+// line, which can fail or be ambiguous, so every attribution now carries a
+// method and a confidence and callers can refuse to name a person below a
+// threshold.
+func (s *Store) migrateAttribution() error {
+	stmts := []string{
+		// When the message was actually sent, as opposed to when we inserted
+		// the row. Nullable: NULL means "we only know when we saw it".
+		`ALTER TABLE files ADD COLUMN posted_at DATETIME`,
+		// How the sender was determined, and how much to trust it.
+		//   baileys        — from the WhatsApp Web protocol. Authoritative.
+		//   export         — matched to a line in a chat export. Authoritative.
+		//   self_sent      — file was in WhatsApp's /Sent/ folder.
+		//   notification   — matched to a notification we observed.
+		//   date_unique    — only one candidate message that day.
+		//   time_window    — nearest message in time. Ambiguous.
+		//   user           — the user told us.
+		//   none           — unattributed.
+		`ALTER TABLE files ADD COLUMN attribution_method TEXT DEFAULT ''`,
+		`ALTER TABLE files ADD COLUMN attribution_confidence REAL DEFAULT 0`,
+
+		// Rows that predate this migration came from Baileys, which reports the
+		// sender authoritatively, so they are marked as such rather than left
+		// looking unattributed. Rows with no sender stay at zero.
+		`UPDATE files SET posted_at = created_at WHERE posted_at IS NULL`,
+		`UPDATE files
+		    SET attribution_method = 'baileys', attribution_confidence = 1.0
+		  WHERE attribution_method = ''
+		    AND COALESCE(shared_by_name,'') || COALESCE(shared_by_phone,'') != ''`,
+
+		`CREATE INDEX IF NOT EXISTS idx_files_posted ON files(posted_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_files_attribution ON files(attribution_confidence)`,
+
+		// A person seen in a chat. WhatsApp does not hand out a stable
+		// identifier for a group member, so identity is resolved from whatever
+		// keys we do get: a notification Person key, a phone number, or just a
+		// display name from an export. merged_into_id lets two records that
+		// turn out to be the same person be joined without losing either.
+		`CREATE TABLE IF NOT EXISTS people (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			sender_key TEXT DEFAULT '',
+			display_name TEXT DEFAULT '',
+			phone TEXT DEFAULT '',
+			merged_into_id INTEGER DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_people_key ON people(sender_key)`,
+		`CREATE INDEX IF NOT EXISTS idx_people_phone ON people(phone)`,
+		`CREATE INDEX IF NOT EXISTS idx_people_name ON people(display_name)`,
+
+		// A message we know about, independent of whether a file ever turned up
+		// for it. Stored unconditionally: an event with no file is what lets a
+		// file that arrives hours later still be attributed, and the join runs
+		// in both directions for exactly that reason.
+		//
+		// group_id may be 0 when an export is imported before the chat has been
+		// matched to a known group.
+		`CREATE TABLE IF NOT EXISTS events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			group_id INTEGER DEFAULT 0,
+			chat_key TEXT DEFAULT '',
+			chat_name TEXT DEFAULT '',
+			is_group INTEGER DEFAULT 1,
+			person_id INTEGER DEFAULT 0,
+			sender_key TEXT DEFAULT '',
+			sender_display TEXT DEFAULT '',
+			posted_at DATETIME NOT NULL,
+			raw_text TEXT DEFAULT '',
+			attachment_name TEXT DEFAULT '',
+			has_attachment INTEGER DEFAULT 0,
+			source TEXT DEFAULT '',
+			source_ref TEXT DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_events_posted ON events(posted_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_events_group ON events(group_id, posted_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_events_attachment ON events(attachment_name)`,
+		`CREATE INDEX IF NOT EXISTS idx_events_sender ON events(sender_display)`,
+		// An export re-imported over the same range must not double up. Two
+		// messages genuinely identical in chat, time, sender and text are
+		// indistinguishable and collapsing them is correct.
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_dedup
+			ON events(chat_key, posted_at, sender_display, attachment_name, raw_text)`,
+
+		// Candidate file-to-event matches. Every candidate is kept rather than
+		// only the winner, with is_active marking the current best, so a later
+		// export can promote a better match without the earlier reasoning being
+		// lost — and so a wrong guess can be explained after the fact.
+		`CREATE TABLE IF NOT EXISTS links (
+			file_id INTEGER NOT NULL,
+			event_id INTEGER NOT NULL,
+			method TEXT DEFAULT '',
+			confidence REAL DEFAULT 0,
+			is_active INTEGER DEFAULT 0,
+			linked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (file_id, event_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_links_file ON links(file_id, is_active)`,
+		`CREATE INDEX IF NOT EXISTS idx_links_event ON links(event_id)`,
+	}
+	for _, stmt := range stmts {
+		// ALTER TABLE ADD COLUMN fails when the column is already there, which
+		// is the normal path on every start after the first. CREATE ... IF NOT
+		// EXISTS and the UPDATEs are idempotent.
+		if _, err := s.db.Exec(stmt); err != nil && !isDuplicateColumn(err) {
+			return fmt.Errorf("attribution migration %.60q: %w", stmt, err)
+		}
+	}
+	return nil
+}
+
+func isDuplicateColumn(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "duplicate column name")
 }
 
 // ── User Operations ──
@@ -378,10 +511,12 @@ func (s *Store) AddFile(f *model.File) (*model.File, error) {
 
 	res, err := s.db.Exec(
 		`INSERT INTO files (group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
-		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, content_hash)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, content_hash,
+		  posted_at, attribution_method, attribution_confidence)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		f.GroupID, f.UserID, f.SharedByPhone, f.SharedByName, f.FileName, f.FileSize,
 		f.MimeType, f.DriveFileID, f.DriveFolderID, f.Subject, f.Tags, f.Version, f.ParentFileID, f.WAMessageID, f.Status, f.ContentHash,
+		postedAtArg(f), f.AttributionMethod, f.AttributionConfidence,
 	)
 	if err != nil {
 		return nil, err
@@ -457,7 +592,7 @@ func (s *Store) RemoveAllStaged(groupID int64) (int64, error) {
 func (s *Store) GetStagedFiles(groupID int64) ([]model.File, error) {
 	rows, err := s.db.Query(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
-		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
+		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at, posted_at, COALESCE(attribution_method,''), COALESCE(attribution_confidence,0)
 		 FROM files WHERE group_id=? AND status='staged' ORDER BY created_at DESC`,
 		groupID,
 	)
@@ -478,7 +613,7 @@ func (s *Store) CountStagedFiles(groupID int64) int {
 func (s *Store) FindFiles(groupID int64, query string) ([]model.File, error) {
 	rows, err := s.db.Query(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
-		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
+		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at, posted_at, COALESCE(attribution_method,''), COALESCE(attribution_confidence,0)
 		 FROM files WHERE group_id=? AND (file_name LIKE ? OR subject LIKE ? OR tags LIKE ?)
 		 ORDER BY created_at DESC LIMIT 20`,
 		groupID, "%"+query+"%", "%"+query+"%", "%"+query+"%",
@@ -496,7 +631,7 @@ func (s *Store) GetGroupFiles(groupID int64, limit int) ([]model.File, error) {
 	}
 	rows, err := s.db.Query(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
-		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
+		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at, posted_at, COALESCE(attribution_method,''), COALESCE(attribution_confidence,0)
 		 FROM files WHERE group_id=? ORDER BY created_at DESC LIMIT ?`,
 		groupID, limit,
 	)
@@ -513,7 +648,7 @@ func (s *Store) GetUserFiles(userID int64, limit int) ([]model.File, error) {
 	}
 	rows, err := s.db.Query(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
-		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
+		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at, posted_at, COALESCE(attribution_method,''), COALESCE(attribution_confidence,0)
 		 FROM files WHERE user_id=? ORDER BY created_at DESC LIMIT ?`,
 		userID, limit,
 	)
@@ -564,7 +699,7 @@ func (s *Store) CountUserFiles(userID int64) int {
 func (s *Store) GetNewFilesSince(groupID int64, since time.Time) ([]model.File, error) {
 	rows, err := s.db.Query(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
-		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
+		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at, posted_at, COALESCE(attribution_method,''), COALESCE(attribution_confidence,0)
 		 FROM files WHERE group_id=? AND created_at > ? ORDER BY created_at DESC`,
 		groupID, since,
 	)
@@ -684,7 +819,7 @@ func (s *Store) GetGroupsFiles(groupIDs []int64, limit int) ([]model.File, error
 	args = append(args, interface{}(limit))
 	rows, err := s.db.Query(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
-		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
+		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at, posted_at, COALESCE(attribution_method,''), COALESCE(attribution_confidence,0)
 		 FROM files WHERE group_id IN (`+placeholders+`) ORDER BY created_at DESC LIMIT ?`,
 		args...,
 	)
@@ -743,16 +878,19 @@ func (s *Store) GetActivityLog(groupID int64, limit int) ([]model.ActivityLog, e
 
 func (s *Store) GetFileByID(fileID int64) (*model.File, error) {
 	f := &model.File{}
+	var posted sql.NullTime
 	err := s.db.QueryRow(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
-		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
+		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at, posted_at, COALESCE(attribution_method,''), COALESCE(attribution_confidence,0)
 		 FROM files WHERE id=?`, fileID,
 	).Scan(&f.ID, &f.GroupID, &f.UserID, &f.SharedByPhone, &f.SharedByName,
 		&f.FileName, &f.FileSize, &f.MimeType, &f.DriveFileID, &f.DriveFolderID,
-		&f.Subject, &f.Tags, &f.Version, &f.ParentFileID, &f.WAMessageID, &f.Status, &f.CreatedAt)
+		&f.Subject, &f.Tags, &f.Version, &f.ParentFileID, &f.WAMessageID, &f.Status, &f.CreatedAt,
+		&posted, &f.AttributionMethod, &f.AttributionConfidence)
 	if err != nil {
 		return nil, err
 	}
+	applyPostedAt(f, posted)
 	return f, nil
 }
 
@@ -809,7 +947,7 @@ func (s *Store) FindFilesStrict(groupIDs []int64, query string, limit int) ([]mo
 	args = append(args, "%"+query+"%", interface{}(limit))
 	rows, err := s.db.Query(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
-		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
+		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at, posted_at, COALESCE(attribution_method,''), COALESCE(attribution_confidence,0)
 		 FROM files WHERE group_id IN (`+placeholders+`) AND file_name LIKE ?
 		 ORDER BY created_at DESC LIMIT ?`,
 		args...,
@@ -824,17 +962,20 @@ func (s *Store) FindFilesStrict(groupIDs []int64, query string, limit int) ([]mo
 // FileExistsInGroup checks if a file with the given name exists committed in a group
 func (s *Store) FileExistsInGroup(groupID int64, fileName string) (*model.File, bool) {
 	f := &model.File{}
+	var posted sql.NullTime
 	err := s.db.QueryRow(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
-		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
+		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at, posted_at, COALESCE(attribution_method,''), COALESCE(attribution_confidence,0)
 		 FROM files WHERE group_id=? AND file_name=? AND status='committed' ORDER BY version DESC LIMIT 1`,
 		groupID, fileName,
 	).Scan(&f.ID, &f.GroupID, &f.UserID, &f.SharedByPhone, &f.SharedByName,
 		&f.FileName, &f.FileSize, &f.MimeType, &f.DriveFileID, &f.DriveFolderID,
-		&f.Subject, &f.Tags, &f.Version, &f.ParentFileID, &f.WAMessageID, &f.Status, &f.CreatedAt)
+		&f.Subject, &f.Tags, &f.Version, &f.ParentFileID, &f.WAMessageID, &f.Status, &f.CreatedAt,
+		&posted, &f.AttributionMethod, &f.AttributionConfidence)
 	if err != nil {
 		return nil, false
 	}
+	applyPostedAt(f, posted)
 	return f, true
 }
 
@@ -983,7 +1124,7 @@ func (s *Store) GetFilesWithSorting(groupIDs []int64, sortBy, sortOrder string, 
 	args = append(args, interface{}(limit))
 	query := fmt.Sprintf(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
-		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
+		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at, posted_at, COALESCE(attribution_method,''), COALESCE(attribution_confidence,0)
 		 FROM files WHERE group_id IN (%s) ORDER BY %s %s LIMIT ?`,
 		placeholders, column, order,
 	)
@@ -1001,7 +1142,7 @@ func (s *Store) GetFilesWithSorting(groupIDs []int64, sortBy, sortOrder string, 
 func (s *Store) GetStagedFilesOlderThan(hours int) ([]model.File, error) {
 	rows, err := s.db.Query(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
-		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
+		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at, posted_at, COALESCE(attribution_method,''), COALESCE(attribution_confidence,0)
 		 FROM files WHERE status='staged' AND created_at <= datetime('now', '-' || ? || ' hours')
 		 ORDER BY group_id, created_at`,
 		hours,
@@ -1016,7 +1157,7 @@ func (s *Store) GetStagedFilesOlderThan(hours int) ([]model.File, error) {
 func (s *Store) GetStagedFilesByGroupID(groupID int64) ([]model.File, error) {
 	rows, err := s.db.Query(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
-		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
+		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at, posted_at, COALESCE(attribution_method,''), COALESCE(attribution_confidence,0)
 		 FROM files WHERE group_id=? AND status='staged' ORDER BY created_at ASC`,
 		groupID,
 	)
@@ -1033,15 +1174,44 @@ func scanFiles(rows *sql.Rows) ([]model.File, error) {
 	var files []model.File
 	for rows.Next() {
 		var f model.File
+		var posted sql.NullTime
 		err := rows.Scan(&f.ID, &f.GroupID, &f.UserID, &f.SharedByPhone, &f.SharedByName,
 			&f.FileName, &f.FileSize, &f.MimeType, &f.DriveFileID, &f.DriveFolderID,
-			&f.Subject, &f.Tags, &f.Version, &f.ParentFileID, &f.WAMessageID, &f.Status, &f.CreatedAt)
+			&f.Subject, &f.Tags, &f.Version, &f.ParentFileID, &f.WAMessageID, &f.Status, &f.CreatedAt,
+			&posted, &f.AttributionMethod, &f.AttributionConfidence)
 		if err != nil {
+			// Historically this skipped silently, which turns a column or type
+			// mismatch into "the user has no files" with nothing in the log to
+			// explain it. Still skip the row, but say so.
+			log.Printf("[SCAN] skipping file row: %v", err)
 			continue
 		}
+		applyPostedAt(&f, posted)
 		files = append(files, f)
 	}
 	return files, nil
+}
+
+// applyPostedAt resolves the effective share time. posted_at is selected raw
+// rather than wrapped in COALESCE because go-sqlite3 only converts a value to
+// time.Time when the *declared column type* is a date type; the result of an
+// expression has no declared type, comes back as a string, and fails to scan.
+// So the fallback to created_at happens here instead of in SQL.
+func applyPostedAt(f *model.File, posted sql.NullTime) {
+	if posted.Valid && !posted.Time.IsZero() {
+		f.PostedAt = posted.Time
+		return
+	}
+	f.PostedAt = f.CreatedAt
+}
+
+// postedAtArg renders File.PostedAt for insertion, writing NULL rather than the
+// zero time when it is unknown so reads fall back to created_at.
+func postedAtArg(f *model.File) interface{} {
+	if f.PostedAt.IsZero() {
+		return nil
+	}
+	return f.PostedAt
 }
 
 // UpdateFileSubject updates the subject/folder after async classification completes
@@ -1093,17 +1263,20 @@ func (s *Store) FindFileByHash(groupID int64, hash string) *model.File {
 		return nil
 	}
 	f := &model.File{}
+	var posted sql.NullTime
 	err := s.db.QueryRow(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
-		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
+		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at, posted_at, COALESCE(attribution_method,''), COALESCE(attribution_confidence,0)
 		 FROM files WHERE group_id=? AND content_hash=? AND status != 'deleted_in_drive'
 		 ORDER BY created_at DESC LIMIT 1`,
 		groupID, hash,
 	).Scan(&f.ID, &f.GroupID, &f.UserID, &f.SharedByPhone, &f.SharedByName, &f.FileName, &f.FileSize,
-		&f.MimeType, &f.DriveFileID, &f.DriveFolderID, &f.Subject, &f.Tags, &f.Version, &f.ParentFileID, &f.WAMessageID, &f.Status, &f.CreatedAt)
+		&f.MimeType, &f.DriveFileID, &f.DriveFolderID, &f.Subject, &f.Tags, &f.Version, &f.ParentFileID, &f.WAMessageID, &f.Status, &f.CreatedAt,
+		&posted, &f.AttributionMethod, &f.AttributionConfidence)
 	if err != nil {
 		return nil
 	}
+	applyPostedAt(f, posted)
 	return f
 }
 
@@ -1314,7 +1487,7 @@ func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *ti
 	}
 	query := fmt.Sprintf(
 		`SELECT f.id, f.group_id, f.user_id, f.shared_by_phone, f.shared_by_name, f.file_name, f.file_size,
-		  f.mime_type, f.drive_file_id, f.drive_folder_id, f.subject, f.tags, f.version, f.parent_file_id, f.wa_message_id, f.status, f.created_at
+		  f.mime_type, f.drive_file_id, f.drive_folder_id, f.subject, f.tags, f.version, f.parent_file_id, f.wa_message_id, f.status, f.created_at, f.posted_at, COALESCE(f.attribution_method,''), COALESCE(f.attribution_confidence,0)
 		 FROM files f LEFT JOIN users u ON u.id = f.user_id
 		 WHERE %s ORDER BY %s LIMIT ?`,
 		strings.Join(conditions, " AND "), orderBy,
@@ -1380,7 +1553,7 @@ func (s *Store) SearchFilesContent(groupIDs []int64, query string, limit int) ([
 	}
 	q := fmt.Sprintf(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
-		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at
+		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at, posted_at, COALESCE(attribution_method,''), COALESCE(attribution_confidence,0)
 		 FROM files WHERE %s
 		 ORDER BY %s LIMIT ?`,
 		strings.Join(conds, " AND "), orderBy,
