@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -94,7 +95,7 @@ fun HomeScreen(state: HomeState, onAsk: () -> Unit = {}) {
         contentPadding = androidx.compose.foundation.layout.PaddingValues(
             start = Dimens.page, end = Dimens.page, top = 8.dp,
             // Clear the bottom nav and the floating action button.
-            bottom = 108.dp,
+            bottom = 132.dp,
         ),
         verticalArrangement = Arrangement.spacedBy(Dimens.cardGap),
     ) {
@@ -123,10 +124,16 @@ fun HomeScreen(state: HomeState, onAsk: () -> Unit = {}) {
         }
 
         item {
+            // The reference floats its headline card proud of the section
+            // above, so it reads as the one thing on the screen rather than
+            // the next card down. Done with offset, not negative padding:
+            // Modifier.padding rejects negative values at runtime, which is a
+            // crash rather than a compile error.
             HeroCard(
                 value = state.attributed,
                 total = state.total,
                 label = "Files attributed",
+                modifier = Modifier.offset(y = (-6).dp),
             )
         }
 

@@ -49,6 +49,7 @@ fun ReynaCard(
     modifier: Modifier = Modifier,
     radius: Dp = Dimens.cardRadius,
     padding: Dp = Dimens.cardPadding,
+    elevation: Dp = 1.dp,
     content: @Composable () -> Unit,
 ) {
     val c = reynaColors
@@ -56,7 +57,7 @@ fun ReynaCard(
         modifier = modifier,
         shape = RoundedCornerShape(radius),
         color = c.surface,
-        shadowElevation = 1.dp,
+        shadowElevation = elevation,
     ) {
         Box(Modifier.padding(padding)) { content() }
     }
@@ -168,7 +169,7 @@ fun HeroCard(
 ) {
     val c = reynaColors
     val fraction = if (total > 0) value.toFloat() / total else 0f
-    ReynaCard(modifier.fillMaxWidth(), padding = 20.dp) {
+    ReynaCard(modifier.fillMaxWidth(), padding = 20.dp, elevation = 3.dp) {
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -223,7 +224,16 @@ fun StatCard(
     val fraction = if (total > 0) value.toFloat() / total else 0f
     ReynaCard(modifier, radius = Dimens.smallCardRadius, padding = 14.dp) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("$value", style = MaterialTheme.typography.titleLarge, color = c.onSurface)
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text("$value", style = MaterialTheme.typography.titleLarge, color = c.onSurface)
+                Text(
+                    "/$total",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = c.onSurfaceMuted,
+                    modifier = Modifier.padding(bottom = 3.dp),
+                )
+            }
             Text(label, fontSize = 11.sp, color = c.onSurfaceMuted)
             Spacer(Modifier.size(10.dp))
             ProgressRing(progress = fraction, color = color, diameter = 40.dp, stroke = 4.dp) {
