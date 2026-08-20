@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+        Reyna reads documents the user already received and saved on their own
+        device, indexes their text so they can search inside them, and files
+        them into the user's own Google Drive.
+
+        MANAGE_EXTERNAL_STORAGE is required because the core function is to
+        observe a directory continuously for newly saved documents. The
+        narrower APIs do not reach:
+
+          - MediaStore indexes images, video and audio. It does not index PDF,
+            DOCX, PPTX or XLSX in application media directories, which are the
+            file types this app exists to manage.
+          - The Storage Access Framework requires the user to pick each file
+            through a system picker, which by definition cannot be automatic,
+            and offers no way to watch a directory for changes.
+
+        Whether a SAF tree grant can reach Android/media/com.whatsapp on
+        current Android is still to be tested on a real device. If it can, this
+        permission is dropped and the Play risk with it.
+    -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Capture must survive the app not being open. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <application
+        android:name=".ReynaApp"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Reyna"
+        tools:targetApi="35">
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!--
+                Chat-export import.
+
+                Registering as a share target is what keeps the import honest:
+                the flow is WhatsApp -> Export chat -> Reyna, entirely inside
+                WhatsApp's own UI, with no file picker and no browsing of the
+                user's storage. The export is parsed in memory and only the
+                attachment rows are kept.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/zip" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            Reads WhatsApp notifications for one purpose: learning who shared a
+            file and when. The file itself carries no sender. Nothing read here
+            leaves the device.
+        -->
+        <service
+            android:name=".attribution.NotificationReader"
+            android:exported="true"
+            android:label="@string/notification_listener_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+    </application>
+</manifest>
