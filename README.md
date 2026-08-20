@@ -120,9 +120,9 @@ reyna/
 │   │   └── llm/                -- provider-agnostic (gemini/claude/grok/openai)
 │   ├── auth/                   -- jwt
 │   ├── config/                 -- env loader
-│   └── reyna/                  -- bot reply generation
+│   ├── reyna/                  -- reply generation
+│   └── whatsapp/export/        -- chat export parser (attribution)
 ├── web/                        -- react + vite dashboard
-├── whatsapp-bot/bot.js         -- baileys whatsapp bot
 ├── go.mod
 ├── .env.example
 └── Makefile
@@ -145,7 +145,6 @@ cp .env.example .env
 make install    # installs js deps
 make backend    # starts go server on :8080
 make frontend   # starts react on :5173 (separate terminal)
-make bot        # starts whatsapp bot (separate terminal, scan qr)
 ```
 
 `make fresh` wipes the db and starts the backend. thats probably what youll use day to day.
@@ -168,7 +167,7 @@ get your api key at [aistudio.google.com/apikey](https://aistudio.google.com/api
 - ai: gemini 2.5 flash (swappable to claude/grok/openai via env var)
 - storage: google drive api v3
 - frontend: react + vite, no component library
-- bot: node.js + baileys
+- capture: android app (in progress) — see MIGRATION.md
 - auth: jwt
 
 ---

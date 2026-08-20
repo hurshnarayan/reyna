@@ -634,7 +634,7 @@ export default function Landing() {
           <p style={{fontSize:17,lineHeight:1.8,color:'#888',marginBottom:36}}>Not a wrapper around ChatGPT. A purpose-built agentic pipeline with hand-rolled retrieval, parsing, and dedup. Backed by a swappable LLM provider.</p>
           <div className="rl-techg" style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:14}}>
             {[
-              {icon:'fa-brands fa-whatsapp',t:'WhatsApp / Baileys',d:'Real-time message capture, file download, reaction tracking, wake-word session continuation.',c:'#25D366'},
+              {icon:'fa-brands fa-android',t:'On-device capture',d:'Watches the media folder WhatsApp already writes to. No bot, no group member, nothing to ban. Attribution carries a confidence, never a guess.',c:'#25D366'},
               {icon:'fa-server',t:'Go backend',d:'Single binary. SQLite + stdlib HTTP. Hash dedup, ranked SQL retrieval, zip-archive parsing. Zero ORMs, zero deps.',c:'#0ea5e9'},
               {icon:'fa-brain',t:'Gemini 2.5 Flash',d:'Inline document blocks for PDFs. Provider-agnostic interface. Claude, Grok, or OpenAI swappable via env var.',c:'#7F77DD'},
               {icon:'fa-brands fa-google-drive',t:'Google Drive API',d:'OAuth 2.0. Folder CRUD. Auto-public link permissions. Eventual-consistency-aware classification.',c:'#FBBC04'},

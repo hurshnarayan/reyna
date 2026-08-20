@@ -16,8 +16,7 @@ type Config struct {
 	GoogleSecret      string
 	GoogleRedirectURL string
 	FrontendURL       string
-	WhatsAppMode      string // "baileys" or "mock"
-	AutoCommitHours   int    // Hours before staged files auto-commit (default 24)
+	AutoCommitHours   int // Hours before staged files auto-commit (default 24)
 
 	// DeviceToken is the shared secret the WhatsApp bot (and, later, the Android
 	// app) presents on /api/bot/* and /api/nlp/*. These routes accept file
@@ -51,7 +50,6 @@ func Load() *Config {
 		GoogleSecret:      getEnv("GOOGLE_CLIENT_SECRET", ""),
 		GoogleRedirectURL: getEnv("GOOGLE_REDIRECT_URL", "http://localhost:8080/api/auth/google/callback"),
 		FrontendURL:       getEnv("FRONTEND_URL", "http://localhost:5173"),
-		WhatsAppMode:      getEnv("WHATSAPP_MODE", "mock"),
 		AutoCommitHours:   ach,
 		DeviceToken:       getEnv("DEVICE_TOKEN", ""),
 

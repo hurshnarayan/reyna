@@ -73,10 +73,6 @@ export const api = {
   // Activity
   activity: (groupId) => req(`/activity?group_id=${groupId}`),
 
-  // Bot command
-  botCommand: (groupWaId, command, userPhone) =>
-    req('/bot/command', { method: 'POST', body: JSON.stringify({ group_wa_id: groupWaId, command, user_phone: userPhone }) }),
-
   // Waitlist
   joinWaitlist: (contact) => req('/waitlist', { method: 'POST', body: JSON.stringify({ contact }) }),
   waitlistCount: () => req('/waitlist'),

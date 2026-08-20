@@ -1,4 +1,4 @@
-.PHONY: backend frontend bot install dev fresh clean help
+.PHONY: backend frontend install dev fresh clean help
 
 # ── .env loading ──
 # Strips comments and blank lines, then exports each KEY=VALUE.
@@ -20,20 +20,15 @@ backend: ## Start the Go backend on :8080
 frontend: ## Start the React dev server on :5173
 	cd web && npm run dev
 
-bot: ## Start the WhatsApp bot
-	@cd whatsapp-bot && $(ENV_EXPORT) node bot.js
-
-install: ## Install frontend + bot dependencies
+install: ## Install frontend dependencies
 	cd web && npm install
-	cd whatsapp-bot && npm install
 
-dev: ## Print instructions for running all 3 services
+dev: ## Print instructions for running both services
 	@echo ""
-	@echo "  Run these in 3 separate terminals:"
+	@echo "  Run these in 2 separate terminals:"
 	@echo ""
 	@echo "    make backend     # Go API on :8080"
 	@echo "    make frontend    # React on :5173"
-	@echo "    make bot         # WhatsApp bot"
 	@echo ""
 	@echo "  Or for a fresh start (clean DB + backend):"
 	@echo ""
@@ -44,11 +39,10 @@ fresh: ## Clean DB + start backend (your daily dev command)
 	rm -f reyna.db reyna.db-shm reyna.db-wal
 	@$(ENV_EXPORT) go run ./cmd/server/
 
-clean: ## Remove database, drive storage, bot auth state
+clean: ## Remove database and drive storage
 	rm -f reyna.db reyna.db-shm reyna.db-wal
 	rm -rf drive_storage
-	rm -rf whatsapp-bot/auth_state
-	@echo "Cleaned database, drive storage, and bot auth."
+	@echo "Cleaned database and drive storage."
 
 build: ## Build the backend binary
 	@$(ENV_EXPORT) go build -o reyna-server ./cmd/server/
