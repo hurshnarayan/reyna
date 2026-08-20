@@ -133,6 +133,15 @@ interface ReynaDao {
     @Query("SELECT COUNT(*) FROM files WHERE sha256 = :hash")
     suspend fun countByHash(hash: String): Int
 
+    /**
+     * The file already held under this hash, if any.
+     *
+     * Returns the row rather than a count so a duplicate can be reported by
+     * name and linked to, instead of only denied.
+     */
+    @Query("SELECT * FROM files WHERE sha256 = :hash LIMIT 1")
+    suspend fun fileByHash(hash: String): FileEntity?
+
     @Query("SELECT * FROM files WHERE confidence < :threshold ORDER BY postedAt DESC")
     suspend fun unattributed(threshold: Double): List<FileEntity>
 
@@ -189,6 +198,9 @@ interface ReynaDao {
 
     @Query("SELECT * FROM messages ORDER BY at ASC")
     fun observeMessages(): Flow<List<MessageEntity>>
+
+    @Query("SELECT COUNT(*) FROM messages")
+    suspend fun messageCount(): Int
 
     @Query("DELETE FROM messages")
     suspend fun clearMessages()

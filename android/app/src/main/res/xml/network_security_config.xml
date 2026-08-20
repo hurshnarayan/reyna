@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 9 and later block plaintext HTTP by default, which is correct: a
+  document-search app should not be shipping user content over the open
+  internet unencrypted.
+
+  But Reyna is self-hosted. The backend normally runs on the user's own machine
+  or a box on their own network, reached over http, and without an exception
+  every call fails with "CLEARTEXT communication not permitted" while the app
+  reports it as an unreachable server. That is a confusing failure to debug and
+  it made every network feature silently dead.
+
+  So cleartext is permitted only where a self-hosted backend legitimately
+  lives: loopback, the emulator's alias for the host machine, and the private
+  address ranges. Everything else, meaning anything on the public internet,
+  still requires HTTPS.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <!-- The host machine, as seen from an emulator. -->
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <!-- Private ranges, for a backend on the user's own network. -->
+        <domain includeSubdomains="true">192.168.0.0</domain>
+        <domain includeSubdomains="true">10.0.0.0</domain>
+        <domain includeSubdomains="true">172.16.0.0</domain>
+    </domain-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

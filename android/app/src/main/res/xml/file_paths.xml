@@ -1,11 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Lets Reyna hand a captured file to whatever app can open it.
+  Lets Reyna hand a file to whatever app can open it.
 
-  Scoped to external storage rather than the whole filesystem: Reyna only ever
-  serves files it found in WhatsApp's media folder, and a broader grant would
-  expose more than it needs to.
+  Two roots, because Reyna holds files in two places. Files found by watching
+  WhatsApp's media folder stay where WhatsApp put them and are served from
+  external storage. Files the user hands over through the picker are copied
+  into Reyna's own storage, since the picker's read grant does not survive a
+  reboot; without the second root those copies could be listed but never
+  opened.
+
+  Scoped to these two roots rather than the whole filesystem: a broader grant
+  would expose more than Reyna ever needs to serve.
 -->
 <paths>
     <external-path name="external" path="." />
+    <files-path name="added" path="added/" />
 </paths>

@@ -76,9 +76,14 @@ fun RepairScreen(
                 Text(
                     // What Reyna currently believes, stated exactly as it would
                     // be shown anywhere else.
+                    // The fourth argument is when it was shared, not where it
+                    // was found. Passing a place produced "Found on your phone
+                    // on this phone" and told the user nothing about the date,
+                    // which is the one clue they have for recognising a file
+                    // Reyna cannot attribute.
                     Attribution.describe(
                         file.confidence, file.senderName, file.chatName,
-                        "on this phone",
+                        vm.relativeTime(file.postedAt),
                     ),
                     fontSize = 13.sp, color = c.onSurfaceMuted,
                 )

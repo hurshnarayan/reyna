@@ -53,6 +53,15 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
     private val _toast = MutableStateFlow<String?>(null)
     val toast: StateFlow<String?> = _toast.asStateFlow()
 
+    /** True while an answer is in flight, so the composer can offer Stop. */
+    private val _sending = MutableStateFlow(false)
+    val sending: StateFlow<Boolean> = _sending.asStateFlow()
+
+    // The in-flight request, held so it can actually be torn down. Cancelling
+    // the coroutine alone would leave the socket open and the server working.
+    private var askJob: kotlinx.coroutines.Job? = null
+    private var askCall: okhttp3.Call? = null
+
     val capturing: Boolean get() = repo.capturing
     val dailyDigest: Boolean get() = repo.dailyDigest
     var backendUrl: String
@@ -67,13 +76,39 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
             repo.observeFiles().collect { _files.value = it }
         }
         viewModelScope.launch {
-            repo.observeMessages().collect { rows ->
+            // Combined rather than collected alone. Chips are rebuilt from the
+            // file rows, so a message stream that only re-emits when messages
+            // change would render every chip empty on a cold start, when the
+            // conversation loads before the library does, and leave them empty
+            // until the next message arrived.
+            kotlinx.coroutines.flow.combine(
+                repo.observeMessages(),
+                repo.observeFiles(),
+            ) { rows, files -> rows to files }.collect { (rows, files) ->
                 _messages.value = rows.map { m ->
                     ChatMessage(
                         text = m.text,
                         fromUser = m.fromUser,
                         time = timeOf(m.at),
-                        files = emptyList(),
+                        // Chips are rebuilt from the local rows rather than
+                        // stored with the message, so an answer always shows
+                        // the current attribution rather than what was true
+                        // when it was written.
+                        files = m.fileIds
+                            .split(",")
+                            .mapNotNull { it.trim().toLongOrNull() }
+                            .mapNotNull { id -> files.firstOrNull { it.id == id } }
+                            .map { f ->
+                                FoundFile(
+                                    id = f.id,
+                                    fileName = f.name,
+                                    senderName = f.senderName,
+                                    chatName = f.chatName,
+                                    whenText = relativeTime(f.postedAt),
+                                    confidence = f.confidence,
+                                    isImage = f.isImage,
+                                )
+                            },
                     )
                 }
             }
@@ -145,13 +180,81 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
     // ── Chat ──
 
     fun ask(question: String) {
-        viewModelScope.launch {
-            if (repo.deviceToken.isBlank()) {
-                repo.ask(question) // still records the turn, replies honestly
-                _toast.value = "Set a device token in Settings to reach the backend"
-                return@launch
+        // One question at a time. A second send while the first is in flight
+        // would interleave two answers into the same conversation.
+        if (_sending.value) return
+
+        askJob = viewModelScope.launch {
+            _sending.value = true
+            try {
+                if (repo.deviceToken.isBlank()) {
+                    // Still records the turn and answers honestly, rather than
+                    // dropping the question on the floor.
+                    repo.ask(question)
+                    _toast.value = "Set a device token in Settings to reach the backend"
+                    return@launch
+                }
+                repo.ask(question) { call -> askCall = call }
+            } finally {
+                askCall = null
+                _sending.value = false
             }
-            repo.ask(question)
+        }
+    }
+
+    /**
+     * Stops an answer in progress.
+     *
+     * Cancels the HTTP call as well as the coroutine, so the socket is torn
+     * down rather than left running while its result is quietly discarded. The
+     * user's question stays in the conversation, because they did ask it, and
+     * Reyna says plainly that it stopped rather than leaving a turn dangling.
+     */
+    fun stopAnswering() {
+        if (!_sending.value) return
+        askCall?.cancel()
+        askJob?.cancel()
+        askCall = null
+        _sending.value = false
+        viewModelScope.launch { repo.say("Stopped.") }
+    }
+
+    /** Wipes the conversation. Files and attribution are untouched. */
+    fun clearChat() {
+        viewModelScope.launch {
+            stopAnswering()
+            repo.clearConversation()
+            repo.seedGreeting()
+        }
+    }
+
+    /**
+     * Takes a file the user handed to Reyna directly.
+     *
+     * Copied into Reyna's own storage first: the picker gives a content URI
+     * that is only readable for as long as the grant lasts, so keeping the URI
+     * would mean a file that opens today and fails next week.
+     */
+    /**
+     * Hands Reyna a file directly.
+     *
+     * The outcome is written into the conversation, not just flashed as a
+     * toast. This is a chat: the user's mental model is that what they hand
+     * over shows up in the thread, and the receipt carries a chip so the file
+     * is openable from the spot where they added it.
+     */
+    fun addFile(uri: android.net.Uri) {
+        viewModelScope.launch {
+            when (val result = repo.importFile(uri)) {
+                is Repo.Imported.Added ->
+                    repo.say("Got ${result.name}. Filed under you.", listOf(result.fileId))
+
+                is Repo.Imported.Duplicate ->
+                    repo.say("I already have ${result.name}.", listOf(result.fileId))
+
+                Repo.Imported.Unreadable ->
+                    repo.say("I could not read that file. Nothing was added.")
+            }
         }
     }
 
@@ -186,16 +289,38 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             val app = getApplication<Application>()
-            val uri = androidx.core.content.FileProvider.getUriForFile(
-                app, "${app.packageName}.files", file,
-            )
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, if (f.isImage) "image/*" else "application/pdf")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            runCatching { app.startActivity(intent) }
-                .onFailure { _toast.value = "No app on this phone can open that file" }
+
+            // getUriForFile throws when the file sits outside every root
+            // declared in file_paths.xml, and it throws rather than returning
+            // null, so leaving it outside the guard turned a file Reyna could
+            // not serve into a crash. Opening a file must never take the app
+            // down; the worst case is telling the user it cannot be opened.
+            runCatching {
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    app, "${app.packageName}.files", file,
+                )
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, mimeOf(f.name, f.isImage))
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                app.startActivity(intent)
+            }.onFailure { _toast.value = "No app on this phone can open that file" }
         }
+    }
+
+    /**
+     * The type to hand another app when opening a file.
+     *
+     * Derived from the extension rather than assumed. Everything that was not
+     * an image used to be opened as application/pdf, so a .docx or .pptx, which
+     * is most of what circulates in a class group, either failed to open or
+     * opened in the wrong reader.
+     */
+    private fun mimeOf(name: String, isImage: Boolean): String {
+        if (isImage) return "image/*"
+        val ext = name.substringAfterLast('.', "").lowercase()
+        return android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+            ?: "application/octet-stream"
     }
 
     /** The repair path behind every "who shared this?" affordance. */
@@ -339,7 +464,8 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
-    private fun relativeTime(millis: Long): String {
+    /** How long ago something was shared, phrased the way every screen phrases it. */
+    fun relativeTime(millis: Long): String {
         val delta = System.currentTimeMillis() - millis
         val days = TimeUnit.MILLISECONDS.toDays(delta)
         val hours = TimeUnit.MILLISECONDS.toHours(delta)

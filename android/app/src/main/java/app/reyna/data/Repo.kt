@@ -97,6 +97,75 @@ class Repo private constructor(private val context: Context) {
         dao.file(id)
     }
 
+    /**
+     * Takes a file the user handed to Reyna directly, rather than one found by
+     * watching the folder.
+     *
+     * Copied into Reyna's own storage rather than referenced in place. The
+     * picker hands back a content URI whose read grant does not survive a
+     * reboot, so keeping the URI would give a file that opens today and fails
+     * next week. Attribution is self_sent at full confidence: the user handed
+     * it over themselves, which is the one thing we can be certain of.
+     *
+     * Returns the outcome rather than a bare boolean so the caller can write a
+     * receipt into the conversation naming the file and linking to it. A
+     * transient toast is the wrong acknowledgement in a chat: it is gone before
+     * the user can act on it, and it leaves nothing to tap.
+     */
+    suspend fun importFile(uri: android.net.Uri): Imported = withContext(Dispatchers.IO) {
+        val name = displayName(uri) ?: return@withContext Imported.Unreadable
+        val dir = File(context.filesDir, "added").apply { mkdirs() }
+        val dest = File(dir, name)
+
+        runCatching {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                dest.outputStream().use { input.copyTo(it) }
+            } ?: return@withContext Imported.Unreadable
+        }.getOrElse { return@withContext Imported.Unreadable }
+
+        val hash = runCatching { ReconcileScanner.sha256(dest) }.getOrElse {
+            dest.delete()
+            return@withContext Imported.Unreadable
+        }
+        dao.fileByHash(hash)?.let { existing ->
+            // Already held. Drop the copy rather than leaving a duplicate on
+            // disk that nothing points at, and point at the one we kept.
+            dest.delete()
+            return@withContext Imported.Duplicate(existing.id, existing.name)
+        }
+
+        val now = System.currentTimeMillis()
+        val id = dao.insertFile(
+            FileEntity(
+                path = dest.absolutePath,
+                name = name,
+                sha256 = hash,
+                sizeBytes = dest.length(),
+                mtime = now,
+                postedAt = now,
+                isImage = dest.extension.lowercase() in IMAGE_EXT,
+                isSent = true,
+                senderName = "You",
+                confidence = 1.0,
+                method = Attribution.Method.SELF_SENT,
+            )
+        )
+        if (id <= 0) {
+            dest.delete()
+            return@withContext Imported.Unreadable
+        }
+        syncPending()
+        Imported.Added(id, name)
+    }
+
+    private fun displayName(uri: android.net.Uri): String? {
+        context.contentResolver.query(uri, null, null, null, null)?.use { c ->
+            val i = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            if (i >= 0 && c.moveToFirst()) return c.getString(i)
+        }
+        return uri.lastPathSegment?.substringAfterLast('/')
+    }
+
     /** Runs a full scan and records anything new. Returns how many were added. */
     suspend fun reconcile(): Int = withContext(Dispatchers.IO) {
         if (!WhatsAppPaths.anyVisible()) return@withContext 0
@@ -360,16 +429,73 @@ class Repo private constructor(private val context: Context) {
         sent
     }
 
-    suspend fun ask(question: String): ReynaApi.Answer? = withContext(Dispatchers.IO) {
+    /**
+     * Asks a question and records both turns.
+     *
+     * [onCall] hands the in-flight HTTP call up so it can be cancelled. The
+     * user's own message is written before the request goes out, so a question
+     * is never lost if the answer fails or is stopped.
+     */
+    suspend fun ask(
+        question: String,
+        onCall: (okhttp3.Call) -> Unit = {},
+    ): ReynaApi.Answer? = withContext(Dispatchers.IO) {
         dao.insertMessage(MessageEntity(text = question, fromUser = true, at = System.currentTimeMillis()))
-        val answer = api().ask(question).getOrNull()
+        val answer = api().ask(question, onCall).getOrNull()
         val reply = answer?.reply
             ?: "I could not reach the backend. Your files are still safe on this phone."
-        dao.insertMessage(MessageEntity(text = reply, fromUser = false, at = System.currentTimeMillis()))
+
+        // Match the cited filenames back to local rows so the answer can show
+        // real chips. Matched by name because the backend numbers files by its
+        // own ids, which the phone does not share.
+        val local = dao.allFiles()
+        val citedIds = answer?.files.orEmpty().mapNotNull { cited ->
+            local.firstOrNull { it.name.equals(cited.name, ignoreCase = true) }?.id
+        }
+
+        dao.insertMessage(
+            MessageEntity(
+                text = reply,
+                fromUser = false,
+                at = System.currentTimeMillis(),
+                fileIds = citedIds.joinToString(","),
+            )
+        )
         answer
     }
 
+    /** Wipes the conversation. Files and attribution are untouched. */
+    suspend fun clearConversation() = withContext(Dispatchers.IO) {
+        dao.clearMessages()
+    }
+
+    /**
+     * Records a message Reyna wrote about something it did, not an answer.
+     *
+     * [fileIds] attaches chips, so a receipt for a file just added is openable
+     * from the conversation instead of sending the user off to the Files tab to
+     * find what they were already holding.
+     */
+    suspend fun say(text: String, fileIds: List<Long> = emptyList()) = withContext(Dispatchers.IO) {
+        dao.insertMessage(
+            MessageEntity(
+                text = text,
+                fromUser = false,
+                at = System.currentTimeMillis(),
+                fileIds = fileIds.joinToString(","),
+            )
+        )
+    }
+
+    /**
+     * Opens the conversation, once.
+     *
+     * Guarded on the conversation being empty. It is called on every app start
+     * and again when onboarding finishes, and without the guard each launch
+     * appended another copy until the screen was nothing but greetings.
+     */
     suspend fun seedGreeting() = withContext(Dispatchers.IO) {
+        if (dao.messageCount() > 0) return@withContext
         val files = dao.allFiles().size
         val chats = dao.knownChats().size
         val text = if (files == 0) {
@@ -382,6 +508,18 @@ class Repo private constructor(private val context: Context) {
 
     suspend fun deleteEverything() = withContext(Dispatchers.IO) {
         dao.clearLinks(); dao.clearEvents(); dao.clearFiles(); dao.clearMessages()
+    }
+
+    /**
+     * What happened to a file handed to Reyna directly.
+     *
+     * A duplicate carries the id of the copy already held, so the user is shown
+     * the file they meant rather than told no.
+     */
+    sealed interface Imported {
+        data class Added(val fileId: Long, val name: String) : Imported
+        data class Duplicate(val fileId: Long, val name: String) : Imported
+        data object Unreadable : Imported
     }
 
     companion object {

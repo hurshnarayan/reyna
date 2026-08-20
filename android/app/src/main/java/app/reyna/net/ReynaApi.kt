@@ -103,15 +103,25 @@ class ReynaApi(
         }
     }.onFailure { Log.w(TAG, "upload failed: ${it.message}") }
 
-    /** Asks a question. The backend parses it, searches, and writes the reply. */
-    fun ask(question: String): Result<Answer> = runCatching {
+    /**
+     * Asks a question. The backend parses it, searches, and writes the reply.
+     *
+     * [onCall] receives the in-flight call so the caller can cancel it. An
+     * answer can take twenty seconds when the backend has to read documents,
+     * and a user who has changed their mind needs the socket actually torn
+     * down, not a cancelled coroutine quietly discarding a reply the server is
+     * still working on.
+     */
+    fun ask(question: String, onCall: (okhttp3.Call) -> Unit = {}): Result<Answer> = runCatching {
         val payload = JSONObject()
             .put("query", question)
             .toString()
             .toRequestBody(JSON)
 
         val req = Request.Builder().url(url("/api/nlp/retrieve")).auth().post(payload).build()
-        client.newCall(req).execute().use { resp ->
+        val call = client.newCall(req)
+        onCall(call)
+        call.execute().use { resp ->
             val text = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) error("ask ${resp.code}: ${text.take(200)}")
             val json = JSONObject(text)

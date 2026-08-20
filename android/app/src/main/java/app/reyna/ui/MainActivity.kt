@@ -157,6 +157,13 @@ private fun MainShell(vm: ReynaViewModel) {
 
     val messages by vm.messages.collectAsState()
     val files by vm.files.collectAsState()
+    val sending by vm.sending.collectAsState()
+
+    // Any file type: Reyna keeps documents and photographed notes alike, and a
+    // narrow filter would hide exactly the scans people want kept.
+    val pickFile = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> uri?.let { vm.addFile(it) } }
 
     // Import runs through the system picker when it is not a share, so the
     // button is never a dead end for someone who exported to Files first.
@@ -201,6 +208,12 @@ private fun MainShell(vm: ReynaViewModel) {
                             onOpenTracking = { trackingOpen = true },
                             onSend = vm::ask,
                             onImport = { pickExport.launch(arrayOf("text/plain", "application/zip")) },
+                            onAddFile = { pickFile.launch(arrayOf("*/*")) },
+                            onStop = vm::stopAnswering,
+                            onClearChat = vm::clearChat,
+                            onOpenFile = vm::openFile,
+                            onAskWhoShared = { repairFor = it },
+                            sending = sending,
                         )
                         Tab.Files -> FilesScreen(
                             files = vm.searchableFiles(),

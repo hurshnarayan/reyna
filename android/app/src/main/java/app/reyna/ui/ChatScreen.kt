@@ -25,6 +25,10 @@ import androidx.compose.material.icons.rounded.AddCircleOutline
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -51,6 +55,8 @@ import app.reyna.ui.theme.reynaColors
 
 /** A file Reyna attached to an answer. */
 data class FoundFile(
+    /** The local row, so a chip in the conversation can open the real file. */
+    val id: Long,
     val fileName: String,
     val senderName: String?,
     val chatName: String?,
@@ -81,6 +87,12 @@ fun ChatScreen(
     onOpenTracking: () -> Unit,
     onSend: (String) -> Unit = {},
     onImport: () -> Unit = {},
+    onAddFile: () -> Unit = {},
+    onStop: () -> Unit = {},
+    onClearChat: () -> Unit = {},
+    onOpenFile: (Long) -> Unit = {},
+    onAskWhoShared: (Long) -> Unit = {},
+    sending: Boolean = false,
 ) {
     val c = reynaColors
     val listState = rememberLazyListState()
@@ -95,6 +107,7 @@ fun ChatScreen(
             watchingChats = watchingChats,
             fileCount = fileCount,
             onOpenTracking = onOpenTracking,
+            onClearChat = onClearChat,
         )
 
         LazyColumn(
@@ -105,10 +118,21 @@ fun ChatScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            items(messages.size) { i -> MessageRow(messages[i]) }
+            items(messages.size) { i ->
+                MessageRow(messages[i], onOpenFile = onOpenFile, onAskWhoShared = onAskWhoShared)
+            }
+            // A visible "working on it" turn. Twenty seconds of nothing reads
+            // as a broken app, and this is also what the Stop button refers to.
+            if (sending) item { ThinkingRow() }
         }
 
-        Composer(onSend = onSend, onImport = onImport)
+        Composer(
+            onSend = onSend,
+            onImport = onImport,
+            onAddFile = onAddFile,
+            onStop = onStop,
+            sending = sending,
+        )
     }
 }
 
@@ -124,8 +148,10 @@ private fun ChatToolbar(
     watchingChats: Int,
     fileCount: Int,
     onOpenTracking: () -> Unit,
+    onClearChat: () -> Unit,
 ) {
     val c = reynaColors
+    var menuOpen by remember { mutableStateOf(false) }
     Column {
         Row(
             Modifier
@@ -155,7 +181,19 @@ private fun ChatToolbar(
                 )
             }
             IconButton(Icons.Rounded.BarChart, "Tracking", onOpenTracking)
-            IconButton(Icons.Rounded.MoreVert, "More") {}
+            Box {
+                IconButton(Icons.Rounded.MoreVert, "More") { menuOpen = true }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Clear conversation") },
+                        onClick = { menuOpen = false; onClearChat() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Tracking") },
+                        onClick = { menuOpen = false; onOpenTracking() },
+                    )
+                }
+            }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.divider))
     }
@@ -179,8 +217,37 @@ private fun IconButton(
     }
 }
 
+/**
+ * Reyna working, shown as its own incoming bubble.
+ *
+ * Deliberately a message rather than a spinner in the corner: it occupies the
+ * place the answer will, so the conversation does not jump when the reply
+ * lands.
+ */
 @Composable
-private fun MessageRow(msg: ChatMessage) {
+private fun ThinkingRow() {
+    val c = reynaColors
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+        Bubble(fromUser = false) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    strokeWidth = 2.dp,
+                    color = c.onSurfaceMuted,
+                )
+                Spacer(Modifier.width(9.dp))
+                Text("Looking through your files", fontSize = 14.sp, color = c.onSurfaceMuted)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MessageRow(
+    msg: ChatMessage,
+    onOpenFile: (Long) -> Unit,
+    onAskWhoShared: (Long) -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = if (msg.fromUser) Arrangement.End else Arrangement.Start,
@@ -203,6 +270,8 @@ private fun MessageRow(msg: ChatMessage) {
                                 whenText = f.whenText,
                                 confidence = f.confidence,
                                 isImage = f.isImage,
+                                onOpen = { onOpenFile(f.id) },
+                                onAskWhoShared = { onAskWhoShared(f.id) },
                             )
                         }
                     }
@@ -221,10 +290,17 @@ private fun MessageRow(msg: ChatMessage) {
  * keeps the input reachable no matter where the conversation is scrolled.
  */
 @Composable
-private fun Composer(onSend: (String) -> Unit, onImport: () -> Unit) {
+private fun Composer(
+    onSend: (String) -> Unit,
+    onImport: () -> Unit,
+    onAddFile: () -> Unit,
+    onStop: () -> Unit,
+    sending: Boolean,
+) {
     val c = reynaColors
     var text by remember { mutableStateOf("") }
-    val canSend = text.isNotBlank()
+    var attachOpen by remember { mutableStateOf(false) }
+    val canSend = text.isNotBlank() && !sending
 
     Column {
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.divider))
@@ -238,16 +314,31 @@ private fun Composer(onSend: (String) -> Unit, onImport: () -> Unit) {
         ) {
             // Attach offers importing a chat, which is how Reyna learns who
             // shared the older files.
-            Box(
-                Modifier.size(40.dp).clip(CircleShape).clickable { onImport() },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Rounded.AddCircleOutline,
-                    contentDescription = "Import a chat",
-                    tint = c.onSurfaceMuted,
-                    modifier = Modifier.size(24.dp),
-                )
+            Box {
+                Box(
+                    Modifier.size(40.dp).clip(CircleShape).clickable { attachOpen = true },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Rounded.AddCircleOutline,
+                        contentDescription = "Attach",
+                        tint = c.onSurfaceMuted,
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+                DropdownMenu(expanded = attachOpen, onDismissRequest = { attachOpen = false }) {
+                    // Two different things, and conflating them was the bug:
+                    // an export teaches Reyna who shared the older files, a
+                    // file is a document to keep.
+                    DropdownMenuItem(
+                        text = { Text("Add a file") },
+                        onClick = { attachOpen = false; onAddFile() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Import a chat") },
+                        onClick = { attachOpen = false; onImport() },
+                    )
+                }
             }
 
             Box(
@@ -270,24 +361,38 @@ private fun Composer(onSend: (String) -> Unit, onImport: () -> Unit) {
             }
 
             Spacer(Modifier.width(8.dp))
+            // While an answer is in flight the same button becomes Stop, so
+            // changing your mind is one tap in the place you already looked.
             Box(
                 Modifier
                     .size(40.dp)
                     .clip(CircleShape)
-                    // Disabled until there is something to send, rather than
-                    // failing silently on an empty tap.
-                    .background(if (canSend) c.bubbleOutgoing else c.bubbleIncoming)
-                    .clickable(enabled = canSend) {
-                        onSend(text.trim())
-                        text = ""
+                    .background(
+                        when {
+                            sending -> c.onSurface
+                            canSend -> c.bubbleOutgoing
+                            else -> c.bubbleIncoming
+                        }
+                    )
+                    .clickable(enabled = sending || canSend) {
+                        if (sending) {
+                            onStop()
+                        } else {
+                            onSend(text.trim())
+                            text = ""
+                        }
                     },
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    Icons.Rounded.ArrowUpward,
-                    contentDescription = "Send",
-                    tint = if (canSend) c.onBubbleOutgoing else c.onSurfaceMuted,
-                    modifier = Modifier.size(20.dp),
+                    if (sending) Icons.Rounded.Stop else Icons.Rounded.ArrowUpward,
+                    contentDescription = if (sending) "Stop" else "Send",
+                    tint = when {
+                        sending -> c.background
+                        canSend -> c.onBubbleOutgoing
+                        else -> c.onSurfaceMuted
+                    },
+                    modifier = Modifier.size(if (sending) 18.dp else 20.dp),
                 )
             }
         }
