@@ -300,6 +300,33 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Opens Google's consent screen in a browser.
+     *
+     * Not inert and not a stub: the server mints the URL because it holds the
+     * client secret, and the callback lands back on the server which stores the
+     * tokens. If Drive is not configured server-side, say so rather than
+     * opening a page that will fail.
+     */
+    fun connectDrive() {
+        viewModelScope.launch {
+            if (repo.deviceToken.isBlank()) {
+                _toast.value = "Set a device token first"
+                return@launch
+            }
+            val url = repo.driveConnectUrl()
+            if (url == null) {
+                _toast.value = "Drive is not configured on the server"
+                return@launch
+            }
+            val app = getApplication<Application>()
+            val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            runCatching { app.startActivity(intent) }
+                .onFailure { _toast.value = "No browser on this phone" }
+        }
+    }
+
     fun clearToast() { _toast.value = null }
 
     // ── Formatting ──

@@ -91,6 +91,7 @@ const (
 	AttrNotification = "notification" // Matched an observed notification.
 	AttrDateUnique   = "date_unique"  // Only one candidate message that day.
 	AttrTimeWindow   = "time_window"  // Nearest message in time. Ambiguous.
+	AttrTimeOnly     = "time_only"    // Something in the same ten minutes.
 	AttrNone         = ""             // Unattributed.
 )
 

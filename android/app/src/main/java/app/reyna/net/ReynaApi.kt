@@ -134,6 +134,125 @@ class ReynaApi(
         }
     }.onFailure { Log.w(TAG, "qa failed: ${it.message}") }
 
+    /** One message the phone learned about, for /api/device/events. */
+    data class DeviceEvent(
+        val chatKey: String,
+        val chatName: String,
+        val senderName: String,
+        val postedAtSeconds: Long,
+        val text: String,
+        val attachmentName: String,
+        val source: String,
+    )
+
+    /**
+     * Sends observed messages so the server can re-run the join.
+     *
+     * Batched because the phone accumulates events while offline, and one
+     * request per notification would be slow and a good way to get rate
+     * limited. Duplicates collapse server-side, so resending after a failure
+     * costs nothing.
+     */
+    fun sendEvents(chatName: String?, events: List<DeviceEvent>): Result<Int> = runCatching {
+        val arr = JSONArray()
+        for (e in events) {
+            arr.put(
+                JSONObject()
+                    .put("chat_key", e.chatKey)
+                    .put("chat_name", e.chatName)
+                    .put("sender_name", e.senderName)
+                    .put("posted_at", e.postedAtSeconds)
+                    .put("text", e.text)
+                    .put("attachment_name", e.attachmentName)
+                    .put("has_attachment", e.attachmentName.isNotEmpty())
+                    .put("source", e.source)
+            )
+        }
+        val payload = JSONObject()
+            .put("group_wa_id", chatName ?: "device")
+            .put("events", arr)
+            .toString().toRequestBody(JSON)
+        val req = Request.Builder().url(url("/api/device/events")).auth().post(payload).build()
+        client.newCall(req).execute().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) error("events ${resp.code}")
+            JSONObject(text).optInt("stored", 0)
+        }
+    }.onFailure { Log.w(TAG, "sendEvents failed: ${it.message}") }
+
+    /**
+     * Sends attachment rows parsed from a chat export.
+     *
+     * Only the rows, never the export text: the raw chat is parsed on the
+     * phone and discarded there, which is what makes the import promise
+     * checkable rather than a claim.
+     */
+    fun sendExport(
+        chatName: String?,
+        events: List<DeviceEvent>,
+        dateOrderProven: Boolean,
+    ): Result<Int> = runCatching {
+        val arr = JSONArray()
+        for (e in events) {
+            arr.put(
+                JSONObject()
+                    .put("chat_key", e.chatKey)
+                    .put("chat_name", e.chatName)
+                    .put("sender_name", e.senderName)
+                    .put("posted_at", e.postedAtSeconds)
+                    .put("attachment_name", e.attachmentName)
+                    .put("has_attachment", true)
+                    .put("source", "export")
+            )
+        }
+        val payload = JSONObject()
+            .put("group_wa_id", chatName ?: "device")
+            .put("chat_name", chatName.orEmpty())
+            .put("events", arr)
+            .put("date_order_proven", dateOrderProven)
+            .toString().toRequestBody(JSON)
+        val req = Request.Builder().url(url("/api/device/export")).auth().post(payload).build()
+        client.newCall(req).execute().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) error("export ${resp.code}")
+            JSONObject(text).optInt("improved", 0)
+        }
+    }.onFailure { Log.w(TAG, "sendExport failed: ${it.message}") }
+
+    /** Tells the server the user corrected an attribution. */
+    fun setSender(fileId: Long, sender: String): Result<Unit> = runCatching {
+        val payload = JSONObject().put("file_id", fileId).put("sender", sender)
+            .toString().toRequestBody(JSON)
+        val req = Request.Builder().url(url("/api/device/attribute")).auth().post(payload).build()
+        client.newCall(req).execute().use { if (!it.isSuccessful) error("attribute ${it.code}") }
+    }.onFailure { Log.w(TAG, "setSender failed: ${it.message}") }
+
+    /**
+     * Asks the server for a Google OAuth URL.
+     *
+     * The app cannot complete OAuth itself. The client secret lives on the
+     * server, and shipping it inside an APK would hand it to every user, so the
+     * app opens this URL in a browser and the callback lands back on the
+     * server, which stores the tokens.
+     */
+    fun driveConnectUrl(): Result<String?> = runCatching {
+        val req = Request.Builder().url(url("/api/device/drive/connect?phone=device")).auth().build()
+        client.newCall(req).execute().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) error("drive connect ${resp.code}")
+            val json = JSONObject(text)
+            if (!json.optBoolean("configured", false)) null
+            else json.optString("url").ifBlank { null }
+        }
+    }.onFailure { Log.w(TAG, "driveConnectUrl failed: ${it.message}") }
+
+    fun driveConnected(): Boolean = runCatching {
+        val req = Request.Builder().url(url("/api/device/drive/status?phone=device")).auth().build()
+        client.newCall(req).execute().use { resp ->
+            resp.isSuccessful && JSONObject(resp.body?.string().orEmpty()).optBoolean("connected", false)
+        }
+    }.getOrDefault(false)
+
     private fun JSONArray?.toCitedFiles(): List<CitedFile> {
         if (this == null) return emptyList()
         return (0 until length()).mapNotNull { i ->

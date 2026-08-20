@@ -125,6 +125,15 @@ fun SettingsScreen(vm: ReynaViewModel, onImport: () -> Unit) {
 
         item { SectionHeader("Storage") }
         item {
+            ActionRow(
+                icon = Icons.Rounded.CloudUpload,
+                title = "Connect Google Drive",
+                subtitle = "Files are filed into folders in your own Drive",
+                trailing = "Connect",
+                onClick = vm::connectDrive,
+            )
+        }
+        item {
             val tracking = vm.trackingState()
             ActionRow(
                 icon = Icons.Rounded.Storage,

@@ -89,6 +89,17 @@ func (s *Server) routes() {
 			auth.Middleware(s.cfg.JWTSecret)(http.HandlerFunc(h)).ServeHTTP(w, r)
 		})
 	}
+	// device gates the JSON routes the Android app calls. They ingest
+	// attribution data and expose file records, so they are not open.
+	device := func(h http.HandlerFunc) http.HandlerFunc {
+		return wrap(func(w http.ResponseWriter, r *http.Request) {
+			if !auth.ValidDeviceToken(r, s.cfg.DeviceToken) {
+				http.Error(w, `{"error":"invalid device token"}`, http.StatusUnauthorized)
+				return
+			}
+			h(w, r)
+		})
+	}
 	// deviceOrUser accepts either the device token (the app) or a user JWT
 	// (dashboard). The NLP routes are reached from both.
 	deviceOrUser := func(h http.HandlerFunc) http.HandlerFunc {
@@ -134,6 +145,12 @@ func (s *Server) routes() {
 	// WhatsApp group (command parsing, reaction staging, group allowlist
 	// polling), none of which has an on-device equivalent.
 	s.mux.HandleFunc("/api/device/files", deviceRaw(s.handleDeviceUpload)) // multipart, not JSON
+	s.mux.HandleFunc("/api/device/events", device(s.handleDeviceEvents))
+	s.mux.HandleFunc("/api/device/export", device(s.handleDeviceExport))
+	s.mux.HandleFunc("/api/device/pending", device(s.handleDevicePending))
+	s.mux.HandleFunc("/api/device/attribute", device(s.handleDeviceAttribute))
+	s.mux.HandleFunc("/api/device/drive/connect", device(s.handleDeviceDriveConnect))
+	s.mux.HandleFunc("/api/device/drive/status", device(s.handleDeviceDriveStatus))
 
 	s.mux.HandleFunc("/api/me", protected(s.handleMe))
 	s.mux.HandleFunc("/api/auth/google/status", protected(s.handleGoogleStatus))

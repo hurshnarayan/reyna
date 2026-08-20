@@ -135,6 +135,26 @@ class Repo private constructor(private val context: Context) {
         // The join runs in both directions: a file downloaded hours before this
         // notification arrived is still explained by it.
         reattributeWeak()
+
+        // The server keeps its own copy so it can re-join files uploaded from
+        // anywhere. Best effort: attribution already happened locally, and a
+        // failed send is retried on the next sync rather than losing the event.
+        if (deviceToken.isNotBlank()) {
+            api().sendEvents(
+                obs.chatName,
+                listOf(
+                    ReynaApi.DeviceEvent(
+                        chatKey = obs.shortcutId ?: obs.chatName,
+                        chatName = obs.chatName,
+                        senderName = obs.senderName,
+                        postedAtSeconds = obs.postedAtMillis / 1000,
+                        text = obs.text,
+                        attachmentName = "",
+                        source = "notification",
+                    )
+                ),
+            )
+        }
     }
 
     /**
@@ -169,6 +189,27 @@ class Repo private constructor(private val context: Context) {
             if (id > 0) stored++
         }
         val improved = reattributeWeak()
+
+        // Only the attachment rows travel. The raw chat text is parsed here and
+        // discarded here, which is what makes the airplane-mode claim true.
+        if (deviceToken.isNotBlank() && attachments.isNotEmpty()) {
+            api().sendExport(
+                chatName = null,
+                events = attachments.map { m ->
+                    ReynaApi.DeviceEvent(
+                        chatKey = "export",
+                        chatName = "",
+                        senderName = m.sender,
+                        postedAtSeconds = m.postedAtMillis / 1000,
+                        text = "",
+                        attachmentName = m.attachmentName,
+                        source = "export",
+                    )
+                },
+                dateOrderProven = parsed.dateOrder.proven,
+            )
+        }
+
         ImportResult(
             messagesRead = parsed.messages.size,
             filesFound = attachments.size,
@@ -264,6 +305,25 @@ class Repo private constructor(private val context: Context) {
     suspend fun setSenderManually(fileId: Long, sender: String) = withContext(Dispatchers.IO) {
         val f = dao.file(fileId) ?: return@withContext
         dao.setAttribution(fileId, sender, f.chatName, 1.0, Attribution.Method.USER, f.postedAt)
+        if (deviceToken.isNotBlank() && f.remoteId > 0) {
+            api().setSender(f.remoteId, sender)
+        }
+    }
+
+    /**
+     * The Google OAuth URL, or null when Drive is not configured on the server.
+     *
+     * The app cannot complete OAuth itself: the client secret lives on the
+     * server, and shipping it in an APK would hand it to every user. So the
+     * server mints the URL and the callback lands back there.
+     */
+    suspend fun driveConnectUrl(): String? = withContext(Dispatchers.IO) {
+        if (deviceToken.isBlank()) return@withContext null
+        api().driveConnectUrl().getOrNull()
+    }
+
+    suspend fun driveConnected(): Boolean = withContext(Dispatchers.IO) {
+        if (deviceToken.isBlank()) false else api().driveConnected()
     }
 
     // ── Backend ──
