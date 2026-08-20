@@ -43,8 +43,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.reyna.attribution.Attribution
-import app.reyna.ui.components.FileRow
+import app.reyna.search.SearchableFile
 import app.reyna.ui.components.SectionHeader
 import app.reyna.ui.theme.Dimens
 import app.reyna.ui.theme.ReynaTheme
@@ -95,11 +94,8 @@ private fun ReynaApp() {
                                 messages = messages + ChatMessage(q, fromUser = true, time = "now")
                             },
                         )
-                        Tab.Files -> FilesScreen()
-                        Tab.Settings -> Placeholder(
-                            "Settings",
-                            "Drive account, permissions, delete everything.",
-                        )
+                        Tab.Files -> FilesScreen(files = sampleSearchableFiles())
+                        Tab.Settings -> SettingsScreen()
                     }
                 }
                 // The composer owns the bottom of the chat, so the tab bar only
@@ -187,31 +183,6 @@ private fun TabBar(current: Int, onSelect: (Int) -> Unit) {
     }
 }
 
-/** Signal's chat list, applied to documents. Rows, no cards. */
-@Composable
-private fun FilesScreen() {
-    val c = reynaColors
-    val files = sampleFiles()
-    LazyColumn(Modifier.fillMaxSize().background(c.background)) {
-        item { SectionHeader("Today") }
-        items(2) { i -> fileRow(files[i]) }
-        item { SectionHeader("Earlier") }
-        items(files.size - 2) { i -> fileRow(files[i + 2]) }
-    }
-}
-
-@Composable
-private fun fileRow(f: FoundFile) {
-    val c = reynaColors
-    FileRow(
-        fileName = f.fileName,
-        subtitle = Attribution.describe(f.confidence, f.senderName, f.chatName, f.whenText),
-        whenText = f.whenText,
-        band = c.forConfidence(f.confidence),
-        icon = if (f.isImage) Icons.Rounded.Image else Icons.Rounded.Description,
-    )
-}
-
 @Composable
 private fun Placeholder(title: String, subtitle: String) {
     val c = reynaColors
@@ -281,4 +252,24 @@ private fun sampleTracking() = TrackingState(
     ),
     onDeviceLabel = "1.2 GB",
     inDriveLabel = "890 MB",
+)
+
+/**
+ * Stand-in library until the local store is wired in.
+ *
+ * Names are deliberately a mix of the two kinds Reyna actually sees: files
+ * people named, and the `DOC-YYYYMMDD-WAnnnn` ones WhatsApp renamed, which are
+ * the reason exact search is not enough on its own.
+ */
+private fun sampleSearchableFiles() = listOf(
+    SearchableFile(1, "Compiler_Design_Lab_Manual.pdf", "Mohit", "Sem 5 CS", "09:04", 0.95),
+    SearchableFile(2, "OS_Module_3_Scheduling.pdf", "Priya", "Sem 5 CS", "08:41", 0.85),
+    SearchableFile(3, "DOC-20260818-WA0041.pdf", null, "Sem 5 CS", "18 Aug", 0.45),
+    SearchableFile(4, "IMG-20260812-WA0007.jpg", null, null, "12 Aug", 0.0, isImage = true),
+    SearchableFile(5, "DBMS_PYQ_2025.pdf", "Rakesh", "Sem 5 CS", "9 Aug", 0.95),
+    SearchableFile(6, "Computer_Networks_Reference.pdf", "Priya", "Sem 5 CS", "4 Aug", 0.95),
+    SearchableFile(7, "Hostel_Mess_Menu_August.pdf", "Warden", "Hostel Block C", "1 Aug", 0.95),
+    SearchableFile(8, "Placement_Prep_DSA_Sheet.pdf", "Ananya", "Placement 2026", "28 Jul", 0.95),
+    SearchableFile(9, "DOC-20260726-WA0013.pdf", null, "Placement 2026", "26 Jul", 0.30),
+    SearchableFile(10, "Syllabus_Sem5_Final.pdf", "Mohit", "Sem 5 CS", "20 Jul", 0.95),
 )
