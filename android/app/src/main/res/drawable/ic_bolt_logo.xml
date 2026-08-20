@@ -1,0 +1,17 @@
+<!--
+  The Reyna mark: a lightning bolt, traced from the source logo.
+
+  A vector rather than a bitmap so it stays sharp at every density and can be
+  tinted for dark mode. The proportions are deliberate: a thin top point, a wide
+  horizontal waist, and a thin bottom point.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?android:attr/colorForeground">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M15.4,1.2 L5.2,12.6 L11.1,12.6 L8.6,22.8 L18.8,11.3 L12.9,11.3 Z" />
+</vector>

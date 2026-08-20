@@ -1,6 +1,16 @@
+<!--
+  Launcher foreground. The adaptive-icon safe zone is the middle ~66dp of 108dp,
+  so the bolt is scaled to sit inside it and survive any mask shape.
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp" android:height="108dp"
-    android:viewportWidth="108" android:viewportHeight="108">
-    <path android:fillColor="#FFFFFF"
-        android:pathData="M34,38h30l10,10v22a4,4 0,0 1,-4 4h-36a4,4 0,0 1,-4 -4v-28a4,4 0,0 1,4 -4zM62,40v10h10z"/>
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:scaleX="2.0" android:scaleY="2.0"
+        android:translateX="30" android:translateY="30">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M15.4,1.2 L5.2,12.6 L11.1,12.6 L8.6,22.8 L18.8,11.3 L12.9,11.3 Z" />
+    </group>
 </vector>

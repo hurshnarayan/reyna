@@ -3,118 +3,210 @@ package app.reyna.ui
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Card
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.IosShare
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.reyna.attribution.Attribution
+import app.reyna.ui.theme.Dimens
+import app.reyna.ui.theme.ReynaTheme
+import app.reyna.ui.theme.reynaColors
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         setContent {
-            MaterialTheme {
-                AskScreen()
+            ReynaTheme {
+                ReynaApp()
             }
         }
     }
 }
 
-/**
- * One captured file, as the home screen shows it.
- *
- * [confidence] rather than a bare sender name is the point: the UI has to be
- * able to render "we do not know who shared this" as a first-class state, not
- * as a blank where a name should be.
- */
-data class CaptureCard(
-    val fileName: String,
-    val senderName: String?,
-    val chatName: String?,
-    val whenText: String,
-    val confidence: Double,
-) {
-    /** Delegates to the single place the naming rule lives. */
-    val subtitle: String
-        get() = Attribution.describe(confidence, senderName, chatName, whenText)
-
-    /** Whether to show the "not sure who shared this" affordance. */
-    val uncertain: Boolean get() = confidence < Attribution.MIN_NAMED
+private enum class Destination(val label: String, val icon: ImageVector) {
+    Home("Home", Icons.Rounded.Home),
+    Library("Library", Icons.Rounded.FolderOpen),
+    Settings("Settings", Icons.Rounded.Settings),
 }
 
-/**
- * The home screen: a question box, with recent captures beneath it.
- *
- * Deliberately not a file browser. A browser makes Reyna a worse Google Drive;
- * the product is asking for something half-remembered and getting the file
- * back with a citation.
- */
 @Composable
-fun AskScreen() {
-    var query by remember { mutableStateOf("") }
+private fun ReynaApp() {
+    val c = reynaColors
+    var current by remember { mutableIntStateOf(0) }
 
-    // Placeholder rows until the local store is wired in. They exist so the
-    // three confidence bands are visible during development, because that
-    // distinction is the thing most likely to be quietly lost.
-    val recent = remember {
-        listOf(
-            CaptureCard("Compiler_Lab_Manual.pdf", "Mohit", "Sem 5 CS", "2 hours ago", 0.95),
-            CaptureCard("DOC-20260818-WA0041.pdf", null, "Sem 5 CS", "18 August", 0.45),
-            CaptureCard("scan_0007.jpg", null, null, "3 weeks ago", 0.0),
-        )
-    }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(c.background)
+            .statusBarsPadding()
+    ) {
+        when (Destination.entries[current]) {
+            Destination.Home -> HomeScreen(sampleHomeState())
+            Destination.Library -> Placeholder("Library", "Your Drive folders, mirrored.")
+            Destination.Settings -> Placeholder("Settings", "Drive account, permissions, delete everything.")
+        }
 
-    Scaffold { padding ->
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
         ) {
-            Text("Ask Reyna anything", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = { Text("that thing about the deposit") },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Text("Recently found", fontWeight = FontWeight.SemiBold)
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(recent) { card -> CaptureRow(card) }
+            BottomBar(current) { current = it }
+        }
+
+        // Import a chat: the one primary action that is not already on screen.
+        // Asking lives at the top of Home, so duplicating it here would be dead
+        // weight.
+        Surface(
+            shape = CircleShape,
+            color = c.accent,
+            shadowElevation = 6.dp,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .navigationBarsPadding()
+                .padding(end = Dimens.page, bottom = 78.dp)
+                .size(56.dp)
+                .clickable { },
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Rounded.IosShare,
+                    contentDescription = "Import a chat",
+                    tint = c.onAccent,
+                    modifier = Modifier.size(23.dp),
+                )
             }
         }
     }
 }
 
 @Composable
-private fun CaptureRow(card: CaptureCard) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(card.fileName, fontWeight = FontWeight.Medium)
-            Text(card.subtitle, fontSize = 13.sp)
-            if (card.uncertain) {
-                // Uncertainty is shown, never hidden and never rounded up into
-                // a name. Tapping this is how the user repairs it.
-                Text("not sure who shared this", fontSize = 12.sp)
+private fun BottomBar(current: Int, onSelect: (Int) -> Unit) {
+    val c = reynaColors
+    Surface(color = c.surface, shadowElevation = 8.dp) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(top = 10.dp, bottom = 12.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            Destination.entries.forEachIndexed { i, d ->
+                val active = i == current
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable { onSelect(i) }
+                        .padding(horizontal = 18.dp, vertical = 2.dp),
+                ) {
+                    Icon(
+                        d.icon,
+                        contentDescription = d.label,
+                        tint = if (active) c.onSurface else c.onSurfaceMuted,
+                        modifier = Modifier.size(23.dp),
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        d.label,
+                        fontSize = 11.sp,
+                        fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (active) c.onSurface else c.onSurfaceMuted,
+                    )
+                }
             }
         }
     }
 }
+
+@Composable
+private fun Placeholder(title: String, subtitle: String) {
+    val c = reynaColors
+    Column(
+        Modifier.fillMaxSize().padding(Dimens.page),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(title, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = c.onSurface)
+        Spacer(Modifier.height(6.dp))
+        Text(subtitle, fontSize = 14.sp, color = c.onSurfaceMuted)
+    }
+}
+
+/**
+ * Stand-in data until the local store is wired in.
+ *
+ * Deliberately spans all three confidence bands, including files Reyna cannot
+ * attribute at all, because that distinction is the thing most likely to be
+ * quietly lost while the rest of the app is built.
+ */
+private fun sampleHomeState() = HomeState(
+    attributed = 189,
+    total = 247,
+    named = 189,
+    chatOnly = 34,
+    unknown = 24,
+    watching = true,
+    week = listOf(
+        DayCount("Sun", 0),
+        DayCount("Mon", 4),
+        DayCount("Tue", 12),
+        DayCount("Wed", 7, isToday = true),
+        DayCount("Thu", 0),
+        DayCount("Fri", 0),
+        DayCount("Sat", 0),
+    ),
+    recent = listOf(
+        CaptureCard(
+            fileName = "Compiler_Lab_Manual.pdf",
+            senderName = "Mohit", chatName = "Sem 5 CS",
+            whenText = "2 hours ago", confidence = 0.95,
+        ),
+        CaptureCard(
+            fileName = "OS_Module_3.pdf",
+            senderName = "Priya", chatName = "Sem 5 CS",
+            whenText = "yesterday", confidence = 0.85,
+        ),
+        CaptureCard(
+            fileName = "DOC-20260818-WA0041.pdf",
+            senderName = null, chatName = "Sem 5 CS",
+            whenText = "18 August", confidence = 0.45,
+        ),
+        CaptureCard(
+            fileName = "IMG-20260812-WA0007.jpg",
+            senderName = null, chatName = null,
+            whenText = "3 weeks ago", confidence = 0.0, isImage = true,
+        ),
+    ),
+)
