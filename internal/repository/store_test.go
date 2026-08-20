@@ -246,3 +246,97 @@ func TestFindDriveConnectedUserDoesNotFallBackToStrangers(t *testing.T) {
 		t.Error("returned nil for a Drive-connected member of the group")
 	}
 }
+
+// TestSearchFilesNLPWhoDoesNotHideUnattributedFiles pins the WHO semantics.
+//
+// The filter used to be a hard AND on the sender fields, which was right only
+// while Baileys supplied the sender as a fact. Once attribution can fail, a
+// file that really was Mohit's but could not be attributed would never match
+// "what did Mohit share", and the user saw an empty result — indistinguishable
+// from the file never having been captured.
+//
+// The rule is: exclude a file only when we know enough to rule it out. A
+// confidently-attributed file from somebody else is excluded. A file we cannot
+// attribute is still a candidate, ranked below the confident matches.
+func TestSearchFilesNLPWhoDoesNotHideUnattributedFiles(t *testing.T) {
+	s := newTestStore(t)
+	userID, groupID := seedGroup(t, s, "+911111111111", "Mohit", "group-a@g.us")
+
+	add := func(name, sender, method string, conf float64) {
+		t.Helper()
+		if _, err := s.AddFile(&model.File{
+			GroupID: groupID, UserID: userID,
+			FileName: name, SharedByName: sender,
+			AttributionMethod: method, AttributionConfidence: conf,
+		}); err != nil {
+			t.Fatalf("AddFile(%s): %v", name, err)
+		}
+	}
+
+	add("mohit_confident.pdf", "Mohit", model.AttrBaileys, 1.0)
+	add("priya_confident.pdf", "Priya", model.AttrBaileys, 1.0)
+	add("unattributed.pdf", "", model.AttrNone, 0)
+	add("weak_guess.pdf", "Priya", model.AttrTimeWindow, 0.45)
+
+	files, err := s.SearchFilesNLP([]int64{groupID}, "mohit", "", nil, 20)
+	if err != nil {
+		t.Fatalf("SearchFilesNLP: %v", err)
+	}
+
+	got := map[string]int{}
+	for i, f := range files {
+		got[f.FileName] = i
+	}
+
+	if _, ok := got["mohit_confident.pdf"]; !ok {
+		t.Error("confident match missing")
+	}
+	if _, ok := got["unattributed.pdf"]; !ok {
+		t.Error("unattributed file was hidden; it could still be Mohit's")
+	}
+	if _, ok := got["weak_guess.pdf"]; !ok {
+		t.Error("weakly-attributed file was hidden; the guess is not strong enough to rule it out")
+	}
+	if _, ok := got["priya_confident.pdf"]; ok {
+		t.Error("confidently attributed to Priya but returned for a Mohit query")
+	}
+
+	if len(files) == 0 || files[0].FileName != "mohit_confident.pdf" {
+		t.Errorf("first result = %v, want mohit_confident.pdf ranked above the uncertain ones", files)
+	}
+}
+
+// TestSearchFilesNLPWhenUsesPostedAt guards the time window against the
+// created_at/posted_at split. A file posted last year but downloaded today must
+// not surface for "what came in today", and one posted today but inserted late
+// must not be missed.
+func TestSearchFilesNLPWhenUsesPostedAt(t *testing.T) {
+	s := newTestStore(t)
+	userID, groupID := seedGroup(t, s, "+911111111111", "Mohit", "group-a@g.us")
+
+	// Inserted now (as all test rows are), but posted a year ago.
+	if _, err := s.AddFile(&model.File{
+		GroupID: groupID, UserID: userID, FileName: "old_but_downloaded_today.pdf",
+		PostedAt: time.Now().AddDate(-1, 0, 0),
+	}); err != nil {
+		t.Fatalf("AddFile: %v", err)
+	}
+	if _, err := s.AddFile(&model.File{
+		GroupID: groupID, UserID: userID, FileName: "posted_today.pdf",
+		PostedAt: time.Now().Add(-1 * time.Hour),
+	}); err != nil {
+		t.Fatalf("AddFile: %v", err)
+	}
+
+	since := time.Now().AddDate(0, 0, -1)
+	files, err := s.SearchFilesNLP([]int64{groupID}, "", "", &since, 20)
+	if err != nil {
+		t.Fatalf("SearchFilesNLP: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("got %d files, want 1", len(files))
+	}
+	if files[0].FileName != "posted_today.pdf" {
+		t.Errorf("got %q, want posted_today.pdf — the window must apply to posted_at, not created_at", files[0].FileName)
+	}
+}

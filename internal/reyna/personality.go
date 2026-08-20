@@ -12,6 +12,17 @@ type Reyna struct{}
 
 func New() *Reyna { return &Reyna{} }
 
+// byLine renders the " by <name>" suffix, or nothing when we do not know who
+// shared the file. Printing "by %s" unconditionally rendered a dangling "by "
+// for every unattributed file, which reads as a bug and implies a name we do
+// not have. Silence is the honest form of not knowing.
+func byLine(f model.File) string {
+	if !f.SenderKnown() {
+		return ""
+	}
+	return " by " + f.SharedByName
+}
+
 // ── Command Parsing ──
 
 // ProcessCommand parses a /reyna command or natural language message into an action
@@ -135,7 +146,7 @@ func (r *Reyna) StagedResponse(files []model.File) string {
 		if folder == "" {
 			folder = "Unsorted"
 		}
-		result += fmt.Sprintf("  %s (%s) — by %s\n", f.FileName, folder, f.SharedByName)
+		result += fmt.Sprintf("  %s (%s)%s\n", f.FileName, folder, byLine(f))
 	}
 	result += "\nUse `push` to commit to Drive, or `remove [file]` to unstage."
 	return result
@@ -154,7 +165,7 @@ func (r *Reyna) FindResponse(query string, files []model.File) string {
 			result += fmt.Sprintf("  ...and %d more\n", len(files)-5)
 			break
 		}
-		result += fmt.Sprintf("  %s (v%d, by %s)\n", f.FileName, f.Version, f.SharedByName)
+		result += fmt.Sprintf("  %s (v%d)%s\n", f.FileName, f.Version, byLine(f))
 	}
 	return result
 }
@@ -174,8 +185,12 @@ func (r *Reyna) FindWithAuthorResponse(query string, files []model.File) string 
 		if f.DriveFolderID != "" && !strings.HasPrefix(f.DriveFolderID, "local_") {
 			driveLink = fmt.Sprintf("\n    Drive: https://drive.google.com/drive/folders/%s", f.DriveFolderID)
 		}
+		by := "unknown"
+		if f.SenderKnown() {
+			by = f.SharedByName
+		}
 		result += fmt.Sprintf("  *%s* (v%d)\n    By: %s | Folder: %s | Size: %s%s\n\n",
-			f.FileName, f.Version, f.SharedByName, f.Subject, formatFileSize(f.FileSize), driveLink)
+			f.FileName, f.Version, by, f.Subject, formatFileSize(f.FileSize), driveLink)
 	}
 	return result
 }
@@ -192,7 +207,7 @@ func (r *Reyna) LogResponse(files []model.File, total int) string {
 		if i >= 10 {
 			break
 		}
-		result += fmt.Sprintf("  %s — v%d by %s\n", f.FileName, f.Version, f.SharedByName)
+		result += fmt.Sprintf("  %s — v%d%s\n", f.FileName, f.Version, byLine(f))
 	}
 	return result
 }

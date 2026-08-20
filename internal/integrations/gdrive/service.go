@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -42,6 +43,19 @@ type Service struct {
 	clientSecret string
 	redirectURL  string
 	localPath    string
+
+	// tokenCache maps a refresh token to the access token last minted from it.
+	// Every caller of GetValidToken passes expiresAt as 0 because the expiry was
+	// never persisted, and `now < 0-60` is never true, so each call hit Google's
+	// token endpoint — a full network round trip per Drive operation, and a
+	// commit of twenty files made twenty of them. Caching here fixes every call
+	// site without changing any of their signatures.
+	tokenCache sync.Map // refreshToken → cachedToken
+}
+
+type cachedToken struct {
+	accessToken string
+	expiresAt   int64 // unix seconds
 }
 
 func New(clientID, clientSecret, redirectURL, localPath string) *Service {
@@ -129,15 +143,49 @@ func (s *Service) getUserEmail(token string) (string, error) {
 	return info.Email, nil
 }
 
+// GetValidToken returns a usable access token, refreshing only when the one we
+// hold has actually expired.
+//
+// expiresAt is the caller's own knowledge of when `access` expires; callers that
+// never persisted an expiry pass 0. For those, the cache below supplies the
+// expiry instead, so a token minted a minute ago is reused rather than a new one
+// requested for every Drive call.
 func (s *Service) GetValidToken(access, refresh string, expiresAt int64) (string, error) {
-	if time.Now().Unix() < expiresAt-60 {
+	now := time.Now().Unix()
+
+	// Caller knows the token is still good. A minute of headroom covers clock
+	// skew and the round trip that is about to use it.
+	if access != "" && expiresAt > 0 && now < expiresAt-60 {
 		return access, nil
 	}
+
+	if refresh == "" {
+		if access != "" {
+			return access, nil
+		}
+		return "", fmt.Errorf("no refresh token available")
+	}
+
+	if v, ok := s.tokenCache.Load(refresh); ok {
+		if ct, ok := v.(cachedToken); ok && ct.accessToken != "" && now < ct.expiresAt-60 {
+			return ct.accessToken, nil
+		}
+	}
+
 	t, err := s.RefreshAccessToken(refresh)
 	if err != nil {
 		return "", err
 	}
+	s.tokenCache.Store(refresh, cachedToken{accessToken: t.AccessToken, expiresAt: t.ExpiresAt})
 	return t.AccessToken, nil
+}
+
+// InvalidateToken drops a cached access token, forcing the next call to mint a
+// fresh one. Used when Drive rejects a token we believed was still valid.
+func (s *Service) InvalidateToken(refresh string) {
+	if refresh != "" {
+		s.tokenCache.Delete(refresh)
+	}
 }
 
 // ── Drive API ──

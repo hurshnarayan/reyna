@@ -700,7 +700,8 @@ func (s *Store) GetNewFilesSince(groupID int64, since time.Time) ([]model.File, 
 	rows, err := s.db.Query(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name, file_size,
 		  mime_type, drive_file_id, drive_folder_id, subject, tags, version, parent_file_id, wa_message_id, status, created_at, posted_at, COALESCE(attribution_method,''), COALESCE(attribution_confidence,0)
-		 FROM files WHERE group_id=? AND created_at > ? ORDER BY created_at DESC`,
+		 FROM files WHERE group_id=? AND COALESCE(posted_at, created_at) > ?
+		 ORDER BY COALESCE(posted_at, created_at) DESC`,
 		groupID, since,
 	)
 	if err != nil {
@@ -755,9 +756,16 @@ func (s *Store) GetDashboardStats(userID int64) (*model.DashboardStats, error) {
 
 	// Top contributors across all groups
 	contribRows, _ := s.db.Query(
-		`SELECT shared_by_name, shared_by_phone, COUNT(*) as cnt FROM files
-		 WHERE group_id IN (`+placeholders+`) AND shared_by_phone != ''
-		 GROUP BY shared_by_phone ORDER BY cnt DESC LIMIT 5`,
+		// Only count files we can actually attribute. Grouping by phone alone
+		// swept every unattributed file into a single blank-named entry that
+		// then sat at the top of the leaderboard as a phantom contributor.
+		fmt.Sprintf(
+			`SELECT shared_by_name, shared_by_phone, COUNT(*) as cnt FROM files
+			 WHERE group_id IN (`+placeholders+`)
+			   AND COALESCE(shared_by_name,'') != ''
+			   AND COALESCE(attribution_confidence,0) >= %v
+			 GROUP BY shared_by_phone, shared_by_name ORDER BY cnt DESC LIMIT 5`,
+			model.AttributionMinNamed),
 		args...,
 	)
 	if contribRows != nil {
@@ -1417,35 +1425,64 @@ func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *ti
 		"f.status != 'deleted_in_drive'",
 	}
 
-	// WHO filter — broad: match against the file's stored sender fields OR the
-	// joined user record's name/phone. Also tokenize multi-word names so
-	// "Mohit Singh" matches files where the name was stored as just "Mohit".
+	// WHO — match against the file's stored sender fields or the joined user
+	// record's name/phone, tokenizing multi-word names so "Mohit Singh" matches
+	// a file stored as just "Mohit".
+	//
+	// This used to be a hard AND, which was correct only while Baileys supplied
+	// the sender as a fact. Once attribution can fail, an unattributed file that
+	// really was Mohit's could never match "what did Mohit share", and the user
+	// saw an empty result rather than an uncertain one — indistinguishable from
+	// data loss.
+	//
+	// So the filter tests knowledge rather than absence. A file is excluded only
+	// when we know enough to rule it out: its sender is attributed confidently
+	// and is somebody else. A file we cannot attribute is still a candidate, and
+	// ranks below the confident matches. Callers must present those honestly —
+	// see model.File.SenderKnown.
+	whoRankExpr := "0"
+	var whoRankArgs []interface{}
 	if who != "" {
 		whoLower := strings.ToLower(strings.TrimSpace(who))
-		var whoParts []string
 		// First name token (handles "Mohit Singh" → match on "mohit")
-		fields := strings.Fields(whoLower)
 		first := whoLower
-		if len(fields) > 0 {
+		if fields := strings.Fields(whoLower); len(fields) > 0 {
 			first = fields[0]
 		}
-		whoParts = append(whoParts,
+		// The joined users row is the account that *uploaded* the file, which is
+		// not the same thing as the person who shared it. Under the bot they
+		// coincide, because a user record is upserted per sender. On-device they
+		// never will: the phone's owner uploads everything, so matching WHO
+		// against u.name would match every file in the database to the owner's
+		// name. So the user record is only consulted when the file carries no
+		// sender of its own, which is the gap it was added to cover.
+		whoMatch := "(" + strings.Join([]string{
 			"LOWER(COALESCE(f.shared_by_name,'')) LIKE ?",
 			"LOWER(COALESCE(f.shared_by_name,'')) LIKE ?",
 			"COALESCE(f.shared_by_phone,'') LIKE ?",
-			"LOWER(COALESCE(u.name,'')) LIKE ?",
-			"LOWER(COALESCE(u.name,'')) LIKE ?",
-			"COALESCE(u.phone,'') LIKE ?",
-		)
-		conditions = append(conditions, "("+strings.Join(whoParts, " OR ")+")")
-		args = append(args,
-			"%"+whoLower+"%",
-			"%"+first+"%",
-			"%"+who+"%",
-			"%"+whoLower+"%",
-			"%"+first+"%",
-			"%"+who+"%",
-		)
+			`(COALESCE(f.shared_by_name,'') = '' AND COALESCE(f.shared_by_phone,'') = '' AND (
+				LOWER(COALESCE(u.name,'')) LIKE ? OR LOWER(COALESCE(u.name,'')) LIKE ? OR COALESCE(u.phone,'') LIKE ?))`,
+		}, " OR ") + ")"
+		whoMatchArgs := []interface{}{
+			"%" + whoLower + "%",
+			"%" + first + "%",
+			"%" + who + "%",
+			"%" + whoLower + "%",
+			"%" + first + "%",
+			"%" + who + "%",
+		}
+
+		// Attribution too weak to name anyone, so too weak to exclude anyone.
+		unattributed := fmt.Sprintf(
+			"(COALESCE(f.attribution_confidence,0) < %v OR COALESCE(f.shared_by_name,'') || COALESCE(f.shared_by_phone,'') = '')",
+			model.AttributionMinNamed)
+
+		conditions = append(conditions, "("+whoMatch+" OR "+unattributed+")")
+		args = append(args, whoMatchArgs...)
+
+		// Confident matches outrank files that merely could not be ruled out.
+		whoRankExpr = "(CASE WHEN " + whoMatch + " THEN 1 ELSE 0 END)"
+		whoRankArgs = whoMatchArgs
 	}
 
 	// WHAT filter — tokenized OR-match with rank-by-hits.
@@ -1464,13 +1501,17 @@ func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *ti
 		rankExpr = strings.Join(rankParts, " + ")
 	}
 
-	// WHEN filter — time window
+	// WHEN — time window against when the message was sent, not when we
+	// inserted the row. Those differ by days once capture is on-device, so
+	// filtering on created_at would silently drop files from "last week".
 	if sinceTime != nil {
-		conditions = append(conditions, "f.created_at >= ?")
+		conditions = append(conditions, "COALESCE(f.posted_at, f.created_at) >= ?")
 		args = append(args, sinceTime.Format("2006-01-02 15:04:05"))
 	}
 
-	// Append rank args (same token list, same order) so the CASE expressions resolve
+	// ORDER BY args follow the WHERE args, in the order the expressions appear
+	// in the statement: WHO rank first, then content rank.
+	args = append(args, whoRankArgs...)
 	if rankExpr != "0" {
 		for _, tok := range tokens {
 			like := "%" + tok + "%"
@@ -1478,13 +1519,19 @@ func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *ti
 		}
 	}
 	args = append(args, interface{}(limit))
-	// SQLite parses bare numeric expressions in ORDER BY as column ordinals.
-	// `ORDER BY (0) DESC` blows up with "1st ORDER BY term out of range".
-	// Only emit the rank expression when it's a real CASE sum.
-	orderBy := "f.created_at DESC"
-	if rankExpr != "0" {
-		orderBy = "(" + rankExpr + ") DESC, f.created_at DESC"
+
+	// SQLite parses bare numeric expressions in ORDER BY as column ordinals, so
+	// `ORDER BY (0) DESC` fails with "1st ORDER BY term out of range". Only emit
+	// a rank term when it is a real CASE expression.
+	orderParts := []string{}
+	if whoRankExpr != "0" {
+		orderParts = append(orderParts, whoRankExpr+" DESC")
 	}
+	if rankExpr != "0" {
+		orderParts = append(orderParts, "("+rankExpr+") DESC")
+	}
+	orderParts = append(orderParts, "COALESCE(f.posted_at, f.created_at) DESC")
+	orderBy := strings.Join(orderParts, ", ")
 	query := fmt.Sprintf(
 		`SELECT f.id, f.group_id, f.user_id, f.shared_by_phone, f.shared_by_name, f.file_name, f.file_size,
 		  f.mime_type, f.drive_file_id, f.drive_folder_id, f.subject, f.tags, f.version, f.parent_file_id, f.wa_message_id, f.status, f.created_at, f.posted_at, COALESCE(f.attribution_method,''), COALESCE(f.attribution_confidence,0)

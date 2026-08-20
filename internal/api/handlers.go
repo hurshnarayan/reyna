@@ -1692,10 +1692,21 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 	if files == nil {
 		files = []model.File{}
 	}
-	// Defensive: if WHO is set but the strict filter found nothing, retry by sender only
-	if len(files) == 0 && who != "" {
-		fallback, _ := s.store.SearchFilesNLP(groupIDs, who, "", nil, 20)
-		if len(fallback) > 0 {
+	// If WHO and WHAT together found nothing, retry on WHO alone before giving
+	// up. This used to pass the same `who` *and* the same filters, so it re-ran
+	// an identical query and could only ever return the same empty result.
+	if len(files) == 0 && who != "" && (what != "" || sinceTime != nil) {
+		if fallback, _ := s.store.SearchFilesNLP(groupIDs, who, "", nil, 20); len(fallback) > 0 {
+			log.Printf("[NLP-RETRIEVE] no hits for who+what; falling back to sender only")
+			files = fallback
+		}
+	}
+	// Still nothing, and the query named a person: the file may be here but
+	// unattributed. Widen to the topic alone rather than reporting absence,
+	// and let the reply say the sender is unknown.
+	if len(files) == 0 && who != "" && what != "" {
+		if fallback, _ := s.store.SearchFilesNLP(groupIDs, "", what, sinceTime, 20); len(fallback) > 0 {
+			log.Printf("[NLP-RETRIEVE] no hits for sender %q; falling back to topic only", who)
 			files = fallback
 		}
 	}
@@ -1744,11 +1755,18 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 	// when the file was actually shared 2 minutes ago. All times are in IST.
 	dbView := make([]nlp.RetrievalFile, 0, len(files))
 	for _, f := range files {
+		// Withhold the sender unless attribution is strong enough to state it,
+		// and time the file by when it was posted rather than when we inserted
+		// the row.
+		sender := ""
+		if f.SenderKnown() {
+			sender = f.SharedByName
+		}
 		dbView = append(dbView, nlp.RetrievalFile{
 			Name:     f.FileName,
 			Folder:   f.Subject,
-			Sender:   f.SharedByName,
-			SharedAt: formatSharedAt(f.CreatedAt),
+			Sender:   sender,
+			SharedAt: formatSharedAt(f.SharedAt()),
 			Summary:  s.store.GetFileExtractedContent([]int64{f.ID})[f.ID],
 		})
 	}
@@ -2185,17 +2203,24 @@ func filterDriveMatchesByWho(matches []model.DriveMatch, who string) []model.Dri
 	if fields := strings.Fields(whoLower); len(fields) > 0 {
 		first = fields[0]
 	}
-	out := matches[:0]
+	// Same rule as the SQL WHO filter: drop a match only when we know it was
+	// somebody else. A Drive file with no sender attached is one we never
+	// captured, so we cannot say it *wasn't* them — it stays, ranked last, and
+	// the reply reports the sender as unknown.
+	//
+	// This used to `continue` on an empty sender, which silently deleted every
+	// unattributed file from the results whenever a name was mentioned.
+	var named, unknown []model.DriveMatch
 	for _, m := range matches {
 		name := strings.ToLower(m.SenderName)
-		if name == "" {
-			continue
-		}
-		if strings.Contains(name, whoLower) || strings.Contains(name, first) {
-			out = append(out, m)
+		switch {
+		case name == "":
+			unknown = append(unknown, m)
+		case strings.Contains(name, whoLower) || strings.Contains(name, first):
+			named = append(named, m)
 		}
 	}
-	return out
+	return append(named, unknown...)
 }
 
 // downloadDriveMatchesForQA downloads up to `maxFiles` PDFs from the given
@@ -2385,12 +2410,19 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 		if content == "" {
 			continue
 		}
+		// Only pass the sender through when attribution is strong enough to
+		// state it. A model shown a name will use it no matter how the prompt
+		// hedges, so the guard has to be here rather than in the wording.
+		senderName := ""
+		if f.SenderKnown() {
+			senderName = f.SharedByName
+		}
 		qaSources = append(qaSources, nlp.QASource{
 			FileName:   f.FileName,
 			Content:    content,
-			SenderName: f.SharedByName,
+			SenderName: senderName,
 			Subject:    f.Subject,
-			SharedAt:   f.CreatedAt.In(istLocation),
+			SharedAt:   f.SharedAt().In(istLocation),
 		})
 		sourceNames = append(sourceNames, f.FileName)
 	}

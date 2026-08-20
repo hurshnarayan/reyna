@@ -1091,7 +1091,8 @@ How to read the question — figure out what they actually want:
 
 Source material rules:
 - Use ONLY the source content below. NEVER invent facts not in the sources.
-- ALWAYS cite which source you used. Format: "From %sshared by %s on %s, …" — use the real filename, sender, and shared-at time from the SOURCE blocks.
+- ALWAYS cite which source you used, e.g. "From notes.pdf, shared by Mohit on Mon 2026-08-18 21:14 IST, ..." — take the filename, sender and time verbatim from the SOURCE blocks.
+- ATTRIBUTION: a source block only has a "Shared by:" line when we actually know who shared it. If a source has no "Shared by:" line, do NOT name anyone for it. Say "shared in <folder>" or just cite the filename and date. NEVER guess a sender, and never carry a name over from a different source.
 - If multiple sources are relevant, weave them together with citations.
 - If the sources truly don't contain the answer, say so honestly and suggest a follow-up they could try (e.g. "I don't see that in Mohit's PDF — try asking about [something close that IS in there]").
 
@@ -1105,7 +1106,7 @@ SOURCE MATERIAL:
 %s
 STUDENT QUESTION: %s
 
-Your answer:`, "", "", "", context.String(), formatQAPrev(prev), question)
+Your answer:`, context.String(), formatQAPrev(prev), question)
 
 	result, err := c.llm.Complete(prompt, 1200)
 	if err != nil {
@@ -1306,6 +1307,11 @@ CRITICAL TIME RULE:
 - The "shared:" line in each file's metadata below is the GROUND TRUTH — it already contains the relative time AND the absolute time. Use it VERBATIM.
 - NEVER compute or guess relative times yourself ("2 days ago", "this morning"). NEVER override what's written.
 - If the metadata says "5 minute(s) ago", say "5 minutes ago" — not "today" or "earlier".
+
+CRITICAL ATTRIBUTION RULE:
+- "sender:" is empty for files where we do not know who shared them. That is a fact about our records, not a gap for you to fill.
+- For those files, NEVER state or guess a person. Say where and when instead: "shared in Sem 5 CS, 18 August". Do not carry a name over from another file in the list.
+- If the user asked about a specific person and some results have no sender, list them and say plainly that you are not sure who shared those.
 
 Formatting:
 - Plain text with light markdown — bullets, **bold** for filenames, short paragraphs.
