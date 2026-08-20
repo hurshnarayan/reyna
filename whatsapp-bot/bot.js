@@ -10,7 +10,30 @@ const path = require('path');
 
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8080';
 const AUTH_DIR = process.env.AUTH_DIR || './auth_state';
+const DEVICE_TOKEN = process.env.DEVICE_TOKEN || '';
 const logger = pino({ level: 'silent' });
+
+if (!DEVICE_TOKEN) {
+  console.error('');
+  console.error('  DEVICE_TOKEN is not set. Every backend call will be rejected.');
+  console.error('  Start the backend once, copy the DEVICE_TOKEN it prints, and put');
+  console.error('  it in your .env so both processes share the same value.');
+  console.error('');
+}
+
+// backendFetch wraps fetch for calls to the Reyna backend, attaching the shared
+// device token. The /api/bot/* and /api/nlp/* routes used to be unauthenticated,
+// which meant anything that could reach the port could upload files and read any
+// group's contents. Preserves the caller's own headers.
+function backendFetch(url, options = {}) {
+  return fetch(url, {
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      Authorization: `Bearer ${DEVICE_TOKEN}`,
+    },
+  });
+}
 
 // ─── State ───
 let enabledGroups = new Set();   // WA group JIDs that Reyna is active in
@@ -157,7 +180,7 @@ function detectFollowupIndex(text) {
 
 async function sendCommand(groupJid, command, userPhone, userName, extra) {
   try {
-    const res = await fetch(`${BACKEND_URL}/api/bot/command`, {
+    const res = await backendFetch(`${BACKEND_URL}/api/bot/command`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -188,7 +211,7 @@ async function uploadFile(groupJid, userPhone, userName, fileInfo, fileBuffer) {
 
     console.log(`  Upload: ${fileInfo.fileName} (${(fileBuffer.length / 1024).toFixed(0)}KB)`);
 
-    const res = await fetch(`${BACKEND_URL}/api/bot/upload`, { method: 'POST', body: form });
+    const res = await backendFetch(`${BACKEND_URL}/api/bot/upload`, { method: 'POST', body: form });
     const data = await res.json();
     if (!res.ok) {
       console.error(`Upload HTTP ${res.status}:`, data);
@@ -203,7 +226,7 @@ async function uploadFile(groupJid, userPhone, userName, fileInfo, fileBuffer) {
 
 async function nlpRetrieve(groupJid, userPhone, query) {
   try {
-    const res = await fetch(`${BACKEND_URL}/api/nlp/retrieve`, {
+    const res = await backendFetch(`${BACKEND_URL}/api/nlp/retrieve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, group_wa_id: groupJid, user_phone: userPhone }),
@@ -223,7 +246,7 @@ async function notesQA(groupJid, userPhone, question, prevTurn) {
       body.previous_answer = prevTurn.answer;
       if (prevTurn.sources) body.previous_sources = prevTurn.sources;
     }
-    const res = await fetch(`${BACKEND_URL}/api/nlp/qa`, {
+    const res = await backendFetch(`${BACKEND_URL}/api/nlp/qa`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -237,7 +260,7 @@ async function notesQA(groupJid, userPhone, question, prevTurn) {
 
 async function sendReaction(groupJid, userPhone, userName, fileInfo) {
   try {
-    const res = await fetch(`${BACKEND_URL}/api/bot/reaction`, {
+    const res = await backendFetch(`${BACKEND_URL}/api/bot/reaction`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -262,7 +285,7 @@ async function sendReaction(groupJid, userPhone, userName, fileInfo) {
 
 async function refreshEnabledGroups() {
   try {
-    const res = await fetch(`${BACKEND_URL}/api/bot/enabled-groups`);
+    const res = await backendFetch(`${BACKEND_URL}/api/bot/enabled-groups`);
     const data = await res.json();
     enabledGroups = new Set(data.groups || []);
   } catch (err) {
@@ -277,7 +300,7 @@ const lastKnownHidden = new Map(); // groupJid → boolean
 function startGroupStateWatcher(sock) {
   setInterval(async () => {
     try {
-      const res = await fetch(`${BACKEND_URL}/api/bot/group-states`);
+      const res = await backendFetch(`${BACKEND_URL}/api/bot/group-states`);
       const states = await res.json(); // { "jid": { enabled: bool, hidden: bool }, ... }
 
       for (const jid of syncedGroups) {
@@ -353,7 +376,7 @@ function startGroupStateWatcher(sock) {
 // On network failure, defaults to DISABLED (safe side — don't track if unsure).
 async function getGroupMode(groupJid) {
   try {
-    const res = await fetch(`${BACKEND_URL}/api/bot/group-mode?wa_id=${encodeURIComponent(groupJid)}`);
+    const res = await backendFetch(`${BACKEND_URL}/api/bot/group-mode?wa_id=${encodeURIComponent(groupJid)}`);
     const data = await res.json();
     return { mode: data.mode || 'auto', enabled: data.enabled === true };
   } catch (err) {
@@ -551,7 +574,7 @@ async function ensureGroupSynced(sock, groupJid) {
       // First time seeing this group — register it with a placeholder
       // but the backend will only store it if it doesn't already exist
       try {
-        await fetch(`${BACKEND_URL}/api/bot/sync-group`, {
+        await backendFetch(`${BACKEND_URL}/api/bot/sync-group`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ wa_id: groupJid, name: '', member_count: 0 }),
@@ -563,7 +586,7 @@ async function ensureGroupSynced(sock, groupJid) {
   }
 
   try {
-    await fetch(`${BACKEND_URL}/api/bot/sync-group`, {
+    await backendFetch(`${BACKEND_URL}/api/bot/sync-group`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ wa_id: groupJid, name: groupName, member_count: memberCount }),
@@ -585,7 +608,7 @@ async function refreshGroupNames(sock) {
       const name = metadata?.subject;
       if (name && name !== 'WhatsApp Group' && name !== '') {
         console.log(`  [GROUP-NAME] ${groupJid} → "${name}"`);
-        await fetch(`${BACKEND_URL}/api/bot/sync-group`, {
+        await backendFetch(`${BACKEND_URL}/api/bot/sync-group`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ wa_id: groupJid, name, member_count: (metadata?.participants || []).length }),
@@ -602,19 +625,15 @@ async function refreshGroupNames(sock) {
 
 async function preloadSyncedGroups() {
   try {
-    const res = await fetch(`${BACKEND_URL}/api/bot/enabled-groups`);
+    const res = await backendFetch(`${BACKEND_URL}/api/bot/enabled-groups`);
     const data = await res.json();
     // All groups that exist in the backend are considered "synced"
     // (they were initialized previously via /reyna init)
-    const res2 = await fetch(`${BACKEND_URL}/api/groups/settings`, {
-      headers: { 'Content-Type': 'application/json' },
-    });
-    // This endpoint requires auth, so fall back to enabled-groups
     for (const gid of (data.groups || [])) {
       syncedGroups.add(gid);
     }
     // Also load all known group WA IDs from the bot/sync-group registrations
-    const res3 = await fetch(`${BACKEND_URL}/api/bot/known-groups`);
+    const res3 = await backendFetch(`${BACKEND_URL}/api/bot/known-groups`);
     const data3 = await res3.json();
     for (const gid of (data3.groups || [])) {
       syncedGroups.add(gid);
@@ -955,7 +974,7 @@ async function handleMessage(sock, msg) {
     syncedGroups.delete(chat);
     await ensureGroupSynced(sock, chat);
     try {
-      await fetch(`${BACKEND_URL}/api/bot/command`, {
+      await backendFetch(`${BACKEND_URL}/api/bot/command`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -972,7 +991,7 @@ async function handleMessage(sock, msg) {
   if (text.trim().toLowerCase() === '/reyna stop') {
     try {
       // Find group ID and disable it
-      const res = await fetch(`${BACKEND_URL}/api/bot/command`, {
+      const res = await backendFetch(`${BACKEND_URL}/api/bot/command`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

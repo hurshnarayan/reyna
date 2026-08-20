@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"net/http"
 	"strings"
@@ -22,6 +23,35 @@ func GenerateToken(userID int64, secret string) (string, error) {
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString([]byte(secret))
+}
+
+// BearerToken pulls the raw credential out of an "Authorization: Bearer <x>"
+// header. Returns "" when the header is absent or malformed.
+func BearerToken(r *http.Request) string {
+	h := r.Header.Get("Authorization")
+	if h == "" {
+		return ""
+	}
+	parts := strings.SplitN(h, " ", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
+		return ""
+	}
+	return strings.TrimSpace(parts[1])
+}
+
+// ValidDeviceToken reports whether the request carries the shared device token.
+// Compared with subtle.ConstantTimeCompare so a timing side channel cannot be
+// used to recover the token byte by byte. An empty configured token never
+// matches, so a misconfigured server denies rather than admits.
+func ValidDeviceToken(r *http.Request, deviceToken string) bool {
+	if deviceToken == "" {
+		return false
+	}
+	got := BearerToken(r)
+	if got == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(deviceToken)) == 1
 }
 
 func Middleware(secret string) func(http.Handler) http.Handler {

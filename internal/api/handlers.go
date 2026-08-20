@@ -89,6 +89,50 @@ func (s *Server) routes() {
 			auth.Middleware(s.cfg.JWTSecret)(http.HandlerFunc(h)).ServeHTTP(w, r)
 		})
 	}
+	// device gates the routes the WhatsApp bot calls. They accept file uploads
+	// and expose any group's contents, so leaving them open meant anything that
+	// could reach the port could read every user's files.
+	device := func(h http.HandlerFunc) http.HandlerFunc {
+		return wrap(func(w http.ResponseWriter, r *http.Request) {
+			if !auth.ValidDeviceToken(r, s.cfg.DeviceToken) {
+				http.Error(w, `{"error":"invalid device token"}`, http.StatusUnauthorized)
+				return
+			}
+			h(w, r)
+		})
+	}
+	// deviceOrUser accepts either the device token (bot) or a user JWT
+	// (dashboard). The NLP routes are reached from both.
+	deviceOrUser := func(h http.HandlerFunc) http.HandlerFunc {
+		return wrap(func(w http.ResponseWriter, r *http.Request) {
+			if auth.ValidDeviceToken(r, s.cfg.DeviceToken) {
+				h(w, r)
+				return
+			}
+			auth.Middleware(s.cfg.JWTSecret)(http.HandlerFunc(h)).ServeHTTP(w, r)
+		})
+	}
+	// deviceRaw is the multipart upload path: same check, but it must not go
+	// through wrap(), which forces a JSON content type.
+	deviceRaw := func(h http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "OPTIONS" {
+				origin := r.Header.Get("Origin")
+				if origin == "" { origin = "*" }
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Methods", "POST,OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
+				w.WriteHeader(200)
+				return
+			}
+			if !auth.ValidDeviceToken(r, s.cfg.DeviceToken) {
+				w.Header().Set("Content-Type", "application/json")
+				http.Error(w, `{"error":"invalid device token"}`, http.StatusUnauthorized)
+				return
+			}
+			h(w, r)
+		}
+	}
 
 	s.mux.HandleFunc("/api/health", wrap(s.handleHealth))
 	s.mux.HandleFunc("/api/auth/register", wrap(s.handleRegister))
@@ -96,14 +140,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/auth/google", wrap(s.handleGoogleAuthStart))
 	s.mux.HandleFunc("/api/auth/google/callback", wrap(s.handleGoogleCallback))
 	s.mux.HandleFunc("/api/waitlist", wrap(s.handleWaitlist))
-	s.mux.HandleFunc("/api/bot/command", wrap(s.handleBotCommand))
-	s.mux.HandleFunc("/api/bot/upload", s.handleBotUpload) // no wrap — multipart, not JSON
-	s.mux.HandleFunc("/api/bot/reaction", wrap(s.handleBotReaction))
-	s.mux.HandleFunc("/api/bot/sync-group", wrap(s.handleBotSyncGroup))
-	s.mux.HandleFunc("/api/bot/enabled-groups", wrap(s.handleEnabledGroups))
-	s.mux.HandleFunc("/api/bot/group-states", wrap(s.handleGroupStates))
-	s.mux.HandleFunc("/api/bot/known-groups", wrap(s.handleKnownGroups))
-	s.mux.HandleFunc("/api/bot/group-mode", wrap(s.handleGroupMode))
+	s.mux.HandleFunc("/api/bot/command", device(s.handleBotCommand))
+	s.mux.HandleFunc("/api/bot/upload", deviceRaw(s.handleBotUpload)) // multipart, not JSON
+	s.mux.HandleFunc("/api/bot/reaction", device(s.handleBotReaction))
+	s.mux.HandleFunc("/api/bot/sync-group", device(s.handleBotSyncGroup))
+	s.mux.HandleFunc("/api/bot/enabled-groups", device(s.handleEnabledGroups))
+	s.mux.HandleFunc("/api/bot/group-states", device(s.handleGroupStates))
+	s.mux.HandleFunc("/api/bot/known-groups", device(s.handleKnownGroups))
+	s.mux.HandleFunc("/api/bot/group-mode", device(s.handleGroupMode))
 
 	s.mux.HandleFunc("/api/me", protected(s.handleMe))
 	s.mux.HandleFunc("/api/auth/google/status", protected(s.handleGoogleStatus))
@@ -132,10 +176,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/drive/folder/delete", protected(s.handleDriveFolderDelete))
 
 	// v3 — NLP Retrieval + Q&A + LLM status
-	// retrieve and qa use wrap (not protected) so bot can call them too,
-	// but they try JWT first for dashboard calls
-	s.mux.HandleFunc("/api/nlp/retrieve", wrap(s.handleNLPRetrieve))
-	s.mux.HandleFunc("/api/nlp/qa", wrap(s.handleNotesQA))
+	// retrieve and qa are reached from both the bot (device token) and the
+	// dashboard (user JWT), so they accept either. They expose file contents
+	// and so must not be open.
+	s.mux.HandleFunc("/api/nlp/retrieve", deviceOrUser(s.handleNLPRetrieve))
+	s.mux.HandleFunc("/api/nlp/qa", deviceOrUser(s.handleNotesQA))
+	// llm/status reports only whether a provider is configured — no user data.
 	s.mux.HandleFunc("/api/llm/status", wrap(s.handleLLMStatus))
 }
 
@@ -453,7 +499,7 @@ func (s *Server) handleBotCommand(w http.ResponseWriter, r *http.Request) {
 			}
 			if uploaded > 0 { resp.Reply += fmt.Sprintf("\n\n☁️ %d file(s) pushed to Google Drive!", uploaded) }
 			if skipped > 0 && uploaded == 0 {
-				if driveUser == nil { resp.Reply += "\n\nNo one has connected Drive yet." } else { resp.Reply += "\n\nDrive upload failed. Check backend logs." }
+				if driveUser == nil { resp.Reply += "\n\nNo one in this group has connected Drive yet. Files are saved locally. Connect Drive on the dashboard to sync." } else { resp.Reply += "\n\nDrive upload failed. Check backend logs." }
 			}
 		}
 

@@ -1,6 +1,9 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"log"
 	"os"
 	"strconv"
 )
@@ -15,6 +18,14 @@ type Config struct {
 	FrontendURL       string
 	WhatsAppMode      string // "baileys" or "mock"
 	AutoCommitHours   int    // Hours before staged files auto-commit (default 24)
+
+	// DeviceToken is the shared secret the WhatsApp bot (and, later, the Android
+	// app) presents on /api/bot/* and /api/nlp/*. These routes accept file
+	// uploads and expose any group's contents, so they cannot be open. When
+	// DEVICE_TOKEN is unset a random one is generated at boot and logged: the
+	// server stays closed rather than open, and the log tells you what to set.
+	DeviceToken       string
+	DeviceTokenIsTemp bool
 
 	// LLM provider settings — swappable between Claude, Gemini, Grok, OpenAI
 	// LLM_PROVIDER: "claude" | "gemini" | "grok" | "openai" (default: auto-detect from available keys)
@@ -42,12 +53,26 @@ func Load() *Config {
 		FrontendURL:       getEnv("FRONTEND_URL", "http://localhost:5173"),
 		WhatsAppMode:      getEnv("WHATSAPP_MODE", "mock"),
 		AutoCommitHours:   ach,
+		DeviceToken:       getEnv("DEVICE_TOKEN", ""),
 
 		LLMProvider:     getEnv("LLM_PROVIDER", ""),
 		AnthropicAPIKey: getEnv("ANTHROPIC_API_KEY", ""),
 		GeminiAPIKey:    getEnv("GEMINI_API_KEY", ""),
 		XAIAPIKey:       getEnv("XAI_API_KEY", ""),
 		OpenAIAPIKey:    getEnv("OPENAI_API_KEY", ""),
+	}
+
+	// No DEVICE_TOKEN configured: mint a random one for this process. The bot
+	// will fail to authenticate until the operator sets a stable value in .env,
+	// which is the intended outcome — an unset secret must not mean "no auth".
+	if cfg.DeviceToken == "" {
+		buf := make([]byte, 32)
+		if _, err := rand.Read(buf); err != nil {
+			// Never proceed with a predictable device token.
+			log.Fatalf("config: cannot generate DEVICE_TOKEN: %v", err)
+		}
+		cfg.DeviceToken = hex.EncodeToString(buf)
+		cfg.DeviceTokenIsTemp = true
 	}
 
 	// Auto-detect provider from available keys if not explicitly set

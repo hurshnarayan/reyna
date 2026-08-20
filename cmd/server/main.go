@@ -50,6 +50,17 @@ func main() {
 	log.Printf("   Database: %s", cfg.DatabaseURL)
 	log.Printf("   Auto-commit: %d hours", cfg.AutoCommitHours)
 
+	if cfg.DeviceTokenIsTemp {
+		log.Printf("")
+		log.Printf("   ⚠  DEVICE_TOKEN is not set. Generated a temporary one for this process:")
+		log.Printf("")
+		log.Printf("        DEVICE_TOKEN=%s", cfg.DeviceToken)
+		log.Printf("")
+		log.Printf("   The bot cannot authenticate until this is in your .env. It changes on")
+		log.Printf("   every restart, so add it there rather than copying it each time.")
+		log.Printf("")
+	}
+
 	// ── Auto-Commit Scheduler ──
 	// Runs every 15 minutes, commits staged files older than AutoCommitHours
 	go func() {
