@@ -480,12 +480,31 @@ func (s *Server) handleDeviceUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	localID, folderID, _ := s.drive.SmartUpload("", "", user.ID, subject, versionedName, mimeType, fileBytes)
-	// Baileys reports the sender from the WhatsApp envelope, so attribution here
-	// is authoritative. A capture path that infers the sender instead must set a
-	// lower confidence and a method describing how it guessed.
-	attrMethod, attrConfidence := model.AttrBaileys, 1.0
-	if sharedByName == "" && userPhone == "" {
-		attrMethod, attrConfidence = model.AttrNone, 0.0
+	// The device states how it worked out the sender and how far to trust it.
+	// A file on a phone carries no sender, so unlike the old bot path this is a
+	// join result rather than a fact, and the server records it as given rather
+	// than assuming.
+	attrMethod := r.FormValue("attribution_method")
+	attrConfidence, _ := strconv.ParseFloat(r.FormValue("attribution_confidence"), 64)
+	if attrMethod == "" {
+		// No attribution reported: trust the presence of a name, nothing more.
+		if sharedByName == "" && userPhone == "" {
+			attrMethod, attrConfidence = model.AttrNone, 0.0
+		} else {
+			attrMethod, attrConfidence = model.AttrBaileys, 1.0
+		}
+	}
+	// A client cannot promise more than certainty, and must not be able to talk
+	// the server past its own naming threshold by sending a number out of range.
+	if attrConfidence < 0 {
+		attrConfidence = 0
+	} else if attrConfidence > 1 {
+		attrConfidence = 1
+	}
+	// Withhold a name the confidence does not support, so the same rule holds
+	// whether a row arrived from the app or the dashboard.
+	if attrConfidence < model.AttributionMinNamed {
+		sharedByName = ""
 	}
 
 	dbFile := &model.File{GroupID: groupID, UserID: user.ID, SharedByPhone: userPhone, SharedByName: sharedByName, FileName: versionedName, FileSize: fileSize, MimeType: mimeType, Subject: subject, DriveFileID: localID, DriveFolderID: folderID, Status: "staged", ContentHash: contentHash,

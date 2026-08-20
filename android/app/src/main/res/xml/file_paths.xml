@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Lets Reyna hand a captured file to whatever app can open it.
+
+  Scoped to external storage rather than the whole filesystem: Reyna only ever
+  serves files it found in WhatsApp's media folder, and a broader grant would
+  expose more than it needs to.
+-->
+<paths>
+    <external-path name="external" path="." />
+</paths>

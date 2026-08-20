@@ -5,6 +5,12 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import app.reyna.data.Repo
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 /**
  * Reads WhatsApp notifications to learn who shared a file and when.
@@ -64,18 +70,23 @@ class NotificationReader : NotificationListenerService() {
             }
     }
 
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         if (sbn.packageName !in WATCHED_PACKAGES) return
         val observed = extract(sbn) ?: return
         // Stored unconditionally, whether or not a file ever turns up for it.
         // A file downloaded hours later still needs this event to exist, and
         // the join runs in both directions for exactly that reason.
-        onObserved(observed)
+        scope.launch {
+            runCatching { Repo.get(applicationContext).onNotification(observed) }
+                .onFailure { Log.w(TAG, "could not record notification: ${it.message}") }
+        }
     }
 
-    /** Overridable so the join can be wired in without a service running. */
-    var onObserved: (Observed) -> Unit = { obs ->
-        Log.d(TAG, "observed ${obs.chatName} / ${obs.senderName} @ ${obs.postedAtMillis}")
+    override fun onDestroy() {
+        scope.cancel()
+        super.onDestroy()
     }
 
     companion object {

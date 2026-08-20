@@ -80,6 +80,7 @@ fun ChatScreen(
     fileCount: Int,
     onOpenTracking: () -> Unit,
     onSend: (String) -> Unit = {},
+    onImport: () -> Unit = {},
 ) {
     val c = reynaColors
     val listState = rememberLazyListState()
@@ -107,7 +108,7 @@ fun ChatScreen(
             items(messages.size) { i -> MessageRow(messages[i]) }
         }
 
-        Composer(onSend = onSend)
+        Composer(onSend = onSend, onImport = onImport)
     }
 }
 
@@ -220,7 +221,7 @@ private fun MessageRow(msg: ChatMessage) {
  * keeps the input reachable no matter where the conversation is scrolled.
  */
 @Composable
-private fun Composer(onSend: (String) -> Unit) {
+private fun Composer(onSend: (String) -> Unit, onImport: () -> Unit) {
     val c = reynaColors
     var text by remember { mutableStateOf("") }
     val canSend = text.isNotBlank()
@@ -238,7 +239,7 @@ private fun Composer(onSend: (String) -> Unit) {
             // Attach offers importing a chat, which is how Reyna learns who
             // shared the older files.
             Box(
-                Modifier.size(40.dp).clip(CircleShape).clickable { },
+                Modifier.size(40.dp).clip(CircleShape).clickable { onImport() },
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(

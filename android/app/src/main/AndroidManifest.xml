@@ -49,6 +49,7 @@
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:label="@string/app_name"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
@@ -76,6 +77,36 @@
                 <data android:mimeType="application/zip" />
             </intent-filter>
         </activity>
+
+        <!--
+            Keeps the file watcher alive while the app is closed. Without a
+            foreground service the FileObserver dies with the process and Reyna
+            would only see files while the user had the app on screen.
+        -->
+        <service
+            android:name=".capture.CaptureService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- Brings capture back after a reboot without waiting for an app open. -->
+        <receiver
+            android:name=".capture.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Hands a captured file to whatever app can open it. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <!--
             Reads WhatsApp notifications for one purpose: learning who shared a

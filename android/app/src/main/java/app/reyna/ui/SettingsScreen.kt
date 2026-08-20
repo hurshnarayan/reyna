@@ -15,7 +15,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CloudDone
+import androidx.compose.material.icons.rounded.CloudUpload
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.IosShare
 import androidx.compose.material.icons.rounded.NotificationsActive
@@ -26,6 +27,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,6 +36,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -43,10 +49,14 @@ import app.reyna.ui.theme.Dimens
 import app.reyna.ui.theme.reynaColors
 
 @Composable
-fun SettingsScreen() {
+fun SettingsScreen(vm: ReynaViewModel, onImport: () -> Unit) {
     val c = reynaColors
-    var capturing by remember { mutableStateOf(true) }
-    var dailyDigest by remember { mutableStateOf(false) }
+    var capturing by remember { mutableStateOf(vm.capturing) }
+    var dailyDigest by remember { mutableStateOf(vm.dailyDigest) }
+    var backend by remember { mutableStateOf(vm.backendUrl) }
+    var token by remember { mutableStateOf(vm.deviceToken) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    val scanning by vm.scanning.collectAsState()
 
     LazyColumn(Modifier.fillMaxSize().background(c.background)) {
         item { SectionHeader("Capture") }
@@ -57,7 +67,7 @@ fun SettingsScreen() {
                 // What actually stops, rather than a restatement of the label.
                 subtitle = "Reyna notices files WhatsApp saves to this phone",
                 checked = capturing,
-                onChange = { capturing = it },
+                onChange = { capturing = it; vm.setCapturing(it) },
             )
         }
         item {
@@ -68,7 +78,16 @@ fun SettingsScreen() {
                 // notification per file would be a habit change.
                 subtitle = "One summary a day. Reyna never notifies per file.",
                 checked = dailyDigest,
-                onChange = { dailyDigest = it },
+                onChange = { dailyDigest = it; vm.setDailyDigest(it) },
+            )
+        }
+
+        item {
+            ActionRow(
+                icon = Icons.Rounded.Refresh,
+                title = if (scanning) "Scanning..." else "Scan for files now",
+                subtitle = "Checks the WhatsApp folder immediately",
+                onClick = vm::rescanNow,
             )
         }
 
@@ -78,23 +97,39 @@ fun SettingsScreen() {
                 icon = Icons.Rounded.IosShare,
                 title = "Import a chat",
                 subtitle = "Teaches Reyna who shared the older files",
+                onClick = onImport,
+            )
+        }
+
+        item { SectionHeader("Backend") }
+        item {
+            FieldRow("Server", backend, "http://10.0.2.2:8080") {
+                backend = it; vm.backendUrl = it
+            }
+        }
+        item {
+            // Without this the routes reject every call. Printed by the server
+            // at startup when DEVICE_TOKEN is unset.
+            FieldRow("Device token", token, "paste from the server log", secret = true) {
+                token = it; vm.deviceToken = it
+            }
+        }
+        item {
+            ActionRow(
+                icon = Icons.Rounded.CloudUpload,
+                title = "Send pending files now",
+                subtitle = "Uploads anything the backend has not accepted yet",
+                onClick = vm::syncNow,
             )
         }
 
         item { SectionHeader("Storage") }
         item {
-            ActionRow(
-                icon = Icons.Rounded.CloudDone,
-                title = "Google Drive",
-                subtitle = "Connected. Files sync to your own Drive.",
-                trailing = "Change",
-            )
-        }
-        item {
+            val tracking = vm.trackingState()
             ActionRow(
                 icon = Icons.Rounded.Storage,
                 title = "On this device",
-                subtitle = "1.2 GB of captured files",
+                subtitle = "${tracking.total} files, ${tracking.onDeviceLabel}",
             )
         }
 
@@ -102,9 +137,15 @@ fun SettingsScreen() {
         item {
             ActionRow(
                 icon = Icons.Rounded.DeleteOutline,
-                title = "Delete everything",
+                title = if (confirmDelete) "Tap again to confirm" else "Delete everything",
                 subtitle = "Removes Reyna's records. Your files and Drive stay.",
                 tint = c.partial,
+                // Two taps, because this is not undoable and a single tap on a
+                // destructive row is too easy to hit by accident.
+                onClick = {
+                    if (confirmDelete) { vm.deleteEverything(); confirmDelete = false }
+                    else confirmDelete = true
+                },
             )
         }
 
@@ -159,12 +200,13 @@ private fun ActionRow(
     subtitle: String,
     trailing: String? = null,
     tint: Color? = null,
+    onClick: (() -> Unit)? = null,
 ) {
     val c = reynaColors
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable { }
+            .clickable(enabled = onClick != null) { onClick?.invoke() }
             .padding(horizontal = Dimens.page, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -193,5 +235,49 @@ private fun RowIcon(icon: ImageVector, tint: Color) {
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, null, tint = tint, modifier = Modifier.size(19.dp))
+    }
+}
+
+/**
+ * An editable setting.
+ *
+ * The backend URL and device token have to be reachable from the UI: without
+ * them every network call fails, and a user with no way to fix that from inside
+ * the app is stuck.
+ */
+@Composable
+private fun FieldRow(
+    label: String,
+    value: String,
+    placeholder: String,
+    secret: Boolean = false,
+    onChange: (String) -> Unit,
+) {
+    val c = reynaColors
+    Column(Modifier.fillMaxWidth().padding(horizontal = Dimens.page, vertical = 10.dp)) {
+        Text(label, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = c.onSurfaceMuted)
+        Spacer(Modifier.size(6.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(c.bubbleIncoming)
+                .padding(horizontal = 12.dp, vertical = 11.dp),
+        ) {
+            if (value.isEmpty()) {
+                Text(placeholder, fontSize = 14.sp, color = c.onSurfaceMuted)
+            }
+            BasicTextField(
+                value = value,
+                onValueChange = onChange,
+                singleLine = true,
+                textStyle = TextStyle(fontSize = 14.sp, color = c.onSurface),
+                cursorBrush = SolidColor(c.bubbleOutgoing),
+                visualTransformation = if (secret && value.isNotEmpty())
+                    androidx.compose.ui.text.input.PasswordVisualTransformation()
+                else androidx.compose.ui.text.input.VisualTransformation.None,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
     }
 }

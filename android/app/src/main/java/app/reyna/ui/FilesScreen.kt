@@ -65,6 +65,7 @@ import app.reyna.ui.theme.reynaColors
 fun FilesScreen(
     files: List<SearchableFile>,
     onOpen: (SearchableFile) -> Unit = {},
+    onAskWhoShared: (SearchableFile) -> Unit = {},
 ) {
     val c = reynaColors
     var query by remember { mutableStateOf("") }
@@ -126,7 +127,7 @@ fun FilesScreen(
             )
         } else {
             LazyColumn(Modifier.fillMaxSize()) {
-                items(hits.size) { i -> ResultRow(hits[i], onOpen) }
+                items(hits.size) { i -> ResultRow(hits[i], onOpen, onAskWhoShared) }
                 item { Spacer(Modifier.height(16.dp)) }
             }
         }
@@ -254,7 +255,11 @@ private fun Chip(label: String, count: Int, active: Boolean, onClick: () -> Unit
 }
 
 @Composable
-private fun ResultRow(hit: FileHit, onOpen: (SearchableFile) -> Unit) {
+private fun ResultRow(
+    hit: FileHit,
+    onOpen: (SearchableFile) -> Unit,
+    onAskWhoShared: (SearchableFile) -> Unit,
+) {
     val c = reynaColors
     val f = hit.file
     val band = c.forConfidence(f.confidence)
@@ -294,6 +299,19 @@ private fun ResultRow(hit: FileHit, onOpen: (SearchableFile) -> Unit) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (f.confidence < Attribution.MIN_NAMED) {
+                // The repair affordance sits where the gap is noticed.
+                Spacer(Modifier.height(3.dp))
+                Box(
+                    Modifier
+                        .clip(CircleShape)
+                        .background(band.copy(alpha = 0.12f))
+                        .clickable { onAskWhoShared(f) }
+                        .padding(horizontal = 9.dp, vertical = 3.dp),
+                ) {
+                    Text("Who shared this?", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = band)
+                }
+            }
         }
     }
 }
