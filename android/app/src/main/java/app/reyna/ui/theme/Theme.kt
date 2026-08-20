@@ -11,6 +11,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -19,37 +20,36 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 
 /**
- * Design tokens. See DESIGN.md, which is the source of truth.
+ * Design tokens. DESIGN.md is the source of truth.
  *
- * Kept as a plain object rather than folded into Material's color scheme because
- * several of these have no Material equivalent: the sunken tone used for rows
- * nested inside a card, and the three confidence colors, which carry meaning
- * rather than decoration.
+ * Reyna is a conversation with your own archive, so the surface is a messaging
+ * app rather than a dashboard: a plain background, no cards, and separation
+ * carried by bubble color and whitespace.
  */
 data class ReynaColors(
     val background: Color,
-    val surface: Color,
-    /** For rows nested inside a card, which must recede rather than stack. */
-    val surfaceSunken: Color,
+    /** Reyna's answers. */
+    val bubbleIncoming: Color,
+    /** Your questions. The only saturated color in the chrome. */
+    val bubbleOutgoing: Color,
+    val onBubbleOutgoing: Color,
     val onSurface: Color,
     val onSurfaceMuted: Color,
-    /** Filled buttons, active nav, FAB. Inverts between themes. */
-    val accent: Color,
-    val onAccent: Color,
-    val outline: Color,
+    val divider: Color,
+    /** File chips nested inside an incoming bubble, which must recede. */
+    val surfaceRaised: Color,
 
     /**
-     * The confidence triad.
+     * The confidence triad, the one place color carries meaning.
      *
      * Green is not "good" and gray is not "bad": they say how much is known
-     * about who shared a file. A gray row is Reyna being honest, and must never
-     * be styled as a defect or an error.
+     * about who shared a file. A gray chip is Reyna being honest, and is never
+     * styled as an error.
      */
     val confident: Color,
     val partial: Color,
     val unknown: Color,
 ) {
-    /** The color for a given attribution confidence. */
     fun forConfidence(confidence: Double): Color = when {
         confidence >= 0.70 -> confident
         confidence >= 0.30 -> partial
@@ -57,58 +57,57 @@ data class ReynaColors(
     }
 }
 
+/** The mark is a lightning bolt, so the accent is electric. */
+private val Electric = Color(0xFF3B5BFE)
+
 private val LightColors = ReynaColors(
-    // Warm off-white, never pure white: the cards are white, and the page has to
-    // sit behind them without a drop shadow doing the work.
-    background = Color(0xFFF6F6F4),
-    surface = Color(0xFFFFFFFF),
-    surfaceSunken = Color(0xFFF2F2F0),
-    onSurface = Color(0xFF111113),
-    onSurfaceMuted = Color(0xFF8A8A8E),
-    accent = Color(0xFF000000),
-    onAccent = Color(0xFFFFFFFF),
-    outline = Color(0xFFEAEAE8),
-    confident = Color(0xFF34C759),
-    partial = Color(0xFFFF9F0A),
-    unknown = Color(0xFF8A8A8E),
+    background = Color(0xFFFFFFFF),
+    bubbleIncoming = Color(0xFFF1F1F4),
+    bubbleOutgoing = Electric,
+    onBubbleOutgoing = Color(0xFFFFFFFF),
+    onSurface = Color(0xFF0A0A0B),
+    onSurfaceMuted = Color(0xFF6B6B70),
+    divider = Color(0xFFE8E8EA),
+    surfaceRaised = Color(0xFFF7F7F9),
+    confident = Color(0xFF2FA84F),
+    partial = Color(0xFFE08600),
+    unknown = Color(0xFF8A8A90),
 )
 
 private val DarkColors = ReynaColors(
-    background = Color(0xFF0B0B0C),
-    surface = Color(0xFF1A1A1C),
-    surfaceSunken = Color(0xFF232326),
-    onSurface = Color(0xFFF5F5F7),
-    onSurfaceMuted = Color(0xFF8A8A8E),
-    accent = Color(0xFFFFFFFF),
-    onAccent = Color(0xFF000000),
-    outline = Color(0xFF2A2A2E),
-    confident = Color(0xFF30D158),
-    partial = Color(0xFFFFA023),
-    unknown = Color(0xFF8A8A8E),
+    background = Color(0xFF121214),
+    bubbleIncoming = Color(0xFF29292E),
+    bubbleOutgoing = Electric,
+    onBubbleOutgoing = Color(0xFFFFFFFF),
+    onSurface = Color(0xFFF2F2F4),
+    onSurfaceMuted = Color(0xFF96969C),
+    divider = Color(0xFF2A2A2F),
+    surfaceRaised = Color(0xFF1E1E22),
+    confident = Color(0xFF3FBF62),
+    partial = Color(0xFFF0A030),
+    unknown = Color(0xFF96969C),
 )
 
 val LocalReynaColors = staticCompositionLocalOf { LightColors }
 
-/** Spacing, from DESIGN.md. Named so the numbers are not scattered. */
 object Dimens {
     val page = 16.dp
-    val cardPadding = 18.dp
-    val cardGap = 12.dp
-    val cardRadius = 24.dp
-    val smallCardRadius = 20.dp
+
+    /**
+     * Bubble radius. The corner nearest the sender is tightened to [bubbleTail],
+     * which is what makes a bubble read as coming from a side rather than
+     * floating.
+     */
+    val bubble = 18.dp
+    val bubbleTail = 4.dp
+    val chip = 12.dp
 }
 
-/**
- * One family, weight doing the work. Numbers are heavy with tight tracking,
- * which is what gives the hero card its presence.
- */
 private val ReynaTypography = Typography(
-    displayLarge = TextStyle(fontSize = 40.sp, fontWeight = FontWeight.Bold, letterSpacing = (-1.5).sp),
-    titleLarge = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.5).sp),
-    titleMedium = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.2).sp),
-    bodyLarge = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.Medium),
+    titleMedium = TextStyle(fontSize = 17.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.2).sp),
+    bodyLarge = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.Normal, lineHeight = 21.sp),
     bodyMedium = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Normal),
-    labelSmall = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Medium),
+    labelSmall = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.Medium),
 )
 
 @Composable
@@ -122,10 +121,13 @@ fun ReynaTheme(
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            window.statusBarColor = colors.background.value.toInt()
-            // Status bar icons invert with the theme, or they vanish against it.
-            WindowCompat.getInsetsController(window, view)
-                .isAppearanceLightStatusBars = !darkTheme
+            window.statusBarColor = colors.background.toArgb()
+            window.navigationBarColor = colors.background.toArgb()
+            // Bars invert with the theme, or their icons vanish against it.
+            WindowCompat.getInsetsController(window, view).apply {
+                isAppearanceLightStatusBars = !darkTheme
+                isAppearanceLightNavigationBars = !darkTheme
+            }
         }
     }
 
@@ -134,20 +136,20 @@ fun ReynaTheme(
             colorScheme = if (darkTheme) {
                 darkColorScheme(
                     background = colors.background,
-                    surface = colors.surface,
+                    surface = colors.background,
                     onBackground = colors.onSurface,
                     onSurface = colors.onSurface,
-                    primary = colors.accent,
-                    onPrimary = colors.onAccent,
+                    primary = colors.bubbleOutgoing,
+                    onPrimary = colors.onBubbleOutgoing,
                 )
             } else {
                 lightColorScheme(
                     background = colors.background,
-                    surface = colors.surface,
+                    surface = colors.background,
                     onBackground = colors.onSurface,
                     onSurface = colors.onSurface,
-                    primary = colors.accent,
-                    onPrimary = colors.onAccent,
+                    primary = colors.bubbleOutgoing,
+                    onPrimary = colors.onBubbleOutgoing,
                 )
             },
             typography = ReynaTypography,
@@ -156,6 +158,5 @@ fun ReynaTheme(
     }
 }
 
-/** Shorthand for the tokens, since every component needs them. */
 val reynaColors: ReynaColors
     @Composable get() = LocalReynaColors.current

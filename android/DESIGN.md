@@ -1,180 +1,168 @@
 # Reyna design specification
 
-The brief: match Cal AI's interface exactly in structure and feel, adapted to what
-Reyna actually does. This document is the spec the implementation follows. If a
-screen disagrees with this file, the file is wrong and should be updated.
+Reyna is a conversation with your own file archive. You ask it for something you
+half remember, and it answers with the file, who shared it, and when. That makes
+it a messaging app, not a dashboard, and the reference is Signal.
+
+An earlier version of this document mapped Cal AI's tracking dashboard onto
+Reyna. It was wrong. Rings and streaks make the product read as something you
+check up on, when the whole interaction is asking a question and getting an
+answer back. The numbers still matter, but they belong in one place the user
+opens deliberately, not spread across the surface they use every day.
+
+## What Signal gets right for us
+
+Signal's chat surface is almost exactly the shape Reyna needs:
+
+- **A conversation is the home screen.** No dashboard between the user and the
+  thing they came to do.
+- **Bubbles carry attachments.** Signal renders a PDF as a chip inside the
+  message: icon, filename, size. Reyna's answers are files, so its answers are
+  that chip plus attribution.
+- **The composer is always there.** One rounded input, pinned to the bottom.
+- **Chrome is quiet.** No cards, no shadows, no borders. Separation comes from
+  whitespace and bubble color.
+- **The toolbar carries identity and context.** Avatar, name, and a subtitle
+  saying what this conversation is.
 
 ## The mapping
 
-Cal AI tracks meals against a daily calorie target. Reyna tracks captured files
-against how confidently they are attributed. The two have the same shape: a
-headline number with a ring showing progress toward completeness, a row of three
-secondary metrics, and a reverse-chronological feed of recent items.
+| Signal | Reyna |
+|---|---|
+| Conversation with a person | Conversation with your archive |
+| Contact avatar and name in toolbar | Bolt avatar, "Reyna", and what it is watching |
+| Their message, incoming bubble | Reyna's answer |
+| Your message, outgoing bubble | Your question |
+| PDF attachment chip in a bubble | The file Reyna found, with attribution |
+| Sender name above a group message | Who shared the file, when confidence allows |
+| Chat list | Files, most recent first |
+| Chats / Calls / Stories | Chat / Files / Settings |
 
-| Cal AI | Reyna | Why it maps |
-|---|---|---|
-| Calories eaten, 1250/2500, with ring | Files attributed, 189/247, with ring | One headline number against a total, ring shows the fraction resolved |
-| Protein / Carbs / Fats, three rings | Named / Chat only / Unknown, three rings | Three mutually exclusive buckets summing to the total |
-| Week strip with per-day rings | Week strip with per-day capture counts | Same rhythm, same glanceable history |
-| Recently uploaded, thumbnail plus macros | Recently captured, file glyph plus attribution | Feed of items with a secondary metadata line |
-| Streak pill, top right | Watching pill, top right | Status the user wants confirmed without tapping |
-| Plus FAB, add a meal | Import FAB, catch up a chat | The primary action that is not on screen already |
-| Home / Progress / Settings | Home / Library / Settings | Three destinations, identical structure |
+## The toolbar stat
 
-The Ask box sits above the hero card on Home. It is Reyna's primary interaction
-and Cal AI has no equivalent, so it takes the position Cal AI gives to the week
-strip, and the week strip moves below it.
+The user needs to know Reyna is working without asking it. The toolbar subtitle
+carries the live state in one line:
 
-## The three confidence colors
+> Watching 3 chats · 247 files
 
-This is the one place Reyna's palette carries meaning rather than decoration. It
-mirrors Cal AI's protein/carbs/fats triad in position and weight, but each color
-states how far the attribution can be trusted.
+Tapping it, or the chart icon beside it, opens **Tracking**: a full sheet showing
+what Reyna has, what it knows, and what it cannot yet answer. This is the only
+place counts and progress appear.
 
-| Band | Color | What Reyna is allowed to say |
-|---|---|---|
-| Named, at or above 0.70 | Green `#34C759` | "Mohit, 2 hours ago" |
-| Chat only, 0.30 to 0.69 | Amber `#FF9F0A` | "Sem 5 CS, 18 August" |
-| Unknown, below 0.30 | Gray `#8E8E93` | "Found on your phone, 18 August" |
+Tracking shows:
 
-Green is not "good" and gray is not "bad". They say how much is known. A gray row
-is Reyna being honest, and the interface must never make it look like a defect or
-an error state.
+1. **Attribution split.** Named, chat only, unknown, as three bars with counts.
+   Tapping the unknown bar opens the repair flow.
+2. **Watched chats.** Each with its file count and when it last saw something.
+3. **Permissions.** Notification access, storage, battery. Live state, with the
+   consequence spelled out when one is missing, not a bare toggle.
+4. **Storage.** How much is on the device and how much is in Drive.
 
 ## Tokens
 
-Taken from the screenshots.
+### Brand
+
+The mark is a lightning bolt, so the accent is electric. `#3B5BFE`. It fills
+outgoing bubbles in both themes, exactly as Signal's blue does, and is the only
+saturated color in the chrome.
 
 ### Light
 
 | Token | Value | Use |
 |---|---|---|
-| `background` | `#F6F6F4` | Page. Warm off-white, never pure white. |
-| `surface` | `#FFFFFF` | Cards. |
-| `surfaceSunken` | `#F2F2F0` | Nested rows inside a card. |
-| `onSurface` | `#111113` | Headings, numbers. |
-| `onSurfaceMuted` | `#8A8A8E` | Labels, secondary lines. |
-| `accent` | `#000000` | Filled buttons, active nav, FAB. |
-| `outline` | `#EAEAE8` | Hairlines. |
+| `background` | `#FFFFFF` | Everything. No page tint, no cards. |
+| `bubbleIncoming` | `#F1F1F4` | Reyna's answers. |
+| `bubbleOutgoing` | `#3B5BFE` | Your questions. |
+| `onBubbleOutgoing` | `#FFFFFF` | |
+| `onSurface` | `#0A0A0B` | |
+| `onSurfaceMuted` | `#6B6B70` | Timestamps, subtitles, placeholder. |
+| `divider` | `#E8E8EA` | Hairlines, composer outline. |
+| `surfaceRaised` | `#F7F7F9` | File chips inside an incoming bubble. |
 
 ### Dark
 
 | Token | Value |
 |---|---|
-| `background` | `#0B0B0C` |
-| `surface` | `#1A1A1C` |
-| `surfaceSunken` | `#232326` |
-| `onSurface` | `#F5F5F7` |
-| `onSurfaceMuted` | `#8A8A8E` |
-| `accent` | `#FFFFFF` |
-| `outline` | `#2A2A2E` |
+| `background` | `#121214` |
+| `bubbleIncoming` | `#29292E` |
+| `bubbleOutgoing` | `#3B5BFE` |
+| `onSurface` | `#F2F2F4` |
+| `onSurfaceMuted` | `#96969C` |
+| `divider` | `#2A2A2F` |
+| `surfaceRaised` | `#1E1E22` |
 
-### Shape and elevation
+### The confidence triad
 
-Cards are 24dp radius, small cards 20dp, pills fully rounded. Shadows are almost
-invisible: 2dp offset, 12dp blur, 6 percent black. The separation between card
-and page comes from the background tint, not from a drop shadow.
+The one place color carries meaning rather than decoration. It appears only on
+file chips and in Tracking.
 
-Page padding 16dp. Card padding 18dp. Gap between cards 12dp.
-
-### Type
-
-One family, weight doing the work.
-
-| Role | Size | Weight |
+| Band | Color | What Reyna may say |
 |---|---|---|
-| Hero number | 40sp | Bold, tight tracking |
-| Stat number | 20sp | Bold |
-| Section header | 16sp | SemiBold |
-| Body | 15sp | Medium |
-| Label | 12sp | Medium, muted |
+| Named, 0.70 and above | `#2FA84F` | "Mohit · 18 August" |
+| Chat only, 0.30 to 0.69 | `#E08600` | "Sem 5 CS · 18 August" |
+| Unknown, below 0.30 | `#8A8A90` | "Found on your phone · 18 August" |
 
-## The logo
+Green is not "good" and gray is not "bad". They say how much is known. A gray
+chip is Reyna being honest and must never be styled as an error.
 
-A white lightning bolt on black. It appears in three places, and nowhere else:
+### Shape and type
 
-1. The launcher icon: bolt on a black background, full bleed.
-2. The top bar on Home: the bolt glyph followed by the wordmark "Reyna", exactly
-   as Cal AI places its apple beside "Cal AI".
-3. The onboarding screen, centered, above the value sentence.
+Bubbles are 18dp radius, with the corner nearest the sender tightened to 4dp,
+which is what makes a bubble read as coming from a side. File chips are 12dp.
+The composer is fully rounded.
 
-The bolt is a vector, never a bitmap, so it stays sharp and can be tinted for
-dark mode.
-
-## Icons
-
-Material Symbols throughout, via `androidx.compose.material:material-icons-extended`.
-Rounded style, to match the geometry of the cards.
-
-No emoji anywhere in the interface. Not in labels, not in empty states, not in
-the confidence rows. Reyna is telling someone what it does and does not know
-about their documents, and an emoji undercuts that.
-
-No dashes as separators either. Use a middot for metadata joins ("Mohit · 2
-hours ago") and a line break or a real sentence anywhere else.
-
-| Meaning | Icon |
-|---|---|
-| Home | `Icons.Rounded.Home` |
-| Library | `Icons.Rounded.FolderOpen` |
-| Settings | `Icons.Rounded.Settings` |
-| Ask | `Icons.Rounded.Search` |
-| Import a chat | `Icons.Rounded.IosShare` |
-| Named confidently | `Icons.Rounded.Person` |
-| Chat only | `Icons.Rounded.Groups` |
-| Unknown | `Icons.Rounded.HelpOutline` |
-| Watching | `Icons.Rounded.Bolt` |
-| A document | `Icons.Rounded.Description` |
-| An image | `Icons.Rounded.Image` |
+Message text 15sp. Timestamps 11sp muted. Toolbar title 17sp semibold, subtitle
+12sp muted. Section headers 13sp muted.
 
 ## Screens
 
-### Home
+### Chat
 
-Top bar, left: bolt glyph plus "Reyna". Right: a pill reading "Watching" with
-the bolt icon, mirroring Cal AI's streak pill.
+The home screen. A conversation, scrolled to the bottom.
 
-Then, in order:
+**Toolbar.** Bolt avatar, "Reyna", and beneath it the live subtitle. On the
+right, a chart icon opening Tracking, and an overflow.
 
-1. **Ask box.** Full width, rounded 20dp, surface colored, search icon leading,
-   placeholder "that thing about the deposit".
-2. **Week strip.** Seven days, each a small circle containing the number of files
-   captured that day. Today is ringed in accent, past days are muted, days with
-   nothing captured are a dotted outline.
-3. **Hero card.** The count of attributed files over the total, the label
-   "Files attributed", and a ring on the right showing the fraction. This is the
-   one card that overhangs the section above it, exactly as Cal AI's calorie card
-   does.
-4. **Three stat cards.** Named, Chat only, Unknown. Each: the count, a muted
-   label, and a ring in that band's color with its icon at the center.
-5. **Page dots.** Three, first active. Reserved for the carousel that will hold
-   per-chat breakdowns.
-6. **Recently captured.** Section header, then rows. Each row: a rounded square
-   holding the file-type glyph, tinted by confidence band; the filename, one
-   line, ellipsized; the attribution line, which is whatever
-   `Attribution.describe` returns and nothing else; the time, right aligned.
-   A row below the naming threshold carries a small "not sure who shared this"
-   affordance that opens the repair flow.
-7. **FAB.** Accent circle, import glyph, bottom right, floating clear of the nav.
+**Messages.** Your questions right-aligned in the accent. Reyna's answers
+left-aligned in the incoming tone. An answer that found files renders the prose
+first, then one file chip per result.
 
-### Library
+**File chip.** Glyph tinted by confidence band, filename, and the attribution
+line, which is whatever `Attribution.describe` returns and nothing else. When
+the band is below the naming threshold, the chip carries a quiet "who shared
+this?" action that opens the repair flow. Tapping the chip opens the file.
 
-The Drive folder tree. Secondary, reachable, deliberately not the front door: a
-file browser would make Reyna a worse Google Drive.
+**Composer.** Rounded input reading "Ask Reyna", an attach button that offers
+"Import a chat", and a send button that is only enabled with text.
+
+**Empty state.** Not an illustration. Reyna opens with a message saying what it
+has and offering two or three real questions the user could ask, drawn from
+files it actually holds.
+
+### Files
+
+Signal's chat list, applied to documents. Rows, no cards: a rounded glyph tile
+where Signal puts an avatar, filename as the title, attribution as the preview
+line, time right-aligned. Grouped under section headers by recency.
 
 ### Settings
 
-Drive account, permission status with live state, and delete everything.
+Drive account, permission status with live state, delete everything.
 
 ## Rules
 
-**Never render a name the confidence does not support.** The interface reads
-`Attribution.describe` and shows what it returns. No screen constructs its own
-sender string.
+**Never render a name the confidence does not support.** Everything reads
+`Attribution.describe`. No screen builds its own sender string.
 
 **Absence looks like absence.** No placeholder avatar for an unknown sender, no
-the word "Unknown" in the sender slot where it reads as a person's name, no
-relative time when the date was inferred rather than known.
+the word "Unknown" sitting where a name goes, no relative time when the date was
+inferred rather than known.
+
+**No emoji anywhere in the interface.** Not in labels, not in empty states, not
+in the confidence rows. Reyna is telling someone what it does and does not know
+about their documents, and an emoji undercuts that.
+
+**No dashes as separators.** Metadata joins with a middot.
 
 **Capture is silent.** No notification per file. A daily digest at most, off by
 default.
