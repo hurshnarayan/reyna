@@ -342,19 +342,12 @@ func (s *Store) AutoLinkUserToGroups(userID int64, phone string) {
 		rows2.Close()
 	}
 
-	// 3. All existing groups (for hackathon demo — every user sees all data)
-	rows3, err := s.db.Query(`SELECT id FROM groups_`)
-	if err == nil {
-		for rows3.Next() {
-			var gid int64
-			rows3.Scan(&gid)
-			if !seen[gid] {
-				groupIDs = append(groupIDs, gid)
-				seen[gid] = true
-			}
-		}
-		rows3.Close()
-	}
+	// Deliberately NOT linking every existing group. An earlier revision added
+	// a third pass selecting all rows from groups_ so that "every user sees all
+	// data" during a demo. That made every registered user a member of every
+	// group in the database, exposing every other user's files. Membership must
+	// come from evidence that this phone actually participated: files they
+	// shared (1), or an existing membership row for the same phone (2).
 
 	// Now insert memberships (all rows closed, no lock contention)
 	for _, gid := range groupIDs {
@@ -1202,14 +1195,11 @@ func (s *Store) FindDriveConnectedUser(groupID int64) *model.User {
 		groupID,
 	).Scan(&u.ID, &u.Phone, &u.Name, &u.Email, &u.GoogleToken, &u.GoogleRefresh, &u.DriveRootID, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
-		// Fallback: try ANY user with real Drive connected
-		err = s.db.QueryRow(
-			`SELECT id, phone, name, email, google_token, google_refresh, drive_root_id, created_at, updated_at
-			 FROM users WHERE google_refresh != '' AND drive_root_id != '' AND drive_root_id NOT LIKE 'local_%' LIMIT 1`,
-		).Scan(&u.ID, &u.Phone, &u.Name, &u.Email, &u.GoogleToken, &u.GoogleRefresh, &u.DriveRootID, &u.CreatedAt, &u.UpdatedAt)
-		if err != nil {
-			return nil
-		}
+		// No fallback. An earlier revision fell back to "any user in the database
+		// with Drive connected", which uploaded one group's files into the Drive
+		// of someone who was never in that group. Callers must handle nil by
+		// telling the user nobody in this group has connected Drive yet.
+		return nil
 	}
 	return u
 }
@@ -1330,35 +1320,11 @@ func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *ti
 		strings.Join(conditions, " AND "), orderBy,
 	)
 
-	log.Printf("[SQL-NLP] who=%q what=%q tokens=%v sql=%s args=%v", who, what, tokens, query, args)
-	// Diagnostic dump
-	if dbg, derr := s.db.Query(`SELECT id, group_id, user_id, shared_by_name, shared_by_phone, file_name, status FROM files WHERE group_id IN (`+placeholders+`)`, func() []interface{} {
-		out := make([]interface{}, len(groupIDs))
-		for i, g := range groupIDs {
-			out[i] = g
-		}
-		return out
-	}()...); derr == nil {
-		defer dbg.Close()
-		for dbg.Next() {
-			var id, gid, uid int64
-			var name, phone, fname, status string
-			if err := dbg.Scan(&id, &gid, &uid, &name, &phone, &fname, &status); err == nil {
-				log.Printf("[DB-DUMP] id=%d gid=%d uid=%d name=%q phone=%q file=%q status=%q", id, gid, uid, name, phone, fname, status)
-			}
-		}
-	}
-	// Minimal probe: does a simple WHERE on shared_by_name match?
-	if who != "" {
-		var n int
-		probeArgs := []interface{}{}
-		for _, g := range groupIDs {
-			probeArgs = append(probeArgs, g)
-		}
-		probeArgs = append(probeArgs, "%"+strings.ToLower(who)+"%")
-		s.db.QueryRow(`SELECT COUNT(*) FROM files WHERE group_id IN (`+placeholders+`) AND LOWER(shared_by_name) LIKE ?`, probeArgs...).Scan(&n)
-		log.Printf("[DB-PROBE] simple WHERE LOWER(shared_by_name) LIKE '%%%s%%' → %d row(s)", strings.ToLower(who), n)
-	}
+	// Log shape only, never contents. An earlier revision dumped every row in
+	// every searched group (id, sender name, phone, filename) on every single
+	// query, which put user data in the logs and cost a full table scan per
+	// search.
+	log.Printf("[SQL-NLP] who=%t what_tokens=%d since=%t groups=%d", who != "", len(tokens), sinceTime != nil, len(groupIDs))
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		log.Printf("[SQL-NLP] query error: %v", err)
