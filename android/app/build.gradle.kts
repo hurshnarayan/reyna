@@ -11,6 +11,11 @@ android {
     namespace = "app.reyna"
     compileSdk = 35
 
+    val localProps = Properties()
+    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use {
+        localProps.load(it)
+    }
+
     defaultConfig {
         applicationId = "app.reyna"
         // 29 (Android 10) is the floor: WhatsApp moved its media into
@@ -33,10 +38,6 @@ android {
         // security design: anyone holding the APK holds the token, so a build
         // made this way should not be handed to people you would not give the
         // token to.
-        val localProps = Properties()
-        rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use {
-            localProps.load(it)
-        }
         buildConfigField(
             "String", "BACKEND_URL",
             "\"${localProps.getProperty("reyna.backendUrl") ?: "http://10.0.2.2:8080"}\"",
@@ -47,8 +48,30 @@ android {
         )
     }
 
+    // Signing for a release build, from local.properties so no key material is
+    // committed. Absent that file the release build simply is not signed and
+    // gradle says so, rather than silently producing something uninstallable.
+    val keystorePath = localProps.getProperty("reyna.keystore")
+    signingConfigs {
+        if (keystorePath != null && file(keystorePath).exists()) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = localProps.getProperty("reyna.keystorePassword")
+                keyAlias = localProps.getProperty("reyna.keyAlias")
+                keyPassword = localProps.getProperty("reyna.keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            // A debug-signed APK asking for all-files and notification access
+            // is exactly the shape Play Protect refuses to install when
+            // sideloaded. Signing it with a stable key of our own does not make
+            // Google trust it, but it stops the build from being the obvious
+            // reason it was rejected, and it means updates install over each
+            // other instead of colliding on a changed signature.
+            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }

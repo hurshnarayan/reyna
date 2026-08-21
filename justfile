@@ -19,6 +19,7 @@ java_home := if path_exists(mise_jdk) == "true" { mise_jdk } else { env_var_or_d
 android_home := env_var_or_default("ANDROID_HOME", "/opt/homebrew/share/android-commandlinetools")
 adb := android_home / "platform-tools/adb"
 apk := "android/app/build/outputs/apk/debug/app-debug.apk"
+apk_release := "android/app/build/outputs/apk/release/app-release.apk"
 
 # List the recipes.
 default:
@@ -156,9 +157,47 @@ reinstall: build
     @{{adb}} uninstall app.reyna >/dev/null 2>&1 || true
     @{{adb}} install {{apk}} && echo "clean install"
 
-# Copy the built APK somewhere you can share it from.
+# Copy the built debug APK somewhere you can share it from.
 apk dest="~/Desktop/reyna.apk": build
     @cp {{apk}} {{dest}} && ls -lh {{dest}}
+
+# Build a signed release APK, which is what to sideload onto a real phone.
+build-release:
+    @JAVA_HOME={{java_home}} ./android/gradlew -p android :app:assembleRelease
+
+# Copy the signed release APK somewhere you can send it from.
+apk-release dest="~/Desktop/reyna.apk": build-release
+    @cp {{apk_release}} {{dest}} && ls -lh {{dest}}
+
+# Install the signed release build over USB, which Play Protect does not block.
+install-release: build-release
+    @{{adb}} install -r {{apk_release}} && echo "installed"
+
+# Print the signing certificate of the release APK.
+signature:
+    @JAVA_HOME={{java_home}} {{android_home}}/build-tools/35.0.0/apksigner verify --print-certs {{apk_release}} 2>/dev/null | grep -E 'DN|SHA-256'
+
+# Create the release signing key. Run once; the key lives outside the repo.
+keygen:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ks="$HOME/.reyna/reyna-release.jks"
+    if [ -f "$ks" ]; then echo "keystore already exists at $ks"; exit 0; fi
+    mkdir -p "$HOME/.reyna"
+    read -rsp "keystore password: " pw; echo
+    {{java_home}}/bin/keytool -genkeypair -keystore "$ks" \
+      -storepass "$pw" -keypass "$pw" -alias reyna \
+      -keyalg RSA -keysize 2048 -validity 10000 \
+      -dname "CN=Reyna, OU=Personal, O=Reyna, C=IN"
+    grep -v '^reyna\.key' android/local.properties > android/local.properties.tmp 2>/dev/null || true
+    { cat android/local.properties.tmp 2>/dev/null
+      echo "reyna.keystore=$ks"
+      echo "reyna.keystorePassword=$pw"
+      echo "reyna.keyAlias=reyna"
+      echo "reyna.keyPassword=$pw"
+    } > android/local.properties
+    rm -f android/local.properties.tmp
+    echo "keystore written to $ks and referenced from android/local.properties"
 
 # Follow only Reyna's log lines.
 logs:
