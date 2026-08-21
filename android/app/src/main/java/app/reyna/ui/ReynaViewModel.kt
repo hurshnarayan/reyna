@@ -472,10 +472,15 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
      * backend keeps the same reply usable by the web dashboard, which does
      * render markdown.
      */
-    private fun plainText(s: String): String = s
-        .replace("**", "")
-        .replace("\u2014", "\u00b7")
-        .replace(" - ", " \u00b7 ")
+    private fun plainText(s: String): String = s.lines().joinToString("\n") { line ->
+        line
+            .replace("**", "")
+            .replace("\u2014", "\u00b7")
+            // Markdown bullets, which the model writes as "*   " or "- ",
+            // become a real bullet rather than a stray asterisk.
+            .replaceFirst(Regex("^\\s*[*-]\\s+"), "\u2022 ")
+            .trimEnd()
+    }.trim()
 
     /** How long ago something was shared, phrased the way every screen phrases it. */
     fun relativeTime(millis: Long): String {
