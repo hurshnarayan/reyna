@@ -1712,3 +1712,26 @@ func (s *Store) CountCommittedFiles(groupID int64) int {
 	}
 	return n
 }
+
+// FilesMissingContent lists files stored but never actually read.
+//
+// A file whose text was never extracted is only findable by its name, which
+// for a WhatsApp document called DOC-20260818-WA0041.pdf means not findable at
+// all. These are the ones a backfill has to revisit.
+func (s *Store) FilesMissingContent(limit int) ([]model.File, error) {
+	rows, err := s.db.Query(
+		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name,
+		        file_size, mime_type, drive_file_id, drive_folder_id, subject, tags,
+		        version, parent_file_id, wa_message_id, status, created_at, posted_at,
+		        attribution_method, attribution_confidence
+		   FROM files
+		  WHERE (extracted_content IS NULL OR extracted_content = '')
+		    AND status != 'deleted_in_drive'
+		  ORDER BY posted_at DESC
+		  LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanFiles(rows)
+}

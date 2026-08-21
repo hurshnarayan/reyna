@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,6 +22,7 @@ func isRetryableStatus(code int) bool {
 // doGeminiRequestWithRetry posts to Gemini with up to 4 attempts on transient
 // errors (1s, 2s, 4s backoff). Returns the final response body + status.
 func doGeminiRequestWithRetry(url string, jsonBody []byte) ([]byte, int, error) {
+	gate.wait()
 	var lastBody []byte
 	var lastStatus int
 	for attempt := 0; attempt < 4; attempt++ {
@@ -45,6 +47,18 @@ func doGeminiRequestWithRetry(url string, jsonBody []byte) ([]byte, int, error) 
 		resp.Body.Close()
 		if resp.StatusCode == 200 {
 			return lastBody, 200, nil
+		}
+		// 429 is a quota, not a hiccup.
+		//
+		// The free tier limit is per minute, so a backoff of one, two and four
+		// seconds cannot clear it, and Google's own response asks for twenty
+		// three. Retrying only multiplies the wait: five documents in one
+		// query took ninety eight seconds, almost all of it sleeping between
+		// attempts that were never going to succeed. Fail immediately and let
+		// the caller decide.
+		if resp.StatusCode == 429 {
+			log.Printf("[LLM] Gemini quota exhausted, not retrying")
+			return lastBody, lastStatus, nil
 		}
 		if !isRetryableStatus(resp.StatusCode) || attempt == 3 {
 			return lastBody, lastStatus, nil
@@ -518,4 +532,57 @@ func CleanJSON(s string) string {
 	s = strings.TrimPrefix(s, "```")
 	s = strings.TrimSuffix(s, "```")
 	return strings.TrimSpace(s)
+}
+
+// ── Rate limiting ──
+
+// gate paces every Gemini call in the process.
+//
+// The free tier allows twenty requests a minute. Uploading a phone's backlog
+// fires one call per file as fast as the files arrive, which exhausts the
+// minute in seconds, fails the rest, and leaves documents stored but never
+// read. A hundred and thirty one files were ingested that way and exactly one
+// ended up with any extracted text.
+//
+// Waiting is strictly better than failing here. A file read a minute late is
+// still searchable forever; a file that returned 429 is never read again,
+// because nothing retries it. The limit is set below the real one so that an
+// interactive question is not starved by a backlog running behind it.
+var gate = newRateGate(15, time.Minute)
+
+type rateGate struct {
+	mu     sync.Mutex
+	times  []time.Time
+	limit  int
+	window time.Duration
+}
+
+func newRateGate(limit int, window time.Duration) *rateGate {
+	return &rateGate{limit: limit, window: window}
+}
+
+// wait blocks until another call is allowed.
+func (g *rateGate) wait() {
+	for {
+		g.mu.Lock()
+		cutoff := time.Now().Add(-g.window)
+		kept := g.times[:0]
+		for _, t := range g.times {
+			if t.After(cutoff) {
+				kept = append(kept, t)
+			}
+		}
+		g.times = kept
+		if len(g.times) < g.limit {
+			g.times = append(g.times, time.Now())
+			g.mu.Unlock()
+			return
+		}
+		sleep := time.Until(g.times[0].Add(g.window)) + 50*time.Millisecond
+		g.mu.Unlock()
+		if sleep <= 0 {
+			sleep = 100 * time.Millisecond
+		}
+		time.Sleep(sleep)
+	}
 }

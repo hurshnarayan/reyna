@@ -17,6 +17,10 @@ import (
 	"github.com/hurshnarayan/reyna/internal/nlp"
 )
 
+// unreadableSentinel marks a file whose bytes are gone, so the backfill queue
+// does not offer it again on every pass.
+const unreadableSentinel = "[unreadable]"
+
 func main() {
 	cfg := config.Load()
 
@@ -120,6 +124,44 @@ func main() {
 				count, _ := store.CommitFiles(gid)
 				log.Printf("[AUTO-COMMIT] Group %d: committed %d, uploaded %d to Drive", gid, count, uploaded)
 			}
+		}
+	}()
+
+	// Read the documents that were stored but never read.
+	//
+	// Files arrive faster than a rate limited model can read them, so a phone
+	// uploading a backlog leaves most of them with no extracted text and
+	// therefore findable only by filename. This walks that queue slowly and
+	// forever, behind the rate gate, so the library becomes searchable over
+	// time instead of never. One at a time on purpose: a question asked right
+	// now should not queue behind a hundred documents.
+	go func() {
+		for {
+			time.Sleep(20 * time.Second)
+			pending, err := store.FilesMissingContent(1)
+			if err != nil || len(pending) == 0 {
+				continue
+			}
+			f := pending[0]
+			data, derr := drive.GetLocalFileData(f.ID)
+			if derr != nil || len(data) == 0 {
+				// Nothing to read. Marked with a sentinel rather than an empty
+				// string, because the queue selects on empty and writing empty
+				// would hand back the same unreadable file forever.
+				store.UpdateFileContent(f.ID, unreadableSentinel, "")
+				continue
+			}
+			subject, _, _, content, summary := classifier.ClassifyFileWithContent(
+				f.FileName, f.MimeType, data, nil, nlp.FileMeta{},
+			)
+			if content == "" && summary == "" {
+				continue
+			}
+			store.UpdateFileContent(f.ID, content, summary)
+			if subject != "" && (f.Subject == "" || f.Subject == "Uncategorized" || f.Subject == "Documents") {
+				store.UpdateFileSubject(f.ID, subject)
+			}
+			log.Printf("[BACKFILL] read %s (%d chars)", f.FileName, len(content))
 		}
 	}()
 

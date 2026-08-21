@@ -1770,6 +1770,9 @@ func hasContentCues(query string) bool {
 //
 // Cost: ~₹0.05 per candidate. Capped at 5 candidates per query.
 // Latency: ~3-5s per candidate, sequential.
+// deepRetrieveBudget bounds how long a query may spend reading documents.
+const deepRetrieveBudget = 20 * time.Second
+
 func (s *Server) deepContentRetrieve(groupIDs []int64, rawQuery string, who string, sinceTime *time.Time, maxCandidates int) []model.File {
 	if maxCandidates <= 0 {
 		maxCandidates = 5
@@ -1796,29 +1799,44 @@ func (s *Server) deepContentRetrieve(groupIDs []int64, rawQuery string, who stri
 		file  model.File
 		score float64
 	}
+	// A wall clock budget for the whole pass.
+	//
+	// Each candidate is a model call, and on a rate limited key each call
+	// retries with backoff, so five candidates took ninety eight seconds in
+	// testing while the user watched "Looking through your files". Past about
+	// twenty seconds an answer is worth less than a fast admission that
+	// nothing was found, so the pass stops and returns what it has.
+	deadline := time.Now().Add(deepRetrieveBudget)
+
 	var hits []scored
 	for _, f := range candidates {
-		// Only PDFs/images can be sent as inline doc blocks; for others, fall
-		// back to the cached extracted_content textual match.
-		canSendAsDoc := strings.Contains(f.MimeType, "pdf") || strings.Contains(f.MimeType, "image")
+		if time.Now().After(deadline) {
+			log.Printf("[DEEP-RETRIEVE] budget spent, stopping after %d candidate(s)", len(hits))
+			break
+		}
 
 		var matched bool
 		var confidence float64
 
-		if canSendAsDoc {
+		// Cached text first, always.
+		//
+		// The extracted text was already pulled out when the file was
+		// classified, and the same text is already what the SQL search reads.
+		// Re-uploading the whole document to ask the same question again is
+		// slower, costs far more of a rate limited quota, and answers no
+		// better. Bytes are only sent when there is no cached text at all.
+		content := s.store.GetFileExtractedContent([]int64{f.ID})[f.ID]
+		if content != "" {
+			matched, confidence = s.classifier.MatchesQueryText(rawQuery, f.FileName, content)
+		} else if strings.Contains(f.MimeType, "pdf") || strings.Contains(f.MimeType, "image") {
 			data, derr := s.drive.GetLocalFileData(f.ID)
 			if derr != nil || len(data) == 0 {
-				log.Printf("[DEEP-RETRIEVE] skip %s — no local bytes", f.FileName)
+				log.Printf("[DEEP-RETRIEVE] skip %s, no local bytes", f.FileName)
 				continue
 			}
 			matched, confidence = s.classifier.MatchesQuery(rawQuery, f.FileName, f.MimeType, data)
 		} else {
-			// Text-mode: feed cached content to the matcher
-			content := s.store.GetFileExtractedContent([]int64{f.ID})[f.ID]
-			if content == "" {
-				continue
-			}
-			matched, confidence = s.classifier.MatchesQueryText(rawQuery, f.FileName, content)
+			continue
 		}
 		if matched && confidence >= 0.3 {
 			log.Printf("[DEEP-RETRIEVE] HIT %s (confidence=%.0f%%)", f.FileName, confidence*100)
