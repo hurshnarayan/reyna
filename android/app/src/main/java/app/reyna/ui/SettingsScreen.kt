@@ -125,13 +125,33 @@ fun SettingsScreen(vm: ReynaViewModel, onImport: () -> Unit) {
 
         item { SectionHeader("Storage") }
         item {
+            // The connected case states the account and what is outstanding,
+            // because "Connect" sitting there forever gives no way to tell a
+            // working setup from one that silently stopped filing.
+            val drive by vm.driveState.collectAsState()
+            val pushing by vm.pushing.collectAsState()
+            val state = drive
             ActionRow(
                 icon = Icons.Rounded.CloudUpload,
-                title = "Connect Google Drive",
-                subtitle = "Files are filed into folders in your own Drive",
-                trailing = "Connect",
-                onClick = vm::connectDrive,
+                title = if (state?.connected == true) "Google Drive" else "Connect Google Drive",
+                subtitle = when {
+                    state == null -> "Files are filed into folders in your own Drive"
+                    !state.connected -> "Not connected. Files stay on this phone."
+                    state.pending > 0 ->
+                        "${state.email}. ${state.inDrive} filed, ${state.pending} waiting."
+                    else -> "${state.email}. ${state.inDrive} filed, nothing waiting."
+                },
+                trailing = if (state?.connected == true) null else "Connect",
+                onClick = if (state?.connected == true) null else vm::connectDrive,
             )
+            if (state?.connected == true && state.pending > 0) {
+                ActionRow(
+                    icon = Icons.Rounded.CloudUpload,
+                    title = if (pushing) "Filing into Drive" else "File into Drive now",
+                    subtitle = "Otherwise this happens on its own within a day",
+                    onClick = if (pushing) null else vm::pushToDrive,
+                )
+            }
         }
         item {
             val tracking = vm.trackingState()

@@ -28,6 +28,10 @@ import androidx.core.view.WindowCompat
  */
 data class ReynaColors(
     val background: Color,
+    /** Cards and rows that sit on the background. One step, never two. */
+    val surface: Color,
+    /** The hairline that separates things. Does the work a shadow would. */
+    val border: Color,
     /** Reyna's answers. */
     val bubbleIncoming: Color,
     /** Your questions. The only saturated color in the chrome. */
@@ -35,16 +39,22 @@ data class ReynaColors(
     val onBubbleOutgoing: Color,
     val onSurface: Color,
     val onSurfaceMuted: Color,
+    /** Fainter still, for timestamps and counts that must not compete. */
+    val onSurfaceFaint: Color,
     val divider: Color,
     /** File chips nested inside an incoming bubble, which must recede. */
     val surfaceRaised: Color,
+    val accent: Color,
 
     /**
      * The confidence triad, the one place color carries meaning.
      *
      * Green is not "good" and gray is not "bad": they say how much is known
-     * about who shared a file. A gray chip is Reyna being honest, and is never
-     * styled as an error.
+     * about who shared a file. A gray dot is Reyna being honest, and is never
+     * styled as an error. These are used as small dots and as text, never as
+     * filled tiles behind an icon: tinting every row by confidence made the
+     * library look like a status dashboard and buried the filenames, which are
+     * the thing people actually scan for.
      */
     val confident: Color,
     val partial: Color,
@@ -60,32 +70,47 @@ data class ReynaColors(
 /** The mark is a lightning bolt, so the accent is electric. */
 private val Electric = Color(0xFF3B5BFE)
 
+/**
+ * Light is a warm off-white rather than pure white.
+ *
+ * Paper, not a screen. Pure white with gray cards reads as a form; a warm
+ * ground with white cards and a hairline reads as a document, which is what
+ * Reyna holds.
+ */
 private val LightColors = ReynaColors(
-    background = Color(0xFFFFFFFF),
-    bubbleIncoming = Color(0xFFF1F1F4),
+    background = Color(0xFFFCFCFB),
+    surface = Color(0xFFFFFFFF),
+    border = Color(0xFFE7E7E3),
+    bubbleIncoming = Color(0xFFF3F3F1),
     bubbleOutgoing = Electric,
     onBubbleOutgoing = Color(0xFFFFFFFF),
-    onSurface = Color(0xFF0A0A0B),
-    onSurfaceMuted = Color(0xFF6B6B70),
-    divider = Color(0xFFE8E8EA),
-    surfaceRaised = Color(0xFFF7F7F9),
-    confident = Color(0xFF2FA84F),
-    partial = Color(0xFFE08600),
-    unknown = Color(0xFF8A8A90),
+    onSurface = Color(0xFF1A1A18),
+    onSurfaceMuted = Color(0xFF73736D),
+    onSurfaceFaint = Color(0xFFA1A19A),
+    divider = Color(0xFFEDEDEA),
+    surfaceRaised = Color(0xFFFFFFFF),
+    accent = Electric,
+    confident = Color(0xFF3F8F5B),
+    partial = Color(0xFFB07A22),
+    unknown = Color(0xFF9A9A93),
 )
 
 private val DarkColors = ReynaColors(
-    background = Color(0xFF121214),
-    bubbleIncoming = Color(0xFF29292E),
+    background = Color(0xFF141415),
+    surface = Color(0xFF1B1B1D),
+    border = Color(0xFF2C2C30),
+    bubbleIncoming = Color(0xFF26262A),
     bubbleOutgoing = Electric,
     onBubbleOutgoing = Color(0xFFFFFFFF),
-    onSurface = Color(0xFFF2F2F4),
-    onSurfaceMuted = Color(0xFF96969C),
-    divider = Color(0xFF2A2A2F),
-    surfaceRaised = Color(0xFF1E1E22),
-    confident = Color(0xFF3FBF62),
-    partial = Color(0xFFF0A030),
-    unknown = Color(0xFF96969C),
+    onSurface = Color(0xFFF0F0EE),
+    onSurfaceMuted = Color(0xFF9A9A95),
+    onSurfaceFaint = Color(0xFF6E6E6A),
+    divider = Color(0xFF262629),
+    surfaceRaised = Color(0xFF212125),
+    accent = Color(0xFF6D86FF),
+    confident = Color(0xFF5FB07B),
+    partial = Color(0xFFD9A24A),
+    unknown = Color(0xFF8A8A85),
 )
 
 val LocalReynaColors = staticCompositionLocalOf { LightColors }
@@ -98,14 +123,14 @@ object Dimens {
      * which is what makes a bubble read as coming from a side rather than
      * floating.
      */
-    val bubble = 18.dp
-    val bubbleTail = 4.dp
-    val chip = 12.dp
+    val bubble = 14.dp
+    val bubbleTail = 5.dp
+    val chip = 10.dp
 }
 
 private val ReynaTypography = Typography(
     titleMedium = TextStyle(fontSize = 17.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.2).sp),
-    bodyLarge = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.Normal, lineHeight = 21.sp),
+    bodyLarge = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.Normal, lineHeight = 22.sp),
     bodyMedium = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Normal),
     labelSmall = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.Medium),
 )

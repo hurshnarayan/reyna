@@ -151,6 +151,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/device/attribute", device(s.handleDeviceAttribute))
 	s.mux.HandleFunc("/api/device/drive/connect", device(s.handleDeviceDriveConnect))
 	s.mux.HandleFunc("/api/device/drive/status", device(s.handleDeviceDriveStatus))
+	s.mux.HandleFunc("/api/device/drive/state", device(s.handleDeviceDriveState))
+	s.mux.HandleFunc("/api/device/drive/push", device(s.handleDeviceDrivePush))
 
 	s.mux.HandleFunc("/api/me", protected(s.handleMe))
 	s.mux.HandleFunc("/api/auth/google/status", protected(s.handleGoogleStatus))
@@ -493,7 +495,7 @@ func (s *Server) handleDeviceUpload(w http.ResponseWriter, r *http.Request) {
 	// goroutine. The file shows up in the dashboard as "classifying..." and
 	// updates to the real subject once Gemini responds.
 	if subject == "" {
-		subject = "classifying..."
+		subject = classifyingPlaceholder
 	}
 
 	localID, folderID, _ := s.drive.SmartUpload("", "", user.ID, subject, versionedName, mimeType, fileBytes)
@@ -781,9 +783,14 @@ func (s *Server) handleRemoveStaged(w http.ResponseWriter, r *http.Request) {
 }
 
 // ── Commit Staged Files (from dashboard) ──
-func (s *Server) handleCommitStaged(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
-	uid := auth.GetUserID(r)
+// commitStagedForUser pushes everything staged in the user's groups into their
+// Drive and reports what moved.
+//
+// Extracted from the dashboard handler so the phone can trigger the same push.
+// Waiting up to a day to find out whether your files reached Drive is not a
+// state a user should be left in, and duplicating the logic per caller is how
+// the two drift apart.
+func (s *Server) commitStagedForUser(uid int64) (committed int64, uploaded int) {
 
 	gids := s.store.GetUserGroupIDs(uid)
 	totalCommitted := int64(0)
@@ -796,9 +803,9 @@ func (s *Server) handleCommitStaged(w http.ResponseWriter, r *http.Request) {
 		driveUser := s.store.FindDriveConnectedUser(gid)
 		canUpload := driveUser != nil && driveUser.GoogleRefresh != "" && s.drive.IsConfigured() && driveUser.DriveRootID != "" && !strings.HasPrefix(driveUser.DriveRootID, "local_")
 
-		log.Printf("[DASHBOARD-COMMIT] group=%d staged=%d driveUser=%v canUpload=%v", gid, len(staged), driveUser != nil, canUpload)
+		log.Printf("[COMMIT] group=%d staged=%d driveUser=%v canUpload=%v", gid, len(staged), driveUser != nil, canUpload)
 		if driveUser != nil {
-			log.Printf("[DASHBOARD-COMMIT] driveUser=%s root=%s hasRefresh=%v", driveUser.Email, driveUser.DriveRootID, driveUser.GoogleRefresh != "")
+			log.Printf("[COMMIT] driveUser=%s root=%s hasRefresh=%v", driveUser.Email, driveUser.DriveRootID, driveUser.GoogleRefresh != "")
 		}
 
 		if canUpload {
@@ -858,10 +865,19 @@ func (s *Server) handleCommitStaged(w http.ResponseWriter, r *http.Request) {
 		totalCommitted += count
 	}
 
-	log.Printf("[DASHBOARD-COMMIT] user=%d committed=%d uploaded=%d", uid, totalCommitted, totalUploaded)
+	log.Printf("[COMMIT] user=%d committed=%d uploaded=%d", uid, totalCommitted, totalUploaded)
+	return totalCommitted, totalUploaded
+}
+
+func (s *Server) handleCommitStaged(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
+	committed, uploaded := s.commitStagedForUser(auth.GetUserID(r))
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"committed": totalCommitted,
-		"uploaded":  totalUploaded,
+		"committed": committed,
+		"uploaded":  uploaded,
 	})
 }
 

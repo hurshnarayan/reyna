@@ -53,6 +53,20 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
     private val _toast = MutableStateFlow<String?>(null)
     val toast: StateFlow<String?> = _toast.asStateFlow()
 
+    /**
+     * What is waiting to reach Drive.
+     *
+     * Polled rather than inferred. The phone finishing an upload says nothing
+     * about whether the file was filed, and an app that quietly implies your
+     * documents are backed up when they are not is worse than one that says
+     * nothing at all.
+     */
+    private val _driveState = MutableStateFlow<app.reyna.net.ReynaApi.DriveState?>(null)
+    val driveState: StateFlow<app.reyna.net.ReynaApi.DriveState?> = _driveState.asStateFlow()
+
+    private val _pushing = MutableStateFlow(false)
+    val pushing: StateFlow<Boolean> = _pushing.asStateFlow()
+
     /** True while an answer is in flight, so the composer can offer Stop. */
     private val _sending = MutableStateFlow(false)
     val sending: StateFlow<Boolean> = _sending.asStateFlow()
@@ -125,6 +139,28 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun refreshPermissions() {
         _permissions.value = Permissions.all(getApplication())
+    }
+
+    /** Re-reads Drive state. Cheap, and called whenever the user returns. */
+    fun refreshDriveState() {
+        viewModelScope.launch { _driveState.value = repo.driveState() }
+    }
+
+    /** Files everything waiting into Drive, then re-reads the state. */
+    fun pushToDrive() {
+        if (_pushing.value) return
+        viewModelScope.launch {
+            _pushing.value = true
+            val moved = repo.drivePush()
+            _pushing.value = false
+            _toast.value = when {
+                moved == null -> "Could not reach the backend"
+                moved == 0 -> "Nothing waiting to file"
+                moved == 1 -> "Filed 1 document into your Drive"
+                else -> "Filed $moved documents into your Drive"
+            }
+            _driveState.value = repo.driveState()
+        }
     }
 
     /** Starts capture if it is allowed to run. Idempotent. */

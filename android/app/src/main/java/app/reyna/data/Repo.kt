@@ -511,6 +511,19 @@ class Repo private constructor(private val context: Context) {
             .getMimeTypeFromExtension(ext) ?: "application/octet-stream"
     }
 
+
+    /** What the server says has reached Drive. Null when it cannot be asked. */
+    suspend fun driveState(): ReynaApi.DriveState? = withContext(Dispatchers.IO) {
+        if (deviceToken.isBlank()) return@withContext null
+        api().driveState().getOrNull()
+    }
+
+    /** Files everything staged into Drive now. Returns how many moved. */
+    suspend fun drivePush(): Int? = withContext(Dispatchers.IO) {
+        if (deviceToken.isBlank()) return@withContext null
+        api().drivePush().getOrNull()
+    }
+
     /**
      * What happened to a file handed to Reyna directly.
      *

@@ -1,6 +1,7 @@
 package app.reyna.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -50,6 +51,7 @@ import app.reyna.search.FileHit
 import app.reyna.search.FileSearch
 import app.reyna.search.FuzzySearch
 import app.reyna.search.SearchableFile
+import app.reyna.ui.components.ConfidenceDot
 import app.reyna.ui.theme.Dimens
 import app.reyna.ui.theme.reynaColors
 
@@ -153,9 +155,10 @@ private fun SearchBar(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = Dimens.page, vertical = 10.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(c.bubbleIncoming)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .clip(RoundedCornerShape(11.dp))
+            .background(c.surface)
+            .border(1.dp, c.border, RoundedCornerShape(11.dp))
+            .padding(horizontal = 12.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(Icons.Rounded.Search, null, tint = c.onSurfaceMuted, modifier = Modifier.size(19.dp))
@@ -169,23 +172,25 @@ private fun SearchBar(
                 onValueChange = onQuery,
                 singleLine = true,
                 textStyle = TextStyle(fontSize = 15.sp, color = c.onSurface),
-                cursorBrush = SolidColor(c.bubbleOutgoing),
+                cursorBrush = SolidColor(c.accent),
                 modifier = Modifier.fillMaxWidth(),
             )
         }
         Spacer(Modifier.width(6.dp))
+        // Fuzzy matching, named rather than symbolised. A bold tilde in a
+        // tinted circle told nobody what it did, and it was the loudest thing
+        // on a screen whose job is to get out of the way of the filenames.
         Box(
             Modifier
-                .clip(CircleShape)
-                .background(if (fuzzy) c.bubbleOutgoing.copy(alpha = 0.14f) else Color.Transparent)
+                .clip(RoundedCornerShape(7.dp))
                 .clickable { onToggleFuzzy() }
-                .padding(horizontal = 9.dp, vertical = 3.dp),
+                .padding(horizontal = 8.dp, vertical = 3.dp),
         ) {
             Text(
-                "~",
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                color = if (fuzzy) c.bubbleOutgoing else c.onSurfaceMuted,
+                "Fuzzy",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = if (fuzzy) c.accent else c.onSurfaceFaint,
             )
         }
         if (query.isNotEmpty()) {
@@ -262,54 +267,63 @@ private fun ResultRow(
 ) {
     val c = reynaColors
     val f = hit.file
-    val band = c.forConfidence(f.confidence)
     Row(
         Modifier
             .fillMaxWidth()
+            .padding(horizontal = Dimens.page, vertical = 4.dp)
+            .clip(RoundedCornerShape(11.dp))
+            .background(c.surface)
+            .border(1.dp, c.border, RoundedCornerShape(11.dp))
             .clickable { onOpen(f) }
-            .padding(horizontal = Dimens.page, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = 12.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.Top,
     ) {
-        Box(
-            Modifier.size(46.dp).clip(RoundedCornerShape(14.dp)).background(band.copy(alpha = 0.14f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                if (f.isImage) Icons.Rounded.Image else Icons.Rounded.Description,
-                null, tint = band, modifier = Modifier.size(21.dp),
-            )
-        }
+        Icon(
+            if (f.isImage) Icons.Rounded.Image else Icons.Rounded.Description,
+            null,
+            tint = c.onSurfaceFaint,
+            modifier = Modifier.size(19.dp).padding(top = 1.dp),
+        )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                highlight(f.fileName, hit.nameSpans, c.bubbleOutgoing),
-                fontSize = 15.sp,
+                highlight(f.fileName, hit.nameSpans, c.accent),
+                fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
                 color = c.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                // The one place the attribution line comes from, so a result can
-                // never print a name the confidence does not support.
-                Attribution.describe(f.confidence, f.senderName, f.chatName, f.whenText),
-                fontSize = 13.sp,
-                color = c.onSurfaceMuted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Spacer(Modifier.height(3.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ConfidenceDot(f.confidence)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    // The one place the attribution line comes from, so a result
+                    // can never print a name the confidence does not support.
+                    Attribution.describe(f.confidence, f.senderName, f.chatName, f.whenText),
+                    fontSize = 12.sp,
+                    color = c.onSurfaceMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             if (f.confidence < Attribution.MIN_NAMED) {
                 // The repair affordance sits where the gap is noticed.
-                Spacer(Modifier.height(3.dp))
+                Spacer(Modifier.height(8.dp))
                 Box(
                     Modifier
-                        .clip(CircleShape)
-                        .background(band.copy(alpha = 0.12f))
+                        .clip(RoundedCornerShape(7.dp))
+                        .border(1.dp, c.border, RoundedCornerShape(7.dp))
                         .clickable { onAskWhoShared(f) }
-                        .padding(horizontal = 9.dp, vertical = 3.dp),
+                        .padding(horizontal = 9.dp, vertical = 4.dp),
                 ) {
-                    Text("Who shared this?", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = band)
+                    Text(
+                        "Who shared this?",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = c.onSurfaceMuted,
+                    )
                 }
             }
         }

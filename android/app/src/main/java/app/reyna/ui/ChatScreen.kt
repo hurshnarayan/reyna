@@ -1,6 +1,7 @@
 package app.reyna.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AddCircleOutline
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.BarChart
+import androidx.compose.material.icons.rounded.CloudUpload
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.CircularProgressIndicator
@@ -92,6 +94,10 @@ fun ChatScreen(
     onClearChat: () -> Unit = {},
     onOpenFile: (Long) -> Unit = {},
     onAskWhoShared: (Long) -> Unit = {},
+    pendingToDrive: Int = 0,
+    pushing: Boolean = false,
+    onPushToDrive: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
     sending: Boolean = false,
 ) {
     val c = reynaColors
@@ -108,7 +114,16 @@ fun ChatScreen(
             fileCount = fileCount,
             onOpenTracking = onOpenTracking,
             onClearChat = onClearChat,
+            onOpenSettings = onOpenSettings,
         )
+
+        // Files that reached the server but not the user's Drive are the one
+        // thing Reyna must not stay quiet about. Everything else it does is
+        // recoverable by asking again; this is the case where the user thinks
+        // their documents are filed and they are not.
+        if (pendingToDrive > 0) {
+            PendingBanner(pendingToDrive, pushing, onPushToDrive)
+        }
 
         // A thread with nothing in it is the normal way Reyna opens now. It
         // used to greet with a file count on every launch, which read as the
@@ -162,6 +177,7 @@ private fun ChatToolbar(
     fileCount: Int,
     onOpenTracking: () -> Unit,
     onClearChat: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     val c = reynaColors
     var menuOpen by remember { mutableStateOf(false) }
@@ -202,8 +218,8 @@ private fun ChatToolbar(
                         onClick = { menuOpen = false; onClearChat() },
                     )
                     DropdownMenuItem(
-                        text = { Text("Tracking") },
-                        onClick = { menuOpen = false; onOpenTracking() },
+                        text = { Text("Settings") },
+                        onClick = { menuOpen = false; onOpenSettings() },
                     )
                 }
             }
@@ -408,6 +424,59 @@ private fun Composer(
                     modifier = Modifier.size(if (sending) 18.dp else 20.dp),
                 )
             }
+        }
+    }
+}
+
+
+/**
+ * The one warning in the app.
+ *
+ * Stated as a fact with the fix attached, not as an alert. Nothing has gone
+ * wrong when files are waiting, they are simply not filed yet, and dressing
+ * that in red would teach the user to ignore it by the third time they saw it.
+ */
+@Composable
+private fun PendingBanner(count: Int, pushing: Boolean, onPush: () -> Unit) {
+    val c = reynaColors
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Dimens.page, vertical = 6.dp)
+            .clip(RoundedCornerShape(11.dp))
+            .background(c.surface)
+            .border(1.dp, c.border, RoundedCornerShape(11.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Rounded.CloudUpload,
+            null,
+            tint = c.onSurfaceFaint,
+            modifier = Modifier.size(17.dp),
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            if (count == 1) "1 document is not in your Drive yet"
+            else "$count documents are not in your Drive yet",
+            fontSize = 13.sp,
+            color = c.onSurface,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(8.dp))
+        Box(
+            Modifier
+                .clip(RoundedCornerShape(7.dp))
+                .border(1.dp, c.border, RoundedCornerShape(7.dp))
+                .clickable(enabled = !pushing) { onPush() }
+                .padding(horizontal = 10.dp, vertical = 5.dp),
+        ) {
+            Text(
+                if (pushing) "Filing" else "File now",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = if (pushing) c.onSurfaceFaint else c.accent,
+            )
         }
     }
 }

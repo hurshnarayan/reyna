@@ -1,6 +1,7 @@
 package app.reyna.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -79,12 +80,12 @@ fun Bubble(
     }
     Box(
         modifier
-            // Never let a bubble run the full width; a message that touches both
-            // edges stops reading as a message.
-            .widthIn(max = 300.dp)
+            // Never let a bubble run the full width; a message that touches
+            // both edges stops reading as a message.
+            .widthIn(max = 286.dp)
             .clip(shape)
             .background(if (fromUser) c.bubbleOutgoing else c.bubbleIncoming)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .padding(horizontal = 13.dp, vertical = 9.dp),
     ) { content() }
 }
 
@@ -130,71 +131,102 @@ fun FileChip(
     whenText: String,
     confidence: Double,
     isImage: Boolean = false,
+    inDrive: Boolean = true,
     onOpen: () -> Unit = {},
     onAskWhoShared: () -> Unit = {},
 ) {
     val c = reynaColors
-    val band = c.forConfidence(confidence)
     val uncertain = confidence < Attribution.MIN_NAMED
 
     Column(
         Modifier
-            .widthIn(max = 272.dp)
+            .widthIn(max = 300.dp)
             .clip(RoundedCornerShape(Dimens.chip))
-            .background(c.surfaceRaised)
+            .background(c.surface)
+            .border(1.dp, c.border, RoundedCornerShape(Dimens.chip))
             .clickable { onOpen() }
-            .padding(10.dp),
+            .padding(11.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier
-                    .size(38.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(band.copy(alpha = 0.14f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    if (isImage) Icons.Rounded.Image else Icons.Rounded.Description,
-                    contentDescription = null,
-                    tint = band,
-                    modifier = Modifier.size(19.dp),
-                )
-            }
+            // One monochrome glyph, no tinted tile behind it. Colouring the
+            // tile by confidence meant every row shouted its status before the
+            // user had read the filename, which is what they are scanning for.
+            Icon(
+                if (isImage) Icons.Rounded.Image else Icons.Rounded.Description,
+                contentDescription = null,
+                tint = c.onSurfaceFaint,
+                modifier = Modifier.size(18.dp),
+            )
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(
                     fileName,
                     fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = FontWeight.Medium,
                     color = c.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    Attribution.describe(confidence, senderName, chatName, whenText),
-                    fontSize = 12.sp,
-                    color = c.onSurfaceMuted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Spacer(Modifier.height(3.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    ConfidenceDot(confidence)
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        Attribution.describe(confidence, senderName, chatName, whenText),
+                        fontSize = 12.sp,
+                        color = c.onSurfaceMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (!inDrive) {
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        "Not in Drive yet",
+                        fontSize = 11.sp,
+                        color = c.onSurfaceFaint,
+                    )
+                }
             }
         }
         if (uncertain) {
             // The repair affordance sits where the user notices the gap, not
             // buried in settings.
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(9.dp))
             Box(
                 Modifier
-                    .clip(CircleShape)
-                    .background(band.copy(alpha = 0.12f))
+                    .clip(RoundedCornerShape(7.dp))
+                    .border(1.dp, c.border, RoundedCornerShape(7.dp))
                     .clickable { onAskWhoShared() }
-                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                    .padding(horizontal = 9.dp, vertical = 5.dp),
             ) {
-                Text("Who shared this?", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = band)
+                Text(
+                    "Who shared this?",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = c.onSurfaceMuted,
+                )
             }
         }
     }
+}
+
+/**
+ * How sure Reyna is, as four pixels.
+ *
+ * Small on purpose. The sentence beside it already says what is known; the dot
+ * only makes a list scannable, so it must not become the loudest thing on the
+ * row.
+ */
+@Composable
+fun ConfidenceDot(confidence: Double) {
+    val c = reynaColors
+    Box(
+        Modifier
+            .size(5.dp)
+            .clip(CircleShape)
+            .background(c.forConfidence(confidence)),
+    )
 }
 
 /** Section header in a list. Quiet, left aligned, the way Signal groups chats. */
@@ -211,56 +243,66 @@ fun SectionHeader(text: String, modifier: Modifier = Modifier) {
 }
 
 /**
- * A list row, in Signal's shape: a round-ish tile where an avatar would be, a
- * title, one muted preview line, and a right-aligned time. No card, no border.
+ * A row in the library.
+ *
+ * A hairline card rather than a coloured tile. The previous version painted a
+ * 46dp block tinted by attribution confidence behind every icon, which turned a
+ * list of documents into a grid of green and gray squares and made the
+ * filenames, the only thing anyone scans for, the second thing seen.
  */
 @Composable
 fun FileRow(
     fileName: String,
     subtitle: String,
     whenText: String,
-    band: Color,
+    confidence: Double,
     icon: ImageVector,
+    inDrive: Boolean = true,
     onClick: () -> Unit = {},
 ) {
     val c = reynaColors
     Row(
         Modifier
             .fillMaxWidth()
+            .padding(horizontal = Dimens.page, vertical = 4.dp)
+            .clip(RoundedCornerShape(11.dp))
+            .background(c.surface)
+            .border(1.dp, c.border, RoundedCornerShape(11.dp))
             .clickable { onClick() }
-            .padding(horizontal = Dimens.page, vertical = 10.dp),
+            .padding(horizontal = 12.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier
-                .size(46.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(band.copy(alpha = 0.14f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(icon, null, tint = band, modifier = Modifier.size(21.dp))
-        }
+        Icon(icon, null, tint = c.onSurfaceFaint, modifier = Modifier.size(19.dp))
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
                 fileName,
-                fontSize = 15.sp,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
                 color = c.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                subtitle,
-                fontSize = 13.sp,
-                color = c.onSurfaceMuted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Spacer(Modifier.height(3.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ConfidenceDot(confidence)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    subtitle,
+                    fontSize = 12.sp,
+                    color = c.onSurfaceMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (!inDrive) {
+                    Spacer(Modifier.width(7.dp))
+                    Text("Not in Drive", fontSize = 11.sp, color = c.onSurfaceFaint)
+                }
+            }
         }
         Spacer(Modifier.width(10.dp))
-        Text(whenText, fontSize = 12.sp, color = c.onSurfaceMuted)
+        Text(whenText, fontSize = 11.sp, color = c.onSurfaceFaint)
     }
 }
 

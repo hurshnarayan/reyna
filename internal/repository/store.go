@@ -1693,3 +1693,22 @@ func (s *Store) GetFileExtractedContent(fileIDs []int64) map[int64]string {
 	}
 	return result
 }
+
+// CountCommittedFiles is how many of a group's files actually reached Drive.
+//
+// Counted by status rather than by a non-empty drive_file_id, because a file
+// held only in the local store carries a synthetic "local_" id that would
+// otherwise read as filed.
+func (s *Store) CountCommittedFiles(groupID int64) int {
+	var n int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM files
+		  WHERE group_id = ? AND status = 'committed'
+		    AND drive_file_id <> '' AND drive_file_id NOT LIKE 'local_%'`,
+		groupID,
+	).Scan(&n)
+	if err != nil {
+		return 0
+	}
+	return n
+}

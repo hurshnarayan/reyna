@@ -5,11 +5,22 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hurshnarayan/reyna/internal/attribution"
 	"github.com/hurshnarayan/reyna/internal/model"
 )
+
+// deviceIdentity is the phone value an on-device install registers under.
+//
+// The backend identifies group members by phone number, which a phone watching
+// its own folders does not have and should not ask for. One stable value keeps
+// uploads, questions and Drive on a single user record.
+const deviceIdentity = "device"
+
+// classifyingPlaceholder is the subject a file carries while the model reads it.
+const classifyingPlaceholder = "classifying..."
 
 // The API the Android app talks to.
 //
@@ -306,4 +317,82 @@ func (s *Server) rejoinWeak(groupID int64) int {
 		log.Printf("[DEVICE] re-join improved %d file(s)", improved)
 	}
 	return improved
+}
+
+// handleDeviceDriveState reports what is waiting to reach Drive.
+//
+// The phone knows a file left the device but not whether it ever reached the
+// user's Drive: upload and commit are separate steps and commit runs on a
+// timer. Without this the app could only claim everything was fine, which is
+// exactly the claim it is least entitled to make.
+func (s *Server) handleDeviceDriveState(w http.ResponseWriter, r *http.Request) {
+	phone := r.URL.Query().Get("phone")
+	if phone == "" {
+		phone = deviceIdentity
+	}
+	user, err := s.store.GetUserByPhone(phone)
+	if err != nil || user == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"connected": false, "pending": 0, "in_drive": 0,
+		})
+		return
+	}
+
+	pending, inDrive := 0, 0
+	names := []string{}
+	for _, gid := range s.store.GetUserGroupIDs(user.ID) {
+		staged, _ := s.store.GetStagedFiles(gid)
+		for _, f := range staged {
+			// Still being read by the model. Counting it as pending would show
+			// a number that ticks up and down on its own.
+			if f.Subject == classifyingPlaceholder {
+				continue
+			}
+			pending++
+			if len(names) < 5 {
+				names = append(names, f.FileName)
+			}
+		}
+		inDrive += s.store.CountCommittedFiles(gid)
+	}
+
+	connected := user.GoogleRefresh != "" && user.DriveRootID != "" &&
+		!strings.HasPrefix(user.DriveRootID, "local_")
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"connected": connected,
+		"email":     user.Email,
+		"pending":   pending,
+		"in_drive":  inDrive,
+		"examples":  names,
+	})
+}
+
+// handleDeviceDrivePush commits now instead of waiting for the timer.
+func (s *Server) handleDeviceDrivePush(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
+	phone := r.URL.Query().Get("phone")
+	if phone == "" {
+		phone = deviceIdentity
+	}
+	user, err := s.store.GetUserByPhone(phone)
+	if err != nil || user == nil {
+		http.Error(w, `{"error":"unknown device"}`, 404)
+		return
+	}
+	if user.GoogleRefresh == "" || user.DriveRootID == "" {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"connected": false, "uploaded": 0,
+		})
+		return
+	}
+	committed, uploaded := s.commitStagedForUser(user.ID)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"connected": true,
+		"committed": committed,
+		"uploaded":  uploaded,
+	})
 }

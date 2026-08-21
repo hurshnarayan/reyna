@@ -281,6 +281,55 @@ class ReynaApi(
         }
     }.getOrDefault(false)
 
+
+    /** What is waiting to reach Drive, and what already got there. */
+    data class DriveState(
+        val connected: Boolean,
+        val email: String?,
+        val pending: Int,
+        val inDrive: Int,
+        val examples: List<String>,
+    )
+
+    /**
+     * Asks the server what has actually reached Drive.
+     *
+     * The phone knows a file left the device; it cannot know whether the server
+     * ever filed it, because upload and commit are separate and commit runs on
+     * a timer. Without asking, the app can only imply everything is safe, which
+     * is the one thing it should not imply on someone's behalf.
+     */
+    fun driveState(): Result<DriveState> = runCatching {
+        val req = Request.Builder().url(url("/api/device/drive/state?phone=$DEVICE_IDENTITY")).auth().build()
+        client.newCall(req).execute().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) error("drive state ${resp.code}")
+            val json = JSONObject(text)
+            val arr = json.optJSONArray("examples")
+            DriveState(
+                connected = json.optBoolean("connected", false),
+                email = json.optString("email").ifBlank { null },
+                pending = json.optInt("pending", 0),
+                inDrive = json.optInt("in_drive", 0),
+                examples = (0 until (arr?.length() ?: 0)).map { arr!!.optString(it) },
+            )
+        }
+    }.onFailure { Log.w(TAG, "driveState failed: ${it.message}") }
+
+    /** Files everything staged into Drive now instead of waiting for the timer. */
+    fun drivePush(): Result<Int> = runCatching {
+        val req = Request.Builder()
+            .url(url("/api/device/drive/push?phone=$DEVICE_IDENTITY"))
+            .auth()
+            .post("{}".toRequestBody(JSON))
+            .build()
+        client.newCall(req).execute().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) error("drive push ${resp.code}")
+            JSONObject(text).optInt("uploaded", 0)
+        }
+    }.onFailure { Log.w(TAG, "drivePush failed: ${it.message}") }
+
     private fun JSONArray?.toCitedFiles(): List<CitedFile> {
         if (this == null) return emptyList()
         return (0 until length()).mapNotNull { i ->

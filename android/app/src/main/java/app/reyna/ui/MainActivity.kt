@@ -27,9 +27,9 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.Forum
-import androidx.compose.material.icons.rounded.InsertDriveFile
-import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -91,13 +91,23 @@ class MainActivity : ComponentActivity() {
         // returning here is the only reliable moment to re-check.
         vm.refreshPermissions()
         vm.startCaptureIfPossible()
+        vm.refreshDriveState()
     }
 }
 
+/**
+ * The three places, and only three.
+ *
+ * Settings left the bar for the toolbar overflow: it is somewhere you go
+ * occasionally to change something, not a destination you switch between, and
+ * giving it a third of the bar said otherwise. Activity took its place because
+ * "what has Reyna actually done with my files" is the question this app has to
+ * be able to answer on demand.
+ */
 private enum class Tab(val label: String, val icon: ImageVector) {
     Chat("Chat", Icons.Rounded.Forum),
-    Files("Files", Icons.Rounded.InsertDriveFile),
-    Settings("Settings", Icons.Rounded.Settings),
+    Search("Search", Icons.Rounded.Search),
+    Activity("Activity", Icons.Rounded.BarChart),
 }
 
 @Composable
@@ -153,11 +163,14 @@ private fun MainShell(vm: ReynaViewModel) {
     val c = reynaColors
     var tab by remember { mutableIntStateOf(0) }
     var trackingOpen by remember { mutableStateOf(false) }
+    var settingsOpen by remember { mutableStateOf(false) }
     var repairFor by remember { mutableStateOf<Long?>(null) }
 
     val messages by vm.messages.collectAsState()
     val files by vm.files.collectAsState()
     val sending by vm.sending.collectAsState()
+    val driveState by vm.driveState.collectAsState()
+    val pushing by vm.pushing.collectAsState()
 
     // Any file type: Reyna keeps documents and photographed notes alike, and a
     // narrow filter would hide exactly the scans people want kept.
@@ -171,8 +184,12 @@ private fun MainShell(vm: ReynaViewModel) {
         ActivityResultContracts.OpenDocument(),
     ) { uri -> uri?.let { vm.importExport(it) { } } }
 
-    BackHandler(enabled = trackingOpen || repairFor != null) {
-        if (repairFor != null) repairFor = null else trackingOpen = false
+    BackHandler(enabled = trackingOpen || settingsOpen || repairFor != null) {
+        when {
+            repairFor != null -> repairFor = null
+            settingsOpen -> settingsOpen = false
+            else -> trackingOpen = false
+        }
     }
 
     Box(Modifier.fillMaxSize().background(c.background).statusBarsPadding()) {
@@ -183,6 +200,14 @@ private fun MainShell(vm: ReynaViewModel) {
                     vm = vm,
                     fileId = repairFor!!,
                     onDone = { repairFor = null },
+                    onImport = { pickExport.launch(arrayOf("text/plain", "application/zip")) },
+                )
+            }
+
+            settingsOpen -> Column(Modifier.fillMaxSize()) {
+                SubToolbar("Settings") { settingsOpen = false }
+                SettingsScreen(
+                    vm = vm,
                     onImport = { pickExport.launch(arrayOf("text/plain", "application/zip")) },
                 )
             }
@@ -213,16 +238,20 @@ private fun MainShell(vm: ReynaViewModel) {
                             onClearChat = vm::clearChat,
                             onOpenFile = vm::openFile,
                             onAskWhoShared = { repairFor = it },
+                            pendingToDrive = driveState?.pending ?: 0,
+                            pushing = pushing,
+                            onPushToDrive = vm::pushToDrive,
+                            onOpenSettings = { settingsOpen = true },
                             sending = sending,
                         )
-                        Tab.Files -> FilesScreen(
+                        Tab.Search -> FilesScreen(
                             files = vm.searchableFiles(),
                             onOpen = { vm.openFile(it.id) },
                             onAskWhoShared = { repairFor = it.id },
                         )
-                        Tab.Settings -> SettingsScreen(
-                            vm = vm,
-                            onImport = { pickExport.launch(arrayOf("text/plain", "application/zip")) },
+                        Tab.Activity -> TrackingScreen(
+                            state = vm.trackingState(),
+                            onRepairUnknown = { tab = 1 },
                         )
                     }
                 }
