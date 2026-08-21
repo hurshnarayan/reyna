@@ -68,9 +68,9 @@ func (r *Reyna) ProcessCommand(cmd string) (action string, args string) {
 
 func (r *Reyna) AddResponse(fileName string, version int, totalFiles int) string {
 	if version > 1 {
-		return fmt.Sprintf("Staged `%s` (v%d). %d files in your repository.", fileName, version, totalFiles)
+		return fmt.Sprintf("Staged `%s` (v%d). %d files kept so far.", fileName, version, totalFiles)
 	}
-	return fmt.Sprintf("Staged `%s`. %d files in your repository.", fileName, totalFiles)
+	return fmt.Sprintf("Staged `%s`. %d files kept so far.", fileName, totalFiles)
 }
 
 func (r *Reyna) AddReminder() string {
@@ -361,7 +361,7 @@ func (r *Reyna) NLPHistoryResponse(count int) string {
 	if count == 0 {
 		return "No files in the repository yet."
 	}
-	return fmt.Sprintf("%d files in your repository. View the full history on your dashboard.", count)
+	return fmt.Sprintf("%d files kept so far. View the full history on your dashboard.", count)
 }
 
 // ── Reaction Tracking Response ──

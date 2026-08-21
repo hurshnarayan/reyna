@@ -487,24 +487,6 @@ class Repo private constructor(private val context: Context) {
         )
     }
 
-    /**
-     * Opens the conversation, once.
-     *
-     * Guarded on the conversation being empty. It is called on every app start
-     * and again when onboarding finishes, and without the guard each launch
-     * appended another copy until the screen was nothing but greetings.
-     */
-    suspend fun seedGreeting() = withContext(Dispatchers.IO) {
-        if (dao.messageCount() > 0) return@withContext
-        val files = dao.allFiles().size
-        val chats = dao.knownChats().size
-        val text = if (files == 0) {
-            "I am watching for files now. Share something in a chat, or import a chat to catch up on what is already here."
-        } else {
-            "I have $files files from $chats chats. Ask me for something you half remember."
-        }
-        dao.insertMessage(MessageEntity(text = text, fromUser = false, at = System.currentTimeMillis()))
-    }
 
     suspend fun deleteEverything() = withContext(Dispatchers.IO) {
         dao.clearLinks(); dao.clearEvents(); dao.clearFiles(); dao.clearMessages()

@@ -1,6 +1,6 @@
 # reyna
 
-a whatsapp bot + web dashboard that captures files from your study groups, reads whats inside them, classifies them into your google drive, and lets you search and ask questions from those notes later -- in any language.
+captures the files people share in your whatsapp chats, reads whats inside them, files them into your google drive, and lets you find them months later by describing what you half remember -- in any language. invoices, contracts, tickets, scans, notes, whatever you were sent and will need again.
 
 built this because every group chat i've been in has the same problem: someone shares notes, 200 messages later its gone, and then "bro send that pyq again" becomes everyones daily routine.
 
@@ -18,7 +18,7 @@ for anything actually private (bank stuff, medical docs etc) just dont add those
 
 ## what it does
 
-someone shares a file in your whatsapp study group. reyna picks it up, reads the actual content (not just the filename), figures out what subject it belongs to, and puts it in the right folder in your google drive. automatically. no commands.
+someone shares a file in one of your whatsapp chats. reyna picks it up, reads the actual content and not just the filename, works out where it belongs, and puts it in the right folder in your google drive. automatically. no commands.
 
 later you dm reyna something like "that pdf rakesh shared tuesday about circuit diagrams" and it finds it. drops you a drive link. you can ask follow up questions about the file and it answers from the actual content, cites which page, and replies in whatever language you asked in.
 
@@ -155,7 +155,7 @@ the makefile auto-loads your .env so you dont need to manually export anything. 
 
 ## cost
 
-new google cloud accounts get $300 in free credits (90 days). you need to add a payment method to activate it (they do a small verification charge thats refunded) but they dont actually charge until the credits run out. $300 is enough for months. after that its like 1-5 rs per day for a normal study group.
+new google cloud accounts get $300 in free credits (90 days). you need to add a payment method to activate it (they do a small verification charge thats refunded) but they dont actually charge until the credits run out. $300 is enough for months. after that its like 1-5 rs per day for normal use.
 
 get your api key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey), enable billing on the linked project at [console.cloud.google.com/billing](https://console.cloud.google.com/billing).
 

@@ -113,11 +113,6 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
-        viewModelScope.launch {
-            // An empty conversation is a dead end, so Reyna opens by saying
-            // what it has and inviting a question.
-            if (repo.onboarded) repo.seedGreeting()
-        }
     }
 
     // ── Lifecycle ──
@@ -166,7 +161,6 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
         repo.onboarded = true
         _needsOnboarding.value = false
         startCaptureIfPossible()
-        viewModelScope.launch { repo.seedGreeting() }
     }
 
     private fun runFirstScan() {
@@ -224,7 +218,6 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             stopAnswering()
             repo.clearConversation()
-            repo.seedGreeting()
         }
     }
 

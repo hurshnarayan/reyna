@@ -110,7 +110,20 @@ fun ChatScreen(
             onClearChat = onClearChat,
         )
 
-        LazyColumn(
+        // A thread with nothing in it is the normal way Reyna opens now. It
+        // used to greet with a file count on every launch, which read as the
+        // app talking to itself, and the count belongs on the tracking screen
+        // where it can be looked at rather than in the way of the first
+        // question.
+        if (messages.isEmpty() && !sending) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text(
+                    "Ask for something you half remember.",
+                    fontSize = 14.sp,
+                    color = c.onSurfaceMuted,
+                )
+            }
+        } else LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(

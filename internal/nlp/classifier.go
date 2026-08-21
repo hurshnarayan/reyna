@@ -71,35 +71,36 @@ func (c *Classifier) ClassifyFile(fileName string, existingFolders []string) (fo
 }
 
 // guessFolderFromFilename produces a sensible folder name from a filename when
-// no other signal is available. Tries course-code prefixes, then content-type
-// hints, then a generic "Notes" bucket.
+// no other signal is available.
+//
+// Deliberately vague. This runs only when the model is unavailable and the
+// filename is the only clue, and a wrong specific answer is worse than a
+// right vague one: a bank statement filed under "Assignments" is harder to
+// find than one left in a general bucket. It used to read leading course
+// codes like CSE201 and produce "CSE201 Notes", which was correct for a
+// class group and wrong for everyone else.
 func guessFolderFromFilename(fileName string) string {
-	base := strings.TrimSuffix(fileName, filepathExt(fileName))
-	lower := strings.ToLower(base)
-	// Course code: leading letters+digits like BAI103, BESC104C, CSE201
-	for i := 0; i < len(base); i++ {
-		if base[i] == '_' || base[i] == '-' || base[i] == ' ' || base[i] == '.' {
-			code := base[:i]
-			if isCourseCode(code) {
-				return strings.ToUpper(code) + " Notes"
-			}
-			break
+	lower := strings.ToLower(strings.TrimSuffix(fileName, filepathExt(fileName)))
+	switch {
+	case containsAny(lower, "invoice", "receipt", "bill", "payment"):
+		return "Receipts"
+	case containsAny(lower, "contract", "agreement", "lease", "policy", "nda"):
+		return "Contracts"
+	case containsAny(lower, "ticket", "boarding", "itinerary", "booking"):
+		return "Travel"
+	case containsAny(lower, "slide", "ppt", "deck", "presentation"):
+		return "Presentations"
+	}
+	return "Documents"
+}
+
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
 		}
 	}
-	if isCourseCode(base) {
-		return strings.ToUpper(base) + " Notes"
-	}
-	switch {
-	case strings.Contains(lower, "slide") || strings.Contains(lower, "ppt"):
-		return "Slides"
-	case strings.Contains(lower, "assign") || strings.Contains(lower, "hw"):
-		return "Assignments"
-	case strings.Contains(lower, "lab"):
-		return "Lab"
-	case strings.Contains(lower, "syllabus"):
-		return "Syllabus"
-	}
-	return "Notes"
+	return false
 }
 
 func filepathExt(name string) string {
@@ -109,24 +110,6 @@ func filepathExt(name string) string {
 		}
 	}
 	return ""
-}
-
-func isCourseCode(s string) bool {
-	if len(s) < 4 || len(s) > 10 {
-		return false
-	}
-	hasLetter, hasDigit := false, false
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
-			hasLetter = true
-		case r >= '0' && r <= '9':
-			hasDigit = true
-		default:
-			return false
-		}
-	}
-	return hasLetter && hasDigit
 }
 
 // keywordMatchFolder tries to match filename against existing folder names
@@ -369,7 +352,7 @@ func (c *Classifier) ClassifyFileWithContent(fileName, mimeType string, fileData
 			metaBlock = "\nContext:\n" + metaBlock + "\n"
 		}
 
-		prompt := fmt.Sprintf(`You are a document analysis and classification agent for a university study group's shared file system. Analyze the attached document AND its sharing context, then:
+		prompt := fmt.Sprintf(`You are a document analysis and classification agent for a personal file archive. The files can be anything a person keeps: invoices, contracts, tickets, receipts, medical records, scanned paperwork, manuals, photos of documents, work files, study material. Analyze the attached document AND its sharing context, then:
 1. "content": detailed description of topics, concepts, chapters, key terms inside the document (max 800 chars). Read the actual document — do not guess from the filename.
 2. "summary": one-line summary (max 100 chars).
 3. "folder": classify into the best folder from: [%s]
@@ -454,7 +437,7 @@ func (c *Classifier) classifyFromExtractedText(fileName, mimeType, extractedText
 		extractedText = extractedText[:12000] + "..."
 	}
 
-	prompt := fmt.Sprintf(`You are a document analysis and classification agent for a university study group's shared file system. The document is a %s — its full text content (extracted from the file) is provided below. Analyze it and return:
+	prompt := fmt.Sprintf(`You are a document analysis and classification agent for a personal file archive. The files can be anything a person keeps: invoices, contracts, tickets, receipts, medical records, scanned paperwork, manuals, photos of documents, work files, study material. The document is a %s — its full text content (extracted from the file) is provided below. Analyze it and return:
 1. "summary": one-line summary of what the document is actually about (max 100 chars). Use the CONTENT, not the filename.
 2. "folder": classify into the best folder from: [%s]
 
@@ -528,7 +511,7 @@ func (c *Classifier) llmClassifyFile(fileName string, existingFolders []string) 
 		foldersStr = strings.Join(existingFolders, ", ")
 	}
 
-	prompt := fmt.Sprintf(`You are a file classification system for a university study group. Given a filename and a list of existing folders, determine the best folder for this file.
+	prompt := fmt.Sprintf(`You are a file classification system for a personal file archive covering any kind of document. Given a filename and a list of existing folders, determine the best folder for this file.
 
 Existing folders: [%s]
 
@@ -701,7 +684,7 @@ func (c *Classifier) keywordDetectIntent(msg string) (string, string) {
 
 // llmDetectIntent uses the configured LLM for ambiguous messages
 func (c *Classifier) llmDetectIntent(msg string) (string, string) {
-	prompt := fmt.Sprintf(`You are an intent classifier for Reyna, a file management bot in a WhatsApp study group. Classify this message into one of these intents:
+	prompt := fmt.Sprintf(`You are an intent classifier for Reyna, which files and finds documents shared in a person's chats. Classify this message into one of these intents:
 
 - "save" — user wants to save/stage/track a file
 - "push" — user wants to commit/upload staged files to Google Drive
@@ -749,7 +732,7 @@ func (c *Classifier) ExtractContent(fileName, mimeType string, fileSize int64, f
 		return "", ""
 	}
 
-	prompt := fmt.Sprintf(`You are a document analysis agent for a university study group file system.
+	prompt := fmt.Sprintf(`You are a document analysis agent for a personal file archive holding any kind of document.
 Analyze this document and extract:
 1. "content": detailed description of the topics, concepts, chapters, key terms it covers (max 800 chars)
 2. "summary": one-line summary (max 100 chars)
@@ -960,7 +943,7 @@ func (c *Classifier) keywordParseQuery(query string) (who, what, when, why strin
 }
 
 func (c *Classifier) llmParseQuery(query string) (who, what, when, why string) {
-	prompt := fmt.Sprintf(`You are a query parser for a file retrieval system in a WhatsApp study group.
+	prompt := fmt.Sprintf(`You are a query parser for a file retrieval system covering documents shared in a person's chats.
 Parse this natural language query into structured search filters.
 
 Query: "%s"
@@ -1061,7 +1044,7 @@ func (c *Classifier) AnswerFromNotesWithContext(question string, sources []QASou
 		context.WriteString("\n\n")
 	}
 
-	prompt := fmt.Sprintf(`You are Reyna — a friendly study assistant living inside a WhatsApp study group. You help students find and understand things from notes their groupmates shared. You answer like a smart friend, not like a dry assistant.
+	prompt := fmt.Sprintf(`You are Reyna. You help someone find and understand documents that were shared in their chats, whatever those documents are: invoices, contracts, tickets, records, manuals, notes, anything. You answer like a smart friend, not like a dry assistant. Never assume the person is a student or that the files are course material.
 
 CRITICAL LANGUAGE RULE:
 - Detect the language of the QUESTION ITSELF, not the sender names. "rakesh" / "mohit" / "priya" are proper nouns and DO NOT indicate Hindi.
@@ -1117,7 +1100,7 @@ Your answer:`, context.String(), formatQAPrev(prev), question)
 
 // formatQAPrev renders the previous Q&A turn as a context block, or empty
 // string if there's no prior turn. The block is wedged between the source
-// material and the student question in the prompt.
+// material and the person's question in the prompt.
 func formatQAPrev(prev *QAFollowup) string {
 	if prev == nil || prev.PrevQuestion == "" || prev.PrevAnswer == "" {
 		return ""
@@ -1146,13 +1129,13 @@ func (c *Classifier) MatchesQuery(query, fileName, mimeType string, fileData []b
 	if len(fileData) > 14*1024*1024 {
 		return false, 0
 	}
-	prompt := fmt.Sprintf(`You are Reyna's content retrieval agent. The student is searching their study notes with this natural-language query:
+	prompt := fmt.Sprintf(`You are Reyna's content retrieval agent. Someone is searching their own documents with this natural-language query:
 
 QUERY: "%s"
 
 The attached document's filename is: "%s"
 
-Read the document and determine: does this document satisfy what the student is looking for? Consider:
+Read the document and determine: does this document satisfy what the person is looking for? Consider:
 - Specific topics, concepts, or terms mentioned in the query
 - Visual cues ("diagram of...", "the figure showing...", "the chart with...")
 - Document type ("the PYQ paper", "the lab manual", "the assignment")
@@ -1189,7 +1172,7 @@ func (c *Classifier) MatchesQueryText(query, fileName, content string) (bool, fl
 	if len(content) > 8000 {
 		content = content[:8000]
 	}
-	prompt := fmt.Sprintf(`You are Reyna's content retrieval agent. The student is searching their study notes with this natural-language query:
+	prompt := fmt.Sprintf(`You are Reyna's content retrieval agent. Someone is searching their own documents with this natural-language query:
 
 QUERY: "%s"
 
@@ -1197,7 +1180,7 @@ Filename: "%s"
 Document summary/content (cached):
 %s
 
-Does this document satisfy what the student is asking for? Consider topics, concepts, recall hints in any language.
+Does this document satisfy what the person is asking for? Consider topics, concepts, recall hints in any language.
 
 Respond ONLY with JSON:
 {"matches": true/false, "confidence": 0.0-1.0, "snippet": "1-2 sentence reason"}`, query, fileName, content)
@@ -1283,7 +1266,7 @@ func (c *Classifier) GenerateRetrievalReply(rawQuery, who, what, when, why strin
 		ctx.WriteString("(no matching files found in database or Drive)\n")
 	}
 
-	prompt := fmt.Sprintf(`You are Reyna — a smart, friendly study assistant inside a WhatsApp study group. The student just searched their notes. Write a natural, conversational reply describing what was found.
+	prompt := fmt.Sprintf(`You are Reyna. Someone just searched the documents shared in their chats. They may be looking for anything: an invoice, a contract, a ticket, a record, a manual, notes. Write a natural, conversational reply describing what was found.
 
 CRITICAL LANGUAGE RULE — read this twice:
 - Detect the language of the QUERY ITSELF (not the sender names — "rakesh" or "mohit" are proper nouns and do NOT indicate Hindi).
