@@ -233,7 +233,7 @@ private fun Welcome() {
         )
         Spacer(Modifier.height(12.dp))
         Text(
-            "Reyna reads the files your chats already saved to this phone, and remembers who shared them.",
+            "Reyna reads the files your chats already saved to this phone, and remembers who shared them. Invoices, tickets, contracts, notes, anything.",
             fontSize = 15.sp,
             color = c.onSurfaceMuted,
             lineHeight = 22.sp,

@@ -153,6 +153,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/device/drive/status", device(s.handleDeviceDriveStatus))
 	s.mux.HandleFunc("/api/device/drive/state", device(s.handleDeviceDriveState))
 	s.mux.HandleFunc("/api/device/drive/push", device(s.handleDeviceDrivePush))
+	s.mux.HandleFunc("/api/device/drive/disconnect", device(s.handleDeviceDriveDisconnect))
 
 	s.mux.HandleFunc("/api/me", protected(s.handleMe))
 	s.mux.HandleFunc("/api/auth/google/status", protected(s.handleGoogleStatus))

@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CloudUpload
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.IosShare
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.PauseCircleOutline
@@ -56,6 +57,7 @@ fun SettingsScreen(vm: ReynaViewModel, onImport: () -> Unit) {
     var backend by remember { mutableStateOf(vm.backendUrl) }
     var token by remember { mutableStateOf(vm.deviceToken) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var confirmReset by remember { mutableStateOf(false) }
     val scanning by vm.scanning.collectAsState()
 
     LazyColumn(Modifier.fillMaxSize().background(c.background)) {
@@ -130,19 +132,30 @@ fun SettingsScreen(vm: ReynaViewModel, onImport: () -> Unit) {
             // working setup from one that silently stopped filing.
             val drive by vm.driveState.collectAsState()
             val pushing by vm.pushing.collectAsState()
+            val connecting by vm.connectingDrive.collectAsState()
             val state = drive
+            val connected = state?.connected == true
             ActionRow(
                 icon = Icons.Rounded.CloudUpload,
-                title = if (state?.connected == true) "Google Drive" else "Connect Google Drive",
+                title = if (connected) "Google Drive" else "Connect Google Drive",
                 subtitle = when {
+                    connecting -> "Waiting for Google"
                     state == null -> "Files are filed into folders in your own Drive"
                     !state.connected -> "Not connected. Files stay on this phone."
                     state.pending > 0 ->
                         "${state.email}. ${state.inDrive} filed, ${state.pending} waiting."
                     else -> "${state.email}. ${state.inDrive} filed, nothing waiting."
                 },
-                trailing = if (state?.connected == true) null else "Connect",
-                onClick = if (state?.connected == true) null else vm::connectDrive,
+                trailing = when {
+                    connecting -> "Connecting"
+                    connected -> "Disconnect"
+                    else -> "Connect"
+                },
+                onClick = when {
+                    connecting -> null
+                    connected -> vm::disconnectDrive
+                    else -> vm::connectDrive
+                },
             )
             if (state?.connected == true && state.pending > 0) {
                 ActionRow(
@@ -174,6 +187,21 @@ fun SettingsScreen(vm: ReynaViewModel, onImport: () -> Unit) {
                 onClick = {
                     if (confirmDelete) { vm.deleteEverything(); confirmDelete = false }
                     else confirmDelete = true
+                },
+            )
+        }
+        item {
+            // Kept next to Delete everything because it is the same kind of
+            // action with one extra consequence, and separating them would hide
+            // that this one also throws the records away.
+            ActionRow(
+                icon = Icons.Rounded.RestartAlt,
+                title = if (confirmReset) "Tap again to confirm" else "Start over",
+                subtitle = "Clears records and shows the welcome screens again. Server address kept.",
+                tint = c.partial,
+                onClick = {
+                    if (confirmReset) { vm.resetToFirstRun(); confirmReset = false }
+                    else confirmReset = true
                 },
             )
         }

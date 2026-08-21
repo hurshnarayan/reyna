@@ -92,6 +92,9 @@ class MainActivity : ComponentActivity() {
         vm.refreshPermissions()
         vm.startCaptureIfPossible()
         vm.refreshDriveState()
+        // Consent finishes in a browser, so coming back is the only moment the
+        // app can learn whether it worked.
+        vm.settleDriveConnect()
     }
 }
 

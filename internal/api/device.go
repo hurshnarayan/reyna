@@ -396,3 +396,28 @@ func (s *Server) handleDeviceDrivePush(w http.ResponseWriter, r *http.Request) {
 		"uploaded":  uploaded,
 	})
 }
+
+// handleDeviceDriveDisconnect forgets the user's Google tokens.
+//
+// Nothing in Drive is touched. Disconnecting is a statement about what Reyna
+// is allowed to do next, not an instruction to remove what it already filed,
+// and deleting someone's documents because they revoked an integration would
+// be indefensible. Files already in Drive stay exactly where they are.
+func (s *Server) handleDeviceDriveDisconnect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
+	phone := r.URL.Query().Get("phone")
+	if phone == "" {
+		phone = deviceIdentity
+	}
+	user, err := s.store.GetUserByPhone(phone)
+	if err != nil || user == nil {
+		http.Error(w, `{"error":"unknown device"}`, 404)
+		return
+	}
+	s.store.ClearUserGoogle(user.ID)
+	log.Printf("[DRIVE] disconnected for device user %d", user.ID)
+	json.NewEncoder(w).Encode(map[string]interface{}{"disconnected": true})
+}

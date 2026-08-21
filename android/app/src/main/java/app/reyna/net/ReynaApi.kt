@@ -316,6 +316,16 @@ class ReynaApi(
         }
     }.onFailure { Log.w(TAG, "driveState failed: ${it.message}") }
 
+    /** Forgets the Google tokens. Nothing already in Drive is touched. */
+    fun driveDisconnect(): Result<Unit> = runCatching {
+        val req = Request.Builder()
+            .url(url("/api/device/drive/disconnect?phone=$DEVICE_IDENTITY"))
+            .auth()
+            .post("{}".toRequestBody(JSON))
+            .build()
+        client.newCall(req).execute().use { if (!it.isSuccessful) error("disconnect ${it.code}") }
+    }.onFailure { Log.w(TAG, "driveDisconnect failed: ${it.message}") }
+
     /** Files everything staged into Drive now instead of waiting for the timer. */
     fun drivePush(): Result<Int> = runCatching {
         val req = Request.Builder()

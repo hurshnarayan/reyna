@@ -67,6 +67,17 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
     private val _pushing = MutableStateFlow(false)
     val pushing: StateFlow<Boolean> = _pushing.asStateFlow()
 
+    /**
+     * True from tapping Connect until the browser has come back and the server
+     * has been asked whether it worked.
+     *
+     * Connecting Drive leaves the app entirely, which is exactly when a user
+     * needs to be told something is in progress. Without this the row sat
+     * unchanged through the whole round trip and looked like the tap missed.
+     */
+    private val _connectingDrive = MutableStateFlow(false)
+    val connectingDrive: StateFlow<Boolean> = _connectingDrive.asStateFlow()
+
     /** True while an answer is in flight, so the composer can offer Stop. */
     private val _sending = MutableStateFlow(false)
     val sending: StateFlow<Boolean> = _sending.asStateFlow()
@@ -463,13 +474,16 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
      * opening a page that will fail.
      */
     fun connectDrive() {
+        if (_connectingDrive.value) return
         viewModelScope.launch {
             if (repo.deviceToken.isBlank()) {
                 _toast.value = "Set a device token first"
                 return@launch
             }
+            _connectingDrive.value = true
             val url = repo.driveConnectUrl()
             if (url == null) {
+                _connectingDrive.value = false
                 _toast.value = "Drive is not configured on the server"
                 return@launch
             }
@@ -477,7 +491,59 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
             val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             runCatching { app.startActivity(intent) }
-                .onFailure { _toast.value = "No browser on this phone" }
+                .onFailure {
+                    _connectingDrive.value = false
+                    _toast.value = "No browser on this phone"
+                }
+        }
+    }
+
+    /**
+     * Called when the user comes back from the browser.
+     *
+     * The consent screen finishes on the server, not here, so the only way to
+     * learn the outcome is to ask. Reporting it explicitly matters: a silent
+     * return from a failed consent is indistinguishable from a successful one.
+     */
+    fun settleDriveConnect() {
+        if (!_connectingDrive.value) return
+        viewModelScope.launch {
+            val state = repo.driveState()
+            _driveState.value = state
+            _connectingDrive.value = false
+            _toast.value = when {
+                state == null -> "Could not reach the backend"
+                state.connected -> "Drive connected as ${state.email}"
+                else -> "Drive was not connected"
+            }
+        }
+    }
+
+    /** Forgets the Drive connection. Files already in Drive are left alone. */
+    fun disconnectDrive() {
+        viewModelScope.launch {
+            val ok = repo.driveDisconnect()
+            _toast.value =
+                if (ok) "Disconnected. Files already in your Drive are untouched."
+                else "Could not reach the backend"
+            _driveState.value = repo.driveState()
+        }
+    }
+
+    /**
+     * Back to a first run, onboarding and all.
+     *
+     * Exists because demonstrating the app means showing how it opens, and the
+     * only alternative was uninstalling it, which also loses the server address
+     * and token and turns a thirty second reset into a setup session.
+     */
+    fun resetToFirstRun() {
+        viewModelScope.launch {
+            repo.resetToFirstRun()
+            _onboardingStep.value = OnboardingStep.Welcome
+            _needsOnboarding.value = true
+            _driveState.value = null
+            _toast.value = "Reset. Your files and Drive are untouched."
         }
     }
 

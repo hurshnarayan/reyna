@@ -493,6 +493,19 @@ class Repo private constructor(private val context: Context) {
     }
 
     /**
+     * Puts the install back to how it arrived.
+     *
+     * Everything deleteEverything clears, plus the onboarding flag, so the app
+     * opens on the welcome screen again. Deliberately keeps the server address
+     * and the device token: those are how this phone reaches its backend, and
+     * losing them turns a reset into a setup session.
+     */
+    suspend fun resetToFirstRun() = withContext(Dispatchers.IO) {
+        deleteEverything()
+        onboarded = false
+    }
+
+    /**
      * The type to tell the server a file is.
      *
      * Derived from the extension. Everything that was not an image used to be
@@ -516,6 +529,12 @@ class Repo private constructor(private val context: Context) {
     suspend fun driveState(): ReynaApi.DriveState? = withContext(Dispatchers.IO) {
         if (deviceToken.isBlank()) return@withContext null
         api().driveState().getOrNull()
+    }
+
+    /** Forgets the Drive connection server-side. Returns false if unreachable. */
+    suspend fun driveDisconnect(): Boolean = withContext(Dispatchers.IO) {
+        if (deviceToken.isBlank()) return@withContext false
+        api().driveDisconnect().isSuccess
     }
 
     /** Files everything staged into Drive now. Returns how many moved. */
