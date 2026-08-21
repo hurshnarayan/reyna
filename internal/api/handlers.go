@@ -809,6 +809,23 @@ func (s *Server) handleCommitStaged(w http.ResponseWriter, r *http.Request) {
 				sem := make(chan struct{}, 10)
 				var uploadMu sync.Mutex
 				var wg sync.WaitGroup
+				// Subject folders are resolved before the uploads start, one at
+				// a time. Doing it inside the goroutines meant every file with
+				// the same subject asked "does this folder exist?" at the same
+				// moment, all got told no, and all created one: six files
+				// committed together produced four separate folders named
+				// Notes. Creating them up front makes each subject exactly one
+				// folder, and costs one round trip per subject rather than one
+				// per file.
+				folderIDs := make(map[string]string, len(staged))
+				for _, f := range staged {
+					if f.Subject == "classifying..." { continue }
+					if _, done := folderIDs[f.Subject]; done { continue }
+					if id, ferr := s.drive.EnsureSubjectFolder(token, driveUser.DriveRootID, f.Subject); ferr == nil {
+						folderIDs[f.Subject] = id
+					}
+				}
+
 				for _, f := range staged {
 					// Skip files still being classified
 					if f.Subject == "classifying..." { continue }
@@ -817,8 +834,8 @@ func (s *Server) handleCommitStaged(w http.ResponseWriter, r *http.Request) {
 						defer wg.Done()
 						sem <- struct{}{}
 						defer func() { <-sem }()
-						folderID, ferr := s.drive.EnsureSubjectFolder(token, driveUser.DriveRootID, f.Subject)
-						if ferr != nil { return }
+						folderID, ok := folderIDs[f.Subject]
+						if !ok { return }
 						fileData, _ := s.drive.GetLocalFileData(f.ID)
 						if len(fileData) == 0 { fileData, _ = s.drive.GetFileFromLocalStore(f.UserID, f.Subject, f.FileName) }
 						if len(fileData) == 0 { return }
