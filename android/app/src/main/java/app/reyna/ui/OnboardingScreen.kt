@@ -224,7 +224,7 @@ private fun Welcome() {
         }
         Spacer(Modifier.height(28.dp))
         Text(
-            "Your group chats already\nhave what you need",
+            "Your chats already have\nwhat you need",
             fontSize = 27.sp,
             fontWeight = FontWeight.Bold,
             color = c.onSurface,

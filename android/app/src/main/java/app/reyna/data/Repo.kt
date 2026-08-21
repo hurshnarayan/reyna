@@ -36,8 +36,15 @@ class Repo private constructor(private val context: Context) {
         get() = prefs.getString(KEY_BACKEND, DEFAULT_BACKEND) ?: DEFAULT_BACKEND
         set(v) = prefs.edit().putString(KEY_BACKEND, v).apply()
 
+    /**
+     * The shared secret for this backend.
+     *
+     * Seeded from the build when the user has not set one, so a build made for
+     * a known server works on first launch instead of opening on a settings
+     * screen. Anything typed in Settings wins from then on.
+     */
     var deviceToken: String
-        get() = prefs.getString(KEY_TOKEN, "") ?: ""
+        get() = prefs.getString(KEY_TOKEN, null) ?: app.reyna.BuildConfig.DEVICE_TOKEN
         set(v) = prefs.edit().putString(KEY_TOKEN, v).apply()
 
     var capturing: Boolean
@@ -563,8 +570,14 @@ class Repo private constructor(private val context: Context) {
         private const val KEY_DIGEST = "daily_digest"
         private const val KEY_ONBOARDED = "onboarded"
 
-        /** 10.0.2.2 is the host machine as seen from an emulator. */
-        private const val DEFAULT_BACKEND = "http://10.0.2.2:8080"
+        /**
+         * Where to look for the backend before anyone has said otherwise.
+         *
+         * Baked at build time from android/local.properties, so a build made
+         * for a particular machine arrives already pointed at it. Falls back to
+         * the emulator's alias for the host when nothing was configured.
+         */
+        private val DEFAULT_BACKEND: String = app.reyna.BuildConfig.BACKEND_URL
 
         private val IMAGE_EXT = setOf("jpg", "jpeg", "png", "webp")
 
