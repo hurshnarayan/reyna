@@ -92,15 +92,49 @@ point-at url:
     rm -f android/local.properties.tmp
     echo "app builds will now target {{url}}"
 
-# Expose the backend on a public https URL, reachable from mobile data.
-tunnel:
+# Start a tunnel and wire the server, the OAuth redirect and the app to it.
+tunnel-up:
     #!/usr/bin/env bash
-    # Prints a trycloudflare.com address. It changes every run, and the address
-    # is fixed into the app at build time, so `just point-at <url>` and a
-    # rebuild have to follow. Leave this running for as long as you need it.
+    # One command because a tunnel address touches four places: the app build,
+    # the OAuth redirect the server hands Google, the running server, and the
+    # APK. Updating three of four by hand is how you end up debugging a Drive
+    # button that opens localhost on a phone.
     set -euo pipefail
     command -v cloudflared >/dev/null || { echo "cloudflared missing: brew install cloudflared"; exit 1; }
-    cloudflared tunnel --url http://localhost:8080
+    pkill -f 'cloudflared tunnel --url' 2>/dev/null || true
+    sleep 1
+    nohup cloudflared tunnel --url http://localhost:8080 --no-autoupdate > /tmp/reyna-tunnel.log 2>&1 &
+    # `[ -n "$url" ] && break` would end the script under set -e the first time
+    # the address is not ready yet, which is every time.
+    url=""
+    for i in $(seq 1 30); do
+      url=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/reyna-tunnel.log 2>/dev/null | head -1 || true)
+      if [ -n "$url" ]; then break; fi
+      sleep 1
+    done
+    [ -n "$url" ] || { echo "tunnel did not come up, see /tmp/reyna-tunnel.log"; exit 1; }
+    echo "$url" > /tmp/reyna-tunnel-url.txt
+
+    # The server tells Google where to send the user after consent. Left at
+    # localhost, that redirect lands on the phone itself and refuses to
+    # connect, which is what makes Drive look broken on a real device.
+    python3 -c "import sys,io; url=sys.argv[1]; p='.env'; ls=[('GOOGLE_REDIRECT_URL='+url+'/api/auth/google/callback') if l.startswith('GOOGLE_REDIRECT_URL=') else l.rstrip('\n') for l in open(p)]; open(p,'w').write('\n'.join(ls)+'\n')" "$url"
+
+    just backend-stop >/dev/null 2>&1 || true
+    just backend-bg >/dev/null
+    just point-at "$url" >/dev/null
+    echo
+    echo "Tunnel:  $url"
+    echo
+    echo "Add this EXACT redirect URI in Google Cloud Console, under the OAuth"
+    echo "client, then Drive will connect from the phone:"
+    echo "  $url/api/auth/google/callback"
+    echo
+    echo "Then: just apk-release"
+
+# Print the current tunnel address and the redirect URI to register.
+tunnel-url:
+    @u=$(cat /tmp/reyna-tunnel-url.txt 2>/dev/null); echo "$u"; echo "$u/api/auth/google/callback"
 
 # Point the next app build at the emulator's alias for this machine.
 point-at-emulator:
