@@ -210,10 +210,18 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
         startCaptureIfPossible()
     }
 
+    /** Files seen so far by the first scan, so the screen can show it climbing. */
+    private val _scanProgress = MutableStateFlow(0)
+    val scanProgress: StateFlow<Int> = _scanProgress.asStateFlow()
+
     private fun runFirstScan() {
         viewModelScope.launch {
             _scanning.value = true
-            runCatching { repo.reconcile() }
+            _scanProgress.value = 0
+            // Failures are swallowed on purpose. A scan that cannot read the
+            // folder is a permission problem the user has already been shown,
+            // and hanging the onboarding on it would trap them on this screen.
+            runCatching { repo.reconcile { _scanProgress.value = it } }
             _scanning.value = false
         }
     }
@@ -481,11 +489,18 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             _connectingDrive.value = true
-            val url = repo.driveConnectUrl()
-            if (url == null) {
-                _connectingDrive.value = false
-                _toast.value = "Drive is not configured on the server"
-                return@launch
+            val url = when (val r = repo.driveConnect()) {
+                is Repo.DriveConnect.Url -> r.value
+                Repo.DriveConnect.NotConfigured -> {
+                    _connectingDrive.value = false
+                    _toast.value = "Drive is not set up on the server yet"
+                    return@launch
+                }
+                Repo.DriveConnect.Unreachable -> {
+                    _connectingDrive.value = false
+                    _toast.value = "Cannot reach the backend. Check it is running and on the same network."
+                    return@launch
+                }
             }
             val app = getApplication<Application>()
             val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))

@@ -38,7 +38,16 @@ class ReconcileScanner(
      * overwhelming majority on a repeat scan, so a device with two thousand
      * files does not read two thousand files every quarter hour.
      */
-    fun scan(): List<Found> {
+    /**
+     * How recently a file must have changed for it to be worth waiting on.
+     *
+     * Generous, because the cost of waiting on one file that did not need it is
+     * a third of a second and the cost of reading one that was mid-write is a
+     * truncated document stored under its own hash forever.
+     */
+    private val RECENT_MILLIS = 60_000L
+
+    fun scan(onProgress: (Int) -> Unit = {}): List<Found> {
         val out = ArrayList<Found>()
         for (dir in WhatsAppPaths.watchedDirectories()) {
             val entries = dir.listFiles() ?: continue
@@ -46,8 +55,18 @@ class ReconcileScanner(
                 if (!f.isFile || !WhatsAppPaths.isInteresting(f)) continue
                 val mtime = f.lastModified()
                 if (isKnown(f.absolutePath, mtime)) continue
-                // Skip anything still being written; the next scan will catch it.
-                if (!MediaWatcher.awaitSettled(f, attempts = 2, quietMillis = 300)) continue
+                // Only wait on files that could plausibly still be open.
+                //
+                // awaitSettled cannot return true until its second reading, so
+                // it sleeps at least once per file it is asked about. Applied
+                // to every file, a first scan of a phone holding a few hundred
+                // WhatsApp documents spent minutes asleep confirming that
+                // files written months ago were not being written to, and the
+                // onboarding screen sat on "Looking through your files" the
+                // whole time. A file untouched for a minute is not mid-write.
+                if (System.currentTimeMillis() - mtime < RECENT_MILLIS &&
+                    !MediaWatcher.awaitSettled(f, attempts = 2, quietMillis = 300)
+                ) continue
                 val hash = try {
                     sha256(f)
                 } catch (e: Exception) {
@@ -61,6 +80,9 @@ class ReconcileScanner(
                     mtimeMillis = mtime,
                     isSent = WhatsAppPaths.isSent(f),
                 )
+                // Reported as they are found so the first run can show a number
+                // climbing rather than a spinner that gives no sign of life.
+                onProgress(out.size)
             }
         }
         return out

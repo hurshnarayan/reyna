@@ -78,6 +78,30 @@ point-at-lan:
     rm -f android/local.properties.tmp
     echo "app builds will now target http://$ip:8080"
 
+# Point app builds at any URL, for a tunnel or a remote server.
+point-at url:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tok=$(grep '^DEVICE_TOKEN=' .env | cut -d= -f2)
+    touch android/local.properties
+    grep -v '^reyna\.backendUrl\|^reyna\.deviceToken' android/local.properties > android/local.properties.tmp || true
+    { cat android/local.properties.tmp
+      echo "reyna.backendUrl={{url}}"
+      echo "reyna.deviceToken=$tok"
+    } > android/local.properties
+    rm -f android/local.properties.tmp
+    echo "app builds will now target {{url}}"
+
+# Expose the backend on a public https URL, reachable from mobile data.
+tunnel:
+    #!/usr/bin/env bash
+    # Prints a trycloudflare.com address. It changes every run, and the address
+    # is fixed into the app at build time, so `just point-at <url>` and a
+    # rebuild have to follow. Leave this running for as long as you need it.
+    set -euo pipefail
+    command -v cloudflared >/dev/null || { echo "cloudflared missing: brew install cloudflared"; exit 1; }
+    cloudflared tunnel --url http://localhost:8080
+
 # Point the next app build at the emulator's alias for this machine.
 point-at-emulator:
     #!/usr/bin/env bash

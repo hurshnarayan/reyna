@@ -145,6 +145,8 @@ private fun Onboarding(vm: ReynaViewModel, activity: ComponentActivity) {
     val step by vm.onboardingStep.collectAsState()
     val permissions by vm.permissions.collectAsState()
     val scanning by vm.scanning.collectAsState()
+    val scanProgress by vm.scanProgress.collectAsState()
+    val connectingDrive by vm.connectingDrive.collectAsState()
     val files by vm.files.collectAsState()
 
     BackHandler(enabled = step != OnboardingStep.Welcome) { vm.onboardingBack() }
@@ -152,12 +154,16 @@ private fun Onboarding(vm: ReynaViewModel, activity: ComponentActivity) {
     OnboardingScreen(
         step = step,
         permissions = permissions,
-        scannedCount = files.size,
+        // While scanning, the live count from the scanner; afterwards the real
+        // number of rows, which is lower when files were already known.
+        scannedCount = if (scanning) scanProgress else files.size,
         scanning = scanning,
         onBack = vm::onboardingBack,
         onGrant = { Permissions.request(activity, it) },
         onContinue = vm::onboardingNext,
         onSkip = vm::onboardingSkip,
+        connectingDrive = connectingDrive,
+        onConnectDrive = vm::connectDrive,
     )
 }
 

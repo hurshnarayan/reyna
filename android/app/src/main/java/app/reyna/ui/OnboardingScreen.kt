@@ -81,6 +81,8 @@ fun OnboardingScreen(
     onGrant: (Permissions.Kind) -> Unit,
     onContinue: () -> Unit,
     onSkip: () -> Unit,
+    connectingDrive: Boolean = false,
+    onConnectDrive: () -> Unit = {},
 ) {
     val c = reynaColors
     val granted = permissions.associate { it.kind to it.granted }
@@ -91,7 +93,12 @@ fun OnboardingScreen(
         OnboardingStep.Welcome -> true
         OnboardingStep.Notifications -> granted[Permissions.Kind.Notifications] == true
         OnboardingStep.Storage -> granted[Permissions.Kind.Storage] == true
-        OnboardingStep.FirstScan -> !scanning
+        // Never gated on the scan. It runs in the background and keeps running
+        // after onboarding ends, so making someone wait for it buys nothing and
+        // is the most likely place to lose them: a first run on a full phone is
+        // the slowest this screen will ever be, and it is also the moment they
+        // have the least invested.
+        OnboardingStep.FirstScan -> true
         OnboardingStep.Battery -> true
         OnboardingStep.Drive -> true
     }
@@ -156,7 +163,7 @@ fun OnboardingScreen(
                     granted = granted[Permissions.Kind.Battery] == true,
                     onGrant = { onGrant(Permissions.Kind.Battery) },
                 )
-                OnboardingStep.Drive -> DriveStep()
+                OnboardingStep.Drive -> DriveStep(connectingDrive, onConnectDrive)
             }
         }
 
@@ -313,9 +320,19 @@ private fun FirstScan(count: Int, scanning: Boolean) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         if (scanning) {
-            Text("Looking through your files", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = c.onSurface)
-            Spacer(Modifier.height(10.dp))
-            Text("This takes a moment the first time.", fontSize = 15.sp, color = c.onSurfaceMuted)
+            // The count is shown while scanning too. A number going up is proof
+            // of work; a sentence promising it takes a moment is not, and after
+            // fifteen seconds it reads as a hang.
+            Text("$count", fontSize = 56.sp, fontWeight = FontWeight.Bold, color = c.onSurface)
+            Spacer(Modifier.height(4.dp))
+            Text("files so far", fontSize = 16.sp, color = c.onSurfaceMuted)
+            Spacer(Modifier.height(20.dp))
+            Text(
+                "Still looking. You can carry on, this keeps running.",
+                fontSize = 15.sp,
+                color = c.onSurfaceMuted,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
         } else {
             Text("$count", fontSize = 56.sp, fontWeight = FontWeight.Bold, color = c.onSurface)
             Spacer(Modifier.height(4.dp))
@@ -339,7 +356,7 @@ private fun FirstScan(count: Int, scanning: Boolean) {
 }
 
 @Composable
-private fun DriveStep() {
+private fun DriveStep(connecting: Boolean, onConnectDrive: () -> Unit) {
     val c = reynaColors
     Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
         Box(
@@ -357,7 +374,9 @@ private fun DriveStep() {
             fontSize = 15.sp, color = c.onSurfaceMuted, lineHeight = 22.sp,
         )
         Spacer(Modifier.height(22.dp))
-        SecondaryButton("Connect Drive") { }
+        SecondaryButton(if (connecting) "Connecting" else "Connect Drive") {
+            if (!connecting) onConnectDrive()
+        }
     }
 }
 

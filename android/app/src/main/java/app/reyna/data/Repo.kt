@@ -174,7 +174,7 @@ class Repo private constructor(private val context: Context) {
     }
 
     /** Runs a full scan and records anything new. Returns how many were added. */
-    suspend fun reconcile(): Int = withContext(Dispatchers.IO) {
+    suspend fun reconcile(onProgress: (Int) -> Unit = {}): Int = withContext(Dispatchers.IO) {
         if (!WhatsAppPaths.anyVisible()) return@withContext 0
         // Fetched once rather than queried per file. The scan runs every
         // fifteen minutes over a folder that mostly does not change, so the
@@ -183,7 +183,7 @@ class Repo private constructor(private val context: Context) {
         val known = dao.knownPathKeys().toHashSet()
         val scanner = ReconcileScanner { path, mtime -> "$path|$mtime" in known }
         var added = 0
-        for (found in scanner.scan()) {
+        for (found in scanner.scan(onProgress)) {
             if (onFileFound(found) != null) added++
         }
         Log.i(TAG, "reconcile added $added")
@@ -536,6 +536,30 @@ class Repo private constructor(private val context: Context) {
     suspend fun driveState(): ReynaApi.DriveState? = withContext(Dispatchers.IO) {
         if (deviceToken.isBlank()) return@withContext null
         api().driveState().getOrNull()
+    }
+
+    /**
+     * What came back when asking for a Drive consent URL.
+     *
+     * Three outcomes, not two. Collapsing them into a null meant an unreachable
+     * backend was reported as "Drive is not configured on the server", which
+     * sends the user to check a server setting when the real problem is that
+     * their phone cannot see the server at all.
+     */
+    sealed interface DriveConnect {
+        data class Url(val value: String) : DriveConnect
+        data object NotConfigured : DriveConnect
+        data object Unreachable : DriveConnect
+    }
+
+    suspend fun driveConnect(): DriveConnect = withContext(Dispatchers.IO) {
+        if (deviceToken.isBlank()) return@withContext DriveConnect.Unreachable
+        api().driveConnectUrl().fold(
+            onSuccess = { url ->
+                if (url.isNullOrBlank()) DriveConnect.NotConfigured else DriveConnect.Url(url)
+            },
+            onFailure = { DriveConnect.Unreachable },
+        )
     }
 
     /** Forgets the Drive connection server-side. Returns false if unreachable. */
