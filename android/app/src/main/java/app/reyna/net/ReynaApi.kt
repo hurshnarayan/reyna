@@ -79,7 +79,7 @@ class ReynaApi(
     ): Result<UploadResult> = runCatching {
         val body = MultipartBody.Builder().setType(MultipartBody.FORM)
             .addFormDataPart("group_wa_id", chatName ?: "device")
-            .addFormDataPart("user_phone", "")
+            .addFormDataPart("user_phone", DEVICE_IDENTITY)
             .addFormDataPart("user_name", senderName.orEmpty())
             .addFormDataPart("file_name", fileName)
             .addFormDataPart("mime_type", mimeType)
@@ -95,8 +95,17 @@ class ReynaApi(
             val text = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) error("upload ${resp.code}: ${text.take(200)}")
             val json = JSONObject(text)
+            val remoteId = json.optLong("file_id", 0)
+
+            // A 200 that carries no file id is not a delivery. Anything can
+            // return 200: a proxy, a captive portal, a stub. Treating that as
+            // success marked files uploaded that the server had never seen,
+            // and because upload is one-way and never re-checked, they were
+            // gone for good. Fail here and the file simply stays pending.
+            if (remoteId <= 0) error("upload accepted but returned no file id")
+
             UploadResult(
-                remoteId = json.optLong("file_id", 0),
+                remoteId = remoteId,
                 folder = json.optString("subject").ifBlank { null },
                 duplicate = json.optBoolean("duplicate", false),
             )
@@ -113,8 +122,14 @@ class ReynaApi(
      * still working on.
      */
     fun ask(question: String, onCall: (okhttp3.Call) -> Unit = {}): Result<Answer> = runCatching {
+        // The identity has to travel with the question. The server scopes a
+        // search to the groups the asker belongs to, and it resolves the asker
+        // from a JWT or from this phone field. The device token is not a JWT,
+        // so without this the search resolved to no user, matched no groups,
+        // and answered "couldn't find anything" for files it had just stored.
         val payload = JSONObject()
             .put("query", question)
+            .put("user_phone", DEVICE_IDENTITY)
             .toString()
             .toRequestBody(JSON)
 
@@ -134,7 +149,10 @@ class ReynaApi(
 
     /** Asks a question that needs reading inside the documents. */
     fun askNotes(question: String): Result<Answer> = runCatching {
-        val payload = JSONObject().put("question", question).toString().toRequestBody(JSON)
+        val payload = JSONObject()
+            .put("question", question)
+            .put("user_phone", DEVICE_IDENTITY)
+            .toString().toRequestBody(JSON)
         val req = Request.Builder().url(url("/api/nlp/qa")).auth().post(payload).build()
         client.newCall(req).execute().use { resp ->
             val text = resp.body?.string().orEmpty()
@@ -279,6 +297,17 @@ class ReynaApi(
 
     companion object {
         private const val TAG = "ReynaApi"
+
+        /**
+         * Who the phone says it is.
+         *
+         * The backend was built around group members identified by phone
+         * number, which an on-device capture does not have and should not ask
+         * for. One stable identity keeps uploads, questions and Drive on the
+         * same user record; the device endpoints already default to this same
+         * value, so it is the convention rather than a new one.
+         */
+        const val DEVICE_IDENTITY = "device"
         private val JSON = "application/json; charset=utf-8".toMediaType()
     }
 }

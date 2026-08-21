@@ -87,7 +87,7 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
             ) { rows, files -> rows to files }.collect { (rows, files) ->
                 _messages.value = rows.map { m ->
                     ChatMessage(
-                        text = m.text,
+                        text = plainText(m.text),
                         fromUser = m.fromUser,
                         time = timeOf(m.at),
                         // Chips are rebuilt from the local rows rather than
@@ -463,6 +463,19 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
             cal.get(java.util.Calendar.MINUTE),
         )
     }
+
+    /**
+     * Strips the markdown the backend writes into its replies.
+     *
+     * The bubble renders plain text, so **bold** arrived on screen as literal
+     * asterisks around every filename. Stripping here rather than changing the
+     * backend keeps the same reply usable by the web dashboard, which does
+     * render markdown.
+     */
+    private fun plainText(s: String): String = s
+        .replace("**", "")
+        .replace("\u2014", "\u00b7")
+        .replace(" - ", " \u00b7 ")
 
     /** How long ago something was shared, phrased the way every screen phrases it. */
     fun relativeTime(millis: Long): String {

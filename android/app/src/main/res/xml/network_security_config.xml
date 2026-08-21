@@ -1,30 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Android 9 and later block plaintext HTTP by default, which is correct: a
-  document-search app should not be shipping user content over the open
-  internet unencrypted.
+  Android 9 and later block plaintext HTTP by default, which is the right
+  default: an app talking to a service it does not control should not be
+  sending user content unencrypted.
 
-  But Reyna is self-hosted. The backend normally runs on the user's own machine
-  or a box on their own network, reached over http, and without an exception
-  every call fails with "CLEARTEXT communication not permitted" while the app
-  reports it as an unreachable server. That is a confusing failure to debug and
-  it made every network feature silently dead.
+  Reyna is self-hosted. The backend runs on the user's own laptop or a box on
+  their own network, its address is typed into the Settings screen, and it is
+  almost always plain http on a private address. That address cannot be known
+  when the app is built, so it cannot be enumerated here. An earlier version of
+  this file tried to, by listing 192.168.0.0 and friends as domains, which does
+  not work: these entries are matched as hostnames, not as CIDR ranges, so a
+  backend at 192.168.0.15 matched nothing and every call failed with
+  "CLEARTEXT communication not permitted" while the app reported it as an
+  unreachable server.
 
-  So cleartext is permitted only where a self-hosted backend legitimately
-  lives: loopback, the emulator's alias for the host machine, and the private
-  address ranges. Everything else, meaning anything on the public internet,
-  still requires HTTPS.
+  So cleartext is permitted. What limits the exposure is not this file but the
+  fact that the user chooses the address themselves and it is their own machine
+  on their own network. Once Reyna ships a hosted backend, this should become a
+  domain-config pinned to that host with cleartext refused everywhere else.
 -->
 <network-security-config>
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">127.0.0.1</domain>
-        <domain includeSubdomains="false">localhost</domain>
-        <!-- The host machine, as seen from an emulator. -->
-        <domain includeSubdomains="false">10.0.2.2</domain>
-        <!-- Private ranges, for a backend on the user's own network. -->
-        <domain includeSubdomains="true">192.168.0.0</domain>
-        <domain includeSubdomains="true">10.0.0.0</domain>
-        <domain includeSubdomains="true">172.16.0.0</domain>
-    </domain-config>
-    <base-config cleartextTrafficPermitted="false" />
+    <base-config cleartextTrafficPermitted="true" />
 </network-security-config>

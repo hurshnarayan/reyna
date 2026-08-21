@@ -413,7 +413,7 @@ class Repo private constructor(private val context: Context) {
             val result = api.upload(
                 file = file,
                 fileName = f.name,
-                mimeType = if (f.isImage) "image/jpeg" else "application/pdf",
+                mimeType = mimeOf(f.name, f.isImage),
                 chatName = f.chatName,
                 senderName = if (f.confidence >= Attribution.MIN_NAMED) f.senderName else null,
                 postedAtSeconds = f.postedAt / 1000,
@@ -508,6 +508,25 @@ class Repo private constructor(private val context: Context) {
 
     suspend fun deleteEverything() = withContext(Dispatchers.IO) {
         dao.clearLinks(); dao.clearEvents(); dao.clearFiles(); dao.clearMessages()
+    }
+
+    /**
+     * The type to tell the server a file is.
+     *
+     * Derived from the extension. Everything that was not an image used to be
+     * sent as application/pdf, so a .docx or .pptx, which is most of what
+     * circulates in a class group, arrived mislabelled and was read as the
+     * wrong kind of document.
+     */
+    private fun mimeOf(name: String, isImage: Boolean): String {
+        if (isImage) {
+            val ext = name.substringAfterLast('.', "").lowercase()
+            return android.webkit.MimeTypeMap.getSingleton()
+                .getMimeTypeFromExtension(ext) ?: "image/jpeg"
+        }
+        val ext = name.substringAfterLast('.', "").lowercase()
+        return android.webkit.MimeTypeMap.getSingleton()
+            .getMimeTypeFromExtension(ext) ?: "application/octet-stream"
     }
 
     /**

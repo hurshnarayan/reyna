@@ -77,3 +77,7 @@ logs/
 *.zip
 *.bak
 *.pptx
+
+# Service account keys, never committed
+*service-account*.json
+gcp-*.json
