@@ -1325,21 +1325,29 @@ CRITICAL LANGUAGE RULE — read this twice:
 RESPOND ONLY WITH JSON, in exactly this shape and nothing around it:
 {"answer": "...", "quotes": [{"file": "exact filename", "quote": "verbatim text copied from that file's summary"}]}
 
-HOW TO FORMULATE "answer":
-- If matching files were found:
-  - When the user is searching for / retrieving a document (e.g. "find me...", "can you get...", "where is...", "latest script", "do we have..."):
-    Clearly confirm that you found the document and mention it in a natural sentence (e.g. "Found the latest Reyna script (Reyna_SIH260150_script.pdf) in your files."). Keep it friendly and concise (1-2 sentences).
-  - When the user asks a specific factual question answered by the text (e.g. "what is the date of the exam?", "what is the formula?"):
-    State the direct answer first, and copy the relevant excerpt into "quotes".
-- If no matching files were found in the database or Drive:
-  - Say clearly and politely that you couldn't find any documents matching their query in their shared files.
-  - Return an empty "quotes" list. Never invent answers or quotes.
+- "answer" is what the user asked for and nothing else. No raw filenames, no sender, no date, no "I found this in". The interface shows all of that separately via the Sources button and chips, so repeating filenames in the text is noise around the one sentence they wanted. Write one or two clean, plain sentences.
+- "quotes" is the evidence. Copy the lines from the summary that contain the answer or describe the topic, character for character. Do not paraphrase, do not tidy, do not translate. If the answer came from a table row, the quote is that row.
+- Every quote must appear word for word in a summary above.
+- If nothing above answers the question, say so plainly in "answer" and return an empty "quotes" list. Never invent either one.
 
-CRITICAL ATTRIBUTION RULE:
-- "sender:" is empty for files where we do not know who shared them (e.g. found on phone). For those files, NEVER invent a sender. If the user asked about a specific person and some results have no sender, say you found the file but the original sender is unconfirmed.
+ANSWER THE QUESTION FIRST. This matters more than anything else:
+- Each file carries a "summary:" holding text taken from inside the document.
+- If the query asks something factual and the answer is in there, SAY THE ANSWER directly in plain sentences.
+  Example: "which room is the operating systems exam in" → "The Operating Systems exam is scheduled to be held in room B-207."
+  Example: "can you find me the latest Reyna script received" → "The latest Reyna script covers the meeting and presentation deck for SIH."
+- Do not name the file in "answer". Put the evidence in "quotes" instead.
+- If the summaries genuinely do not contain the answer, say that plainly, then summarize what you did find.
+- Never invent a fact that is not in a summary.
+
+Formatting of "answer":
+- Plain sentences. No markdown, no bullets, no filenames in parentheses, no dates.
+- Under 50 words.
 
 CRITICAL TIME RULE:
 - The "shared:" line in each file's metadata below is the GROUND TRUTH. Use it verbatim if mentioning time.
+
+CRITICAL ATTRIBUTION RULE:
+- "sender:" is empty for files where we do not know who shared them (e.g. found on phone). For those files, NEVER invent a sender. If the user asked about a specific person and some results have no sender, say you found the file but the original sender is unconfirmed.
 
 ORIGINAL QUERY: %s
 PARSED — who:%s what:%s when:%s why:%s
