@@ -1444,6 +1444,17 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 			SharedAt: shared,
 		})
 	}
+	// The chips under an answer are the evidence for it, not the search results.
+	//
+	// Metadata search casts wide on purpose so the reading pass has candidates
+	// to choose from, but showing all of them turns a one line answer into a
+	// wall of unrelated filenames and makes a correct answer look like a guess.
+	// The list is ordered best first, so the top few are the ones the reply
+	// actually drew on.
+	if len(files) > maxCitedFiles {
+		files = files[:maxCitedFiles]
+	}
+
 	reply := s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, dbView, driveView)
 
 	json.NewEncoder(w).Encode(model.NLPRetrievalResponse{
@@ -1781,6 +1792,9 @@ func hasContentCues(query string) bool {
 //
 // Cost: ~₹0.05 per candidate. Capped at 5 candidates per query.
 // Latency: ~3-5s per candidate, sequential.
+// maxCitedFiles is how many files an answer shows beneath it.
+const maxCitedFiles = 4
+
 // deepRetrieveBudget bounds how long a query may spend reading documents.
 const deepRetrieveBudget = 20 * time.Second
 

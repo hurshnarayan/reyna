@@ -70,7 +70,7 @@ point-at-lan:
     [ -n "$ip" ] || { echo "no wifi address found"; exit 1; }
     tok=$(grep '^DEVICE_TOKEN=' .env | cut -d= -f2)
     touch android/local.properties
-    grep -v '^reyna\.' android/local.properties > android/local.properties.tmp || true
+    grep -v '^reyna\.backendUrl\|^reyna\.deviceToken' android/local.properties > android/local.properties.tmp || true
     { cat android/local.properties.tmp
       echo "reyna.backendUrl=http://$ip:8080"
       echo "reyna.deviceToken=$tok"
@@ -142,7 +142,7 @@ point-at-emulator:
     set -euo pipefail
     tok=$(grep '^DEVICE_TOKEN=' .env | cut -d= -f2)
     touch android/local.properties
-    grep -v '^reyna\.' android/local.properties > android/local.properties.tmp || true
+    grep -v '^reyna\.backendUrl\|^reyna\.deviceToken' android/local.properties > android/local.properties.tmp || true
     { cat android/local.properties.tmp
       echo "reyna.backendUrl=http://10.0.2.2:8080"
       echo "reyna.deviceToken=$tok"
