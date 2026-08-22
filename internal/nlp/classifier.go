@@ -353,16 +353,21 @@ func (c *Classifier) ClassifyFileWithContent(fileName, mimeType string, fileData
 		}
 
 		prompt := fmt.Sprintf(`You are a document analysis and classification agent for a personal file archive. The files can be anything a person keeps: invoices, contracts, tickets, receipts, medical records, scanned paperwork, manuals, photos of documents, work files, study material. Analyze the attached document AND its sharing context, then:
-1. "content": detailed description of topics, concepts, chapters, key terms inside the document (max 800 chars). Read the actual document — do not guess from the filename.
+1. "content": the document's actual readable text, not a description of it. Transcribe what it says.
+   This is the only record kept of what is inside the file, and every later question is answered from it alone.
+   Copy every fact verbatim: names, dates, times, amounts, reference numbers, room and seat codes, table rows, deadlines, contact details, terms.
+   A table becomes one line per row with its columns separated by " | ".
+   Do NOT write "contains a timetable with room assignments". Write the rows, with the rooms in them.
+   Skip decoration, page numbers and repeated headers. Up to 6000 characters; if the document is longer, keep the parts carrying specific facts and drop the prose.
 2. "summary": one-line summary (max 100 chars).
 3. "folder": classify into the best folder from: [%s]
 
    STRICT folder rules:
-   - Use an existing folder ONLY if the document is unambiguously about that exact subject. "Close enough" or "topically adjacent" is NOT a match. Each university subject is its own folder.
-   - Examples of WRONG matches: putting CAED (Computer Aided Engineering Drawing) under "Engineering Science"; putting DBMS under "Computer Science"; putting Operating Systems under "Computer Networks"; putting a Compiler Design PDF under "Programming". These are DIFFERENT subjects — never lump them.
-   - Examples of CORRECT matches: a Compiler Design lab manual → existing "Compiler Design" folder; a DBMS PYQ → existing "DBMS" folder.
-   - If no existing folder is an exact subject match, INVENT a new clean 2–3 word Title Case folder named after the document's actual subject (e.g. "CAED", "Engineering Drawing", "Compiler Design", "Operating Systems"). Recognise common Indian engineering course codes as their own subject: CAED, ESC, BESC, BCS, BEC, BCSL, etc. — these are distinct subjects, not generic "Engineering".
-   - NEVER return "None", "Unsorted", "Unknown", "Misc", "Other", "General", "Engineering", "Science" or any vague umbrella. Always pick or invent a SPECIFIC subject folder.
+   - Use an existing folder ONLY if the document is unambiguously about that exact thing. "Close enough" is not a match.
+   - Wrong: a phone bill under "Contracts"; a tax return under "Receipts"; a database exam paper under "Computer Science". These are different things, do not lump them.
+   - Right: an electricity bill → an existing "Electricity Bills" folder; a compiler design manual → an existing "Compiler Design" folder.
+   - If nothing matches exactly, invent a clean two or three word Title Case folder named after what the document actually is, for example "Electricity Bills", "Rental Agreement", "Flight Tickets", "Compiler Design".
+   - NEVER return "None", "Unsorted", "Unknown", "Misc", "Other" or "General". Always something specific.
 
 4. "is_new": true if you invented the folder, false if it already exists in the list above.
 5. "confidence": 0.0–1.0. Lower confidence (≤0.6) if you had to invent the folder or if the subject is ambiguous.
@@ -377,7 +382,10 @@ Respond ONLY with JSON:
 		// Only send the doc inline if it fits Gemini's request size budget.
 		// NEVER slice raw PDF bytes — that corrupts the file and Gemini returns 400.
 		if len(fileData) <= geminiInlineMaxBytes {
-			result, err := c.llm.CompleteWithDoc(prompt, fileData, mimeType, 1500)
+			// Room for the transcription asked for above. A tight budget here
+			// silently truncates the JSON and loses exactly the tail of the
+			// document where deadlines and totals tend to live.
+			result, err := c.llm.CompleteWithDoc(prompt, fileData, mimeType, 8000)
 			if err == nil {
 				var resp struct {
 					Content    string  `json:"content"`
@@ -1278,6 +1286,15 @@ CRITICAL LANGUAGE RULE — read this twice:
 - A query like "rakesh shared notes or what?" is ENGLISH. Reply in English.
 - A query like "rakesh ne kya bheja?" is HINGLISH. Reply in Hinglish.
 
+ANSWER THE QUESTION FIRST. This matters more than anything else below.
+- Each file carries a "summary:" holding text taken from inside the document.
+- If the query asks something factual and the answer is in there, SAY THE ANSWER, in the first line, as a plain sentence.
+  Query "which room is the operating systems exam in" with a timetable in summary → "The Operating Systems exam is in room B-207."
+  Do NOT write "the file contains the room assignments". That is describing the file instead of answering, and it is useless to someone who asked a question.
+- Only after answering, say which file it came from and when it was shared.
+- If the summaries genuinely do not contain the answer, say that plainly, then list what you did find.
+- Never invent a fact that is not in a summary.
+
 Read the original query to understand intent:
 - "find / dhundo / dikhao" → list the files clearly
 - "kya bheja / what did X share" → list with sender + time
@@ -1297,9 +1314,11 @@ CRITICAL ATTRIBUTION RULE:
 - If the user asked about a specific person and some results have no sender, list them and say plainly that you are not sure who shared those.
 
 Formatting:
-- Plain text with light markdown — bullets, **bold** for filenames, short paragraphs.
+- Answer first, in one plain sentence. Detail after.
+- Plain text with light markdown. Bullets only when listing more than two files.
 - Mention if a file is from "Drive" vs "shared in WhatsApp".
-- Under 200 words. No envelopes, no curly braces — just write the reply.
+- Name at most three files. The user sees the full list as chips below your reply, so repeating ten filenames is noise.
+- Under 120 words. No envelopes, no curly braces, just the reply.
 
 ORIGINAL QUERY: %s
 PARSED — who:%s what:%s when:%s why:%s

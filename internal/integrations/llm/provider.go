@@ -257,17 +257,62 @@ func (c *claudeProvider) CompleteWithDoc(prompt string, fileData []byte, mimeTyp
 	return r.Content[0].Text, nil
 }
 
-// geminiModel is the model to call, overridable without a rebuild.
+// geminiModels is the order models are tried in.
 //
-// Hardcoding it broke on a newly created project: gemini-2.5-flash is retired
-// for new users and answers 404 with "no longer available to new users", which
-// looks like a bad key rather than a retired model. Model names change faster
-// than this codebase does, so the name is configuration.
-func geminiModel() string {
+// The free tier meters twenty requests a day per project per model, so one
+// model alone reads twenty documents and then refuses for the rest of the day.
+// Each name has its own separate allowance, so falling through the list turns
+// twenty a day into twenty a day per model, which is the difference between a
+// library that becomes searchable and one that does not.
+//
+// Overridable with GEMINI_MODEL, comma separated, because model names change
+// faster than this codebase does. The default learned that the hard way:
+// gemini-2.5-flash is retired for newly created projects and answers 404 with
+// "no longer available to new users", which reads like a bad key.
+func geminiModels() []string {
 	if m := os.Getenv("GEMINI_MODEL"); m != "" {
-		return m
+		out := []string{}
+		for _, part := range strings.Split(m, ",") {
+			if p := strings.TrimSpace(part); p != "" {
+				out = append(out, p)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
 	}
-	return "gemini-3.6-flash"
+	return []string{
+		"gemini-3.6-flash",
+		"gemini-3.1-flash-lite",
+		"gemini-3-flash-preview",
+	}
+}
+
+// geminiPost tries each model in turn, moving on when one is out of quota.
+//
+// Only quota moves it along. Any other failure is returned as is, because
+// retrying a malformed request against three models turns one clear error into
+// three confusing ones.
+func geminiPost(apiKey string, jsonBody []byte) ([]byte, int, error) {
+	var lastBody []byte
+	var lastStatus int
+	var lastErr error
+	for _, model := range geminiModels() {
+		url := fmt.Sprintf(
+			"https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s",
+			model, apiKey,
+		)
+		body, status, err := doGeminiRequestWithRetry(url, jsonBody)
+		if err == nil && status == 200 {
+			return body, status, nil
+		}
+		lastBody, lastStatus, lastErr = body, status, err
+		if status != 429 {
+			return body, status, err
+		}
+		log.Printf("[LLM] %s out of quota, trying next model", model)
+	}
+	return lastBody, lastStatus, lastErr
 }
 
 // ── Gemini (Google AI Studio) ──
@@ -285,7 +330,6 @@ func (g *geminiProvider) Complete(prompt string, maxTokens int) (string, error) 
 	}
 
 	// Gemini API: POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", geminiModel(), g.apiKey)
 
 	// Only force application/json output when the prompt explicitly asks for
 	// JSON. Free-form answers (Q&A, NLP reply generation) must stay plain text
@@ -319,7 +363,7 @@ func (g *geminiProvider) Complete(prompt string, maxTokens int) (string, error) 
 	}
 	jsonBody, _ := json.Marshal(body)
 
-	respBody, status, err := doGeminiRequestWithRetry(url, jsonBody)
+	respBody, status, err := geminiPost(g.apiKey, jsonBody)
 	if err != nil {
 		return "", err
 	}
@@ -353,8 +397,6 @@ func (g *geminiProvider) CompleteWithDoc(prompt string, fileData []byte, mimeTyp
 		maxTokens = 500
 	}
 
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", geminiModel(), g.apiKey)
-
 	b64 := base64.StdEncoding.EncodeToString(fileData)
 
 	body := map[string]interface{}{
@@ -387,7 +429,7 @@ func (g *geminiProvider) CompleteWithDoc(prompt string, fileData []byte, mimeTyp
 	}
 	jsonBody, _ := json.Marshal(body)
 
-	respBody, status, err := doGeminiRequestWithRetry(url, jsonBody)
+	respBody, status, err := geminiPost(g.apiKey, jsonBody)
 	if err != nil {
 		return "", err
 	}
