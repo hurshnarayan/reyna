@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 
@@ -1247,9 +1248,13 @@ func cleanLLMReply(s string) string {
 	// If the whole thing is a JSON object with an "answer"/"reply"/"text" field,
 	// pull that field out. This is defensive — the prompt asks for plain text but
 	// the model occasionally still wraps.
-	if strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}") {
+	if strings.HasPrefix(s, "{") {
 		var obj map[string]interface{}
-		if err := json.Unmarshal([]byte(s), &obj); err == nil {
+		cleanJsonStr := s
+		if !strings.HasSuffix(cleanJsonStr, "}") {
+			cleanJsonStr = cleanJsonStr + "\"}"
+		}
+		if err := json.Unmarshal([]byte(cleanJsonStr), &obj); err == nil {
 			for _, key := range []string{"answer", "reply", "response", "text", "output", "result", "message"} {
 				if v, ok := obj[key]; ok {
 					if str, ok := v.(string); ok && str != "" {
@@ -1257,6 +1262,14 @@ func cleanLLMReply(s string) string {
 					}
 				}
 			}
+		}
+		// Regex fallback for `"answer": "..."`
+		re := regexp.MustCompile(`"(?:answer|reply|response|text|message)"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)`)
+		if matches := re.FindStringSubmatch(s); len(matches) > 1 {
+			val := matches[1]
+			val = strings.ReplaceAll(val, `\"`, `"`)
+			val = strings.ReplaceAll(val, `\n`, "\n")
+			return strings.TrimSpace(val)
 		}
 	}
 	return s
