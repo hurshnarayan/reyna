@@ -24,6 +24,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AddCircleOutline
 import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.Article
 import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.CloudUpload
 import androidx.compose.material.icons.rounded.MoreVert
@@ -47,6 +48,20 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material3.BottomSheetDefaults
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.style.TextOverflow
+import app.reyna.attribution.Attribution
+import app.reyna.ui.components.ConfidenceDot
 import app.reyna.ui.components.Bubble
 import app.reyna.ui.components.BubbleText
 import app.reyna.ui.components.BubbleTime
@@ -68,6 +83,24 @@ data class FoundFile(
 )
 
 /**
+ * A passage an answer rests on.
+ *
+ * [quote] is the line itself and [context] the lines around it, so the sheet
+ * can show where an answer came from rather than asserting that it came from
+ * somewhere.
+ */
+data class Source(
+    val fileId: Long,
+    val fileName: String,
+    val senderName: String?,
+    val sharedAt: String?,
+    val folder: String?,
+    val quote: String,
+    val context: String,
+    val confidence: Double,
+)
+
+/**
  * One turn in the conversation.
  *
  * Reyna's answers may carry files; a question never does. Attribution travels as
@@ -79,6 +112,8 @@ data class ChatMessage(
     val fromUser: Boolean,
     val time: String,
     val files: List<FoundFile> = emptyList(),
+    /** Evidence, shown behind a button rather than under the answer. */
+    val sources: List<Source> = emptyList(),
 )
 
 @Composable
@@ -102,6 +137,7 @@ fun ChatScreen(
 ) {
     val c = reynaColors
     val listState = rememberLazyListState()
+    var sheetSources by remember { mutableStateOf<List<Source>>(emptyList()) }
 
     // A conversation opens at the newest message, not the oldest.
     LaunchedEffect(messages.size) {
@@ -147,11 +183,20 @@ fun ChatScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(messages.size) { i ->
-                MessageRow(messages[i], onOpenFile = onOpenFile, onAskWhoShared = onAskWhoShared)
+                MessageRow(messages[i], onShowSources = { sheetSources = it })
             }
             // A visible "working on it" turn. Twenty seconds of nothing reads
             // as a broken app, and this is also what the Stop button refers to.
             if (sending) item { ThinkingRow() }
+        }
+
+        if (sheetSources.isNotEmpty()) {
+            SourcesSheet(
+                sources = sheetSources,
+                onOpenFile = onOpenFile,
+                onAskWhoShared = onAskWhoShared,
+                onDismiss = { sheetSources = emptyList() },
+            )
         }
 
         Composer(
@@ -274,9 +319,9 @@ private fun ThinkingRow() {
 @Composable
 private fun MessageRow(
     msg: ChatMessage,
-    onOpenFile: (Long) -> Unit,
-    onAskWhoShared: (Long) -> Unit,
+    onShowSources: (List<Source>) -> Unit,
 ) {
+    val c = reynaColors
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = if (msg.fromUser) Arrangement.End else Arrangement.Start,
@@ -286,23 +331,35 @@ private fun MessageRow(
                 if (msg.text.isNotEmpty()) {
                     BubbleText(msg.text, msg.fromUser)
                 }
-                if (msg.files.isNotEmpty()) {
-                    // Prose first, then one chip per result. The chips carry the
-                    // attribution; the prose never restates it.
-                    if (msg.text.isNotEmpty()) Spacer(Modifier.height(9.dp))
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        msg.files.forEach { f ->
-                            FileChip(
-                                fileName = f.fileName,
-                                senderName = f.senderName,
-                                chatName = f.chatName,
-                                whenText = f.whenText,
-                                confidence = f.confidence,
-                                isImage = f.isImage,
-                                onOpen = { onOpenFile(f.id) },
-                                onAskWhoShared = { onAskWhoShared(f.id) },
-                            )
-                        }
+                // Evidence sits behind a control, not under the answer.
+                //
+                // A one line answer used to arrive beneath four file cards,
+                // which made the reply three times taller than the thing asked
+                // for and made a correct answer look like a guess. The sources
+                // are still one tap away, because an app that claims not to
+                // invent things has to let people check.
+                if (msg.sources.isNotEmpty()) {
+                    Spacer(Modifier.height(7.dp))
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(7.dp))
+                            .clickable { onShowSources(msg.sources) }
+                            .padding(horizontal = 7.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Rounded.Article,
+                            null,
+                            tint = c.onSurfaceMuted,
+                            modifier = Modifier.size(14.dp),
+                        )
+                        Spacer(Modifier.width(5.dp))
+                        Text(
+                            if (msg.sources.size == 1) "1 source" else "${msg.sources.size} sources",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = c.onSurfaceMuted,
+                        )
                     }
                 }
                 Spacer(Modifier.height(3.dp))
@@ -477,6 +534,166 @@ private fun PendingBanner(count: Int, pushing: Boolean, onPush: () -> Unit) {
                 fontWeight = FontWeight.Medium,
                 color = if (pushing) c.onSurfaceFaint else c.accent,
             )
+        }
+    }
+}
+
+/**
+ * Where an answer came from.
+ *
+ * Shows the passage in its surroundings with the quoted line marked, rather
+ * than the passage alone. A sentence lifted out of a document proves less than
+ * the same sentence sitting between the lines that came before and after it,
+ * and the point of this sheet is to let someone check rather than trust.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun SourcesSheet(
+    sources: List<Source>,
+    onOpenFile: (Long) -> Unit,
+    onAskWhoShared: (Long) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val c = reynaColors
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = c.background,
+        dragHandle = { BottomSheetDefaults.DragHandle(color = c.onSurfaceFaint) },
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Dimens.page)
+                .padding(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                if (sources.size == 1) "Where this came from" else "Where this came from",
+                fontSize = 17.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = c.onSurface,
+            )
+            sources.forEach { s -> SourceCard(s, onOpenFile, onAskWhoShared) }
+        }
+    }
+}
+
+@Composable
+private fun SourceCard(
+    source: Source,
+    onOpenFile: (Long) -> Unit,
+    onAskWhoShared: (Long) -> Unit,
+) {
+    val c = reynaColors
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(11.dp))
+            .background(c.surface)
+            .border(1.dp, c.border, RoundedCornerShape(11.dp))
+            .padding(13.dp),
+    ) {
+        Text(
+            source.fileName,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            color = c.onSurface,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            ConfidenceDot(source.confidence)
+            Spacer(Modifier.width(6.dp))
+            Text(
+                Attribution.describe(
+                    source.confidence, source.senderName, source.folder, source.sharedAt.orEmpty(),
+                ),
+                fontSize = 12.sp,
+                color = c.onSurfaceMuted,
+            )
+        }
+
+        Spacer(Modifier.height(11.dp))
+        // The passage, with the quoted line marked inside its own context. A
+        // long document scrolls here rather than stretching the sheet off the
+        // screen.
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = 220.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(c.bubbleIncoming)
+                .verticalScroll(rememberScrollState())
+                .padding(10.dp),
+        ) {
+            Text(
+                highlightQuote(source.context, source.quote, c.accent),
+                fontSize = 12.5.sp,
+                lineHeight = 19.sp,
+                color = c.onSurfaceMuted,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+
+        Spacer(Modifier.height(11.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SheetAction("Open") { onOpenFile(source.fileId) }
+            if (source.confidence < Attribution.MIN_NAMED) {
+                Spacer(Modifier.width(8.dp))
+                SheetAction("Who shared this?") { onAskWhoShared(source.fileId) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SheetAction(label: String, onClick: () -> Unit) {
+    val c = reynaColors
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(7.dp))
+            .border(1.dp, c.border, RoundedCornerShape(7.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 11.dp, vertical = 6.dp),
+    ) {
+        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = c.onSurfaceMuted)
+    }
+}
+
+/**
+ * Marks the quoted line inside the surrounding text.
+ *
+ * Matched on collapsed whitespace, because the quote and the context come from
+ * the same store but a line can differ by a space and failing to highlight the
+ * one line that matters would defeat the sheet.
+ */
+private fun highlightQuote(context: String, quote: String, accent: Color): AnnotatedString {
+    val q = quote.trim()
+    if (q.isEmpty()) return AnnotatedString(context)
+    val norm = { s: String -> s.trim().replace(Regex("\\s+"), " ").lowercase() }
+    val target = norm(q)
+
+    return buildAnnotatedString {
+        var matched = false
+        context.split("\n").forEachIndexed { i, line ->
+            if (i > 0) append("\n")
+            if (!matched && norm(line) == target) {
+                matched = true
+                withStyle(
+                    SpanStyle(
+                        color = accent,
+                        fontWeight = FontWeight.SemiBold,
+                        background = accent.copy(alpha = 0.10f),
+                    )
+                ) { append(line) }
+            } else {
+                append(line)
+            }
+        }
+        if (!matched) {
+            // The quote spans lines or is not line aligned. Better to show the
+            // passage unmarked than to highlight the wrong thing.
         }
     }
 }

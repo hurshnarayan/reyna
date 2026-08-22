@@ -1424,6 +1424,7 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 			sender = f.SharedByName
 		}
 		dbView = append(dbView, nlp.RetrievalFile{
+			ID:       f.ID,
 			Name:     f.FileName,
 			Folder:   f.Subject,
 			Sender:   sender,
@@ -1455,14 +1456,106 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 		files = files[:maxCitedFiles]
 	}
 
-	reply := s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, dbView, driveView)
+	sourced := s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, dbView, driveView)
 
 	json.NewEncoder(w).Encode(model.NLPRetrievalResponse{
 		Files:        files,
 		DriveMatches: driveMatches,
 		Query:        model.NLPParsedQuery{Who: who, What: what, When: when, Why: why, Raw: req.Query},
-		Reply:        reply,
+		Reply:        sourced.Answer,
+		Citations:    s.verifyCitations(sourced.Quotes, files),
 	})
+}
+
+// verifyCitations keeps only quotes that really appear in the file they name.
+//
+// The model is being asked to produce evidence, which is the one thing it has
+// an incentive to invent, and a fabricated quote in a panel headed Sources is
+// worse than no panel: it converts a hallucination into something that looks
+// checked. So each quote is looked up in the stored text and dropped if it is
+// not there.
+func (s *Server) verifyCitations(quotes []nlp.QuotedSource, files []model.File) []model.Citation {
+	if len(quotes) == 0 {
+		return nil
+	}
+	byName := make(map[string]model.File, len(files))
+	for _, f := range files {
+		byName[strings.ToLower(f.FileName)] = f
+	}
+
+	out := []model.Citation{}
+	seen := map[string]bool{}
+	for _, q := range quotes {
+		f, ok := byName[strings.ToLower(strings.TrimSpace(q.FileName))]
+		if !ok {
+			log.Printf("[CITE] dropped, no such file: %q", q.FileName)
+			continue
+		}
+		content := s.store.GetFileExtractedContent([]int64{f.ID})[f.ID]
+		quote, context, ok := locateQuote(content, q.Quote)
+		if !ok {
+			log.Printf("[CITE] dropped, quote not found in %s", f.FileName)
+			continue
+		}
+		key := f.FileName + "|" + quote
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		sender := ""
+		if f.SenderKnown() {
+			sender = f.SharedByName
+		}
+		out = append(out, model.Citation{
+			FileID:     f.ID,
+			FileName:   f.FileName,
+			Sender:     sender,
+			SharedAt:   formatSharedAt(f.SharedAt()),
+			Folder:     f.Subject,
+			Quote:      quote,
+			Context:    context,
+			Confidence: f.AttributionConfidence,
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// locateQuote finds a quote in a document and returns it with its surroundings.
+//
+// Matched on collapsed whitespace, because a model transcribing a table will
+// reproduce the words faithfully and the spacing loosely, and rejecting a true
+// quote over a doubled space would throw away most real citations.
+func locateQuote(content, quote string) (found, context string, ok bool) {
+	if content == "" || strings.TrimSpace(quote) == "" {
+		return "", "", false
+	}
+	norm := func(s string) string { return strings.Join(strings.Fields(strings.ToLower(s)), " ") }
+	nContent, nQuote := norm(content), norm(quote)
+	if len(nQuote) < 8 || !strings.Contains(nContent, nQuote) {
+		return "", "", false
+	}
+
+	// Return the quote as the document writes it, by walking the lines and
+	// keeping those the quote covers.
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		if norm(line) == "" || !strings.Contains(nQuote, norm(line)) && !strings.Contains(norm(line), nQuote) {
+			continue
+		}
+		lo, hi := i-2, i+3
+		if lo < 0 {
+			lo = 0
+		}
+		if hi > len(lines) {
+			hi = len(lines)
+		}
+		return strings.TrimSpace(line), strings.TrimSpace(strings.Join(lines[lo:hi], "\n")), true
+	}
+	return strings.TrimSpace(quote), strings.TrimSpace(quote), true
 }
 
 func (s *Server) buildNLPReply(files []model.File, driveMatches []model.DriveMatch, who, what, when string) string {

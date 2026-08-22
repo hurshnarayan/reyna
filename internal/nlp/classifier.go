@@ -1241,9 +1241,9 @@ func cleanLLMReply(s string) string {
 // retrieval results. This replaces the old template-string buildNLPReply with
 // a conversational, multi-language, intent-aware response. Falls back to a
 // simple template if the LLM call fails.
-func (c *Classifier) GenerateRetrievalReply(rawQuery, who, what, when, why string, files []RetrievalFile, driveMatches []RetrievalFile) string {
+func (c *Classifier) GenerateRetrievalReply(rawQuery, who, what, when, why string, files []RetrievalFile, driveMatches []RetrievalFile) SourcedReply {
 	if !c.IsEnabled() {
-		return fallbackRetrievalReply(rawQuery, files, driveMatches, who, what, when)
+		return SourcedReply{Answer: fallbackRetrievalReply(rawQuery, files, driveMatches, who, what, when)}
 	}
 
 	var ctx strings.Builder
@@ -1286,12 +1286,20 @@ CRITICAL LANGUAGE RULE — read this twice:
 - A query like "rakesh shared notes or what?" is ENGLISH. Reply in English.
 - A query like "rakesh ne kya bheja?" is HINGLISH. Reply in Hinglish.
 
+RESPOND ONLY WITH JSON, in exactly this shape and nothing around it:
+{"answer": "...", "quotes": [{"file": "exact filename", "quote": "verbatim text copied from that file's summary"}]}
+
+- "answer" is what the user asked for and nothing else. No filename, no sender, no date, no "I found this in". The interface shows all of that separately, so repeating it here is noise around the one sentence they wanted. One or two sentences.
+- "quotes" is the evidence. Copy the lines from the summary that contain the answer, character for character. Do not paraphrase, do not tidy, do not translate. If the answer came from a table row, the quote is that row.
+- Every quote must appear word for word in a summary above. A quote that does not is worse than no quote at all, and it will be discarded.
+- If nothing above answers the question, say so plainly in "answer" and return an empty "quotes" list. Never invent either one.
+
 ANSWER THE QUESTION FIRST. This matters more than anything else below.
 - Each file carries a "summary:" holding text taken from inside the document.
 - If the query asks something factual and the answer is in there, SAY THE ANSWER, in the first line, as a plain sentence.
   Query "which room is the operating systems exam in" with a timetable in summary → "The Operating Systems exam is in room B-207."
   Do NOT write "the file contains the room assignments". That is describing the file instead of answering, and it is useless to someone who asked a question.
-- Only after answering, say which file it came from and when it was shared.
+- Do not name the file in "answer". Put the evidence in "quotes" instead.
 - If the summaries genuinely do not contain the answer, say that plainly, then list what you did find.
 - Never invent a fact that is not in a summary.
 
@@ -1313,12 +1321,9 @@ CRITICAL ATTRIBUTION RULE:
 - For those files, NEVER state or guess a person. Say where and when instead: "shared in Sem 5 CS, 18 August". Do not carry a name over from another file in the list.
 - If the user asked about a specific person and some results have no sender, list them and say plainly that you are not sure who shared those.
 
-Formatting:
-- Answer first, in one plain sentence. Detail after.
-- Plain text with light markdown. Bullets only when listing more than two files.
-- Mention if a file is from "Drive" vs "shared in WhatsApp".
-- Name at most three files. The user sees the full list as chips below your reply, so repeating ten filenames is noise.
-- Under 120 words. No envelopes, no curly braces, just the reply.
+Formatting of "answer":
+- Plain sentences. No markdown, no bullets, no filenames, no dates.
+- Under 60 words. If the question has a one word answer, give the one word in a sentence.
 
 ORIGINAL QUERY: %s
 PARSED — who:%s what:%s when:%s why:%s
@@ -1326,21 +1331,60 @@ PARSED — who:%s what:%s when:%s why:%s
 %s
 Your reply:`, rawQuery, who, what, when, why, ctx.String())
 
-	result, err := c.llm.Complete(prompt, 600)
+	result, err := c.llm.Complete(prompt, 900)
 	if err != nil || result == "" {
-		return fallbackRetrievalReply(rawQuery, files, driveMatches, who, what, when)
+		return SourcedReply{Answer: fallbackRetrievalReply(rawQuery, files, driveMatches, who, what, when)}
 	}
-	return cleanLLMReply(result)
+
+	var parsed struct {
+		Answer string `json:"answer"`
+		Quotes []struct {
+			File  string `json:"file"`
+			Quote string `json:"quote"`
+		} `json:"quotes"`
+	}
+	if jerr := json.Unmarshal([]byte(llm.CleanJSON(result)), &parsed); jerr != nil || parsed.Answer == "" {
+		// The model wrote prose instead of JSON. Its answer is still worth
+		// showing; only the evidence is lost, and an answer with no sources
+		// button is better than an error.
+		return SourcedReply{Answer: cleanLLMReply(result)}
+	}
+
+	out := SourcedReply{Answer: cleanLLMReply(parsed.Answer)}
+	for _, q := range parsed.Quotes {
+		if strings.TrimSpace(q.Quote) == "" {
+			continue
+		}
+		out.Quotes = append(out.Quotes, QuotedSource{FileName: q.File, Quote: q.Quote})
+	}
+	return out
 }
 
 // RetrievalFile is a flattened view of either a DB file or a Drive match for
 // passing into GenerateRetrievalReply without coupling to model.File.
 type RetrievalFile struct {
+	ID       int64
 	Name     string
 	Folder   string
 	Sender   string
 	SharedAt string
 	Summary  string
+}
+
+// SourcedReply is an answer and the passages it rests on.
+type SourcedReply struct {
+	Answer string
+	Quotes []QuotedSource
+}
+
+// QuotedSource is one passage the model says it used.
+//
+// Unverified at this point. The caller checks each quote actually appears in
+// the file's stored text before it is shown, because a model asked to produce
+// evidence is being invited to invent some.
+type QuotedSource struct {
+	FileName string
+	Quote    string
 }
 
 func fallbackRetrievalReply(rawQuery string, files, driveMatches []RetrievalFile, who, what, when string) string {

@@ -263,6 +263,28 @@ type NLPRetrievalResponse struct {
 	DriveMatches []DriveMatch   `json:"drive_matches,omitempty"`
 	Query        NLPParsedQuery `json:"parsed_query"`
 	Reply        string         `json:"reply"`
+	Citations    []Citation     `json:"citations,omitempty"`
+}
+
+// Citation is the passage an answer was drawn from.
+//
+// Kept separate from the reply so the answer can be one sentence and the
+// evidence can still be inspected. The claim that Reyna does not invent things
+// is only worth making if the user can check it, and a citation the user cannot
+// see is the same as no citation.
+type Citation struct {
+	FileID   int64  `json:"file_id"`
+	FileName string `json:"file_name"`
+	Sender   string `json:"sender,omitempty"`
+	SharedAt string `json:"shared_at,omitempty"`
+	Folder   string `json:"folder,omitempty"`
+
+	// Quote is copied verbatim from the stored text of the file, and is
+	// verified to appear there before this ever reaches the user. Context is
+	// the surrounding lines, so the quote can be read where it sits.
+	Quote      string `json:"quote"`
+	Context    string `json:"context,omitempty"`
+	Confidence float64 `json:"attribution_confidence"`
 }
 
 // DriveMatch represents a file found by walking the user's existing Drive folder

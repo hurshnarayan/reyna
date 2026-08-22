@@ -112,6 +112,7 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
             ) { rows, files -> rows to files }.collect { (rows, files) ->
                 _messages.value = rows.map { m ->
                     ChatMessage(
+                        sources = decodeSources(m.citations),
                         text = plainText(m.text),
                         fromUser = m.fromUser,
                         time = timeOf(m.at),
@@ -572,6 +573,35 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
             cal.get(java.util.Calendar.HOUR_OF_DAY),
             cal.get(java.util.Calendar.MINUTE),
         )
+    }
+
+    /**
+     * Reads back the passages stored with an answer.
+     *
+     * Unlike the file chips, these are not rebuilt from the current library.
+     * A citation records what an answer was based on when it was given, and
+     * quietly updating it later would make the evidence worthless.
+     */
+    private fun decodeSources(json: String): List<Source> {
+        if (json.isBlank()) return emptyList()
+        return runCatching {
+            val arr = org.json.JSONArray(json)
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                val quote = o.optString("quote")
+                if (quote.isBlank()) return@mapNotNull null
+                Source(
+                    fileId = o.optLong("file_id", 0),
+                    fileName = o.optString("file_name"),
+                    senderName = o.optString("sender").ifBlank { null },
+                    sharedAt = o.optString("shared_at").ifBlank { null },
+                    folder = o.optString("folder").ifBlank { null },
+                    quote = quote,
+                    context = o.optString("context").ifBlank { quote },
+                    confidence = o.optDouble("confidence", 0.0),
+                )
+            }
+        }.getOrDefault(emptyList())
     }
 
     /**

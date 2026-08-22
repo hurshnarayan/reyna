@@ -102,6 +102,16 @@ data class MessageEntity(
     val at: Long,
     /** File ids this answer attached, comma separated. */
     val fileIds: String = "",
+
+    /**
+     * The passages this answer rests on, as JSON.
+     *
+     * Stored with the message rather than rebuilt from the files, unlike the
+     * chips. A chip should always show current attribution, but a citation is
+     * a record of what the answer was based on at the time it was given, and
+     * rewriting history under an old answer would make the evidence useless.
+     */
+    val citations: String = "",
 )
 
 @Dao
@@ -208,7 +218,7 @@ interface ReynaDao {
 
 @Database(
     entities = [FileEntity::class, EventEntity::class, LinkEntity::class, MessageEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class ReynaDb : RoomDatabase() {

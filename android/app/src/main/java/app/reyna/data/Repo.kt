@@ -466,9 +466,35 @@ class Repo private constructor(private val context: Context) {
                 fromUser = false,
                 at = System.currentTimeMillis(),
                 fileIds = citedIds.joinToString(","),
+                citations = encodeCitations(answer?.citations.orEmpty()),
             )
         )
         answer
+    }
+
+    /**
+     * Citations, stored as JSON on the message.
+     *
+     * Hand rolled rather than pulling in a serialisation library for one type.
+     * The app has no JSON dependency and this is not a reason to acquire one.
+     */
+    private fun encodeCitations(cs: List<ReynaApi.Citation>): String {
+        if (cs.isEmpty()) return ""
+        val arr = org.json.JSONArray()
+        for (c in cs) {
+            arr.put(
+                org.json.JSONObject()
+                    .put("file_id", c.fileId)
+                    .put("file_name", c.fileName)
+                    .put("sender", c.sender ?: "")
+                    .put("shared_at", c.sharedAt ?: "")
+                    .put("folder", c.folder ?: "")
+                    .put("quote", c.quote)
+                    .put("context", c.context)
+                    .put("confidence", c.confidence)
+            )
+        }
+        return arr.toString()
     }
 
     /** Wipes the conversation. Files and attribution are untouched. */

@@ -41,6 +41,25 @@ class ReynaApi(
         val reply: String,
         /** Filenames the backend cited, in order. */
         val files: List<CitedFile>,
+        /** The passages the answer rests on, already verified server side. */
+        val citations: List<Citation> = emptyList(),
+    )
+
+    /**
+     * One passage an answer was drawn from.
+     *
+     * [quote] is the line itself and [context] the lines around it, so the
+     * sheet can show where the answer came from rather than asserting it did.
+     */
+    data class Citation(
+        val fileId: Long,
+        val fileName: String,
+        val sender: String?,
+        val sharedAt: String?,
+        val folder: String?,
+        val quote: String,
+        val context: String,
+        val confidence: Double,
     )
 
     data class CitedFile(
@@ -143,6 +162,7 @@ class ReynaApi(
             Answer(
                 reply = json.optString("reply"),
                 files = json.optJSONArray("files").toCitedFiles(),
+                citations = json.optJSONArray("citations").toCitations(),
             )
         }
     }.onFailure { Log.w(TAG, "ask failed: ${it.message}") }
@@ -339,6 +359,25 @@ class ReynaApi(
             JSONObject(text).optInt("uploaded", 0)
         }
     }.onFailure { Log.w(TAG, "drivePush failed: ${it.message}") }
+
+    private fun JSONArray?.toCitations(): List<Citation> {
+        if (this == null) return emptyList()
+        return (0 until length()).mapNotNull { i ->
+            val o = optJSONObject(i) ?: return@mapNotNull null
+            val quote = o.optString("quote")
+            if (quote.isBlank()) return@mapNotNull null
+            Citation(
+                fileId = o.optLong("file_id", 0),
+                fileName = o.optString("file_name"),
+                sender = o.optString("sender").ifBlank { null },
+                sharedAt = o.optString("shared_at").ifBlank { null },
+                folder = o.optString("folder").ifBlank { null },
+                quote = quote,
+                context = o.optString("context").ifBlank { quote },
+                confidence = o.optDouble("attribution_confidence", 0.0),
+            )
+        }
+    }
 
     private fun JSONArray?.toCitedFiles(): List<CitedFile> {
         if (this == null) return emptyList()
