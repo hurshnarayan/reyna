@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -116,8 +117,8 @@ func (n *noop) Complete(prompt string, maxTokens int) (string, error) {
 func (n *noop) CompleteWithDoc(prompt string, fileData []byte, mimeType string, maxTokens int) (string, error) {
 	return "", fmt.Errorf("no LLM provider configured")
 }
-func (n *noop) Name() string      { return "none" }
-func (n *noop) IsEnabled() bool   { return false }
+func (n *noop) Name() string    { return "none" }
+func (n *noop) IsEnabled() bool { return false }
 
 // ── Claude (Anthropic) ──
 
@@ -256,6 +257,19 @@ func (c *claudeProvider) CompleteWithDoc(prompt string, fileData []byte, mimeTyp
 	return r.Content[0].Text, nil
 }
 
+// geminiModel is the model to call, overridable without a rebuild.
+//
+// Hardcoding it broke on a newly created project: gemini-2.5-flash is retired
+// for new users and answers 404 with "no longer available to new users", which
+// looks like a bad key rather than a retired model. Model names change faster
+// than this codebase does, so the name is configuration.
+func geminiModel() string {
+	if m := os.Getenv("GEMINI_MODEL"); m != "" {
+		return m
+	}
+	return "gemini-3.6-flash"
+}
+
 // ── Gemini (Google AI Studio) ──
 
 type geminiProvider struct {
@@ -271,16 +285,22 @@ func (g *geminiProvider) Complete(prompt string, maxTokens int) (string, error) 
 	}
 
 	// Gemini API: POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=%s", g.apiKey)
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", geminiModel(), g.apiKey)
 
 	// Only force application/json output when the prompt explicitly asks for
 	// JSON. Free-form answers (Q&A, NLP reply generation) must stay plain text
 	// — otherwise Gemini wraps the response in a {"answer": "..."} envelope.
 	wantJSON := strings.Contains(prompt, "JSON") || strings.Contains(prompt, "json")
+	// No thinkingConfig.
+	//
+	// thinkingBudget: 0 turned off deliberation on 2.5 and saved a little
+	// latency. Gemini 3 rejects the field outright with 400 INVALID_ARGUMENT,
+	// and because it was sent on every call, every document read failed while
+	// looking like a bad key or a bad file. Not worth reintroducing per model:
+	// the saving was small and the failure mode was silent.
 	genConfig := map[string]interface{}{
 		"maxOutputTokens": maxTokens,
 		"temperature":     0.3,
-		"thinkingConfig":  map[string]interface{}{"thinkingBudget": 0},
 	}
 	if wantJSON {
 		genConfig["responseMimeType"] = "application/json"
@@ -333,7 +353,7 @@ func (g *geminiProvider) CompleteWithDoc(prompt string, fileData []byte, mimeTyp
 		maxTokens = 500
 	}
 
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=%s", g.apiKey)
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", geminiModel(), g.apiKey)
 
 	b64 := base64.StdEncoding.EncodeToString(fileData)
 
@@ -357,7 +377,6 @@ func (g *geminiProvider) CompleteWithDoc(prompt string, fileData []byte, mimeTyp
 			cfg := map[string]interface{}{
 				"maxOutputTokens": maxTokens,
 				"temperature":     0.3,
-				"thinkingConfig":  map[string]interface{}{"thinkingBudget": 0},
 			}
 			if strings.Contains(prompt, "JSON") || strings.Contains(prompt, "json") {
 				cfg["responseMimeType"] = "application/json"
