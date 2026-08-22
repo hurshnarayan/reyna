@@ -342,9 +342,27 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun localFileFor(remoteId: Long, fileName: String): FileEntity? {
         val files = _files.value
-        return files.firstOrNull { it.remoteId != 0L && it.remoteId == remoteId }
-            ?: files.firstOrNull { it.id == remoteId }
-            ?: files.firstOrNull { it.name.equals(fileName, ignoreCase = true) }
+        // Priority 1: Match by exact filename (case-insensitive)
+        if (fileName.isNotBlank()) {
+            val byName = files.firstOrNull { it.name.equals(fileName, ignoreCase = true) }
+            if (byName != null) return byName
+        }
+        // Priority 2: Match by server remoteId if recorded on local row
+        if (remoteId > 0L) {
+            val byRemote = files.firstOrNull { it.remoteId > 0L && it.remoteId == remoteId }
+            if (byRemote != null) return byRemote
+        }
+        // Priority 3: Fuzzy filename match (strip .v2, extensions, or partial containment)
+        if (fileName.isNotBlank()) {
+            val cleanName = fileName.replace(Regex("\\.v\\d+\\."), ".")
+            val byFuzzy = files.firstOrNull {
+                it.name.equals(cleanName, ignoreCase = true) ||
+                it.name.contains(cleanName, ignoreCase = true) ||
+                cleanName.contains(it.name, ignoreCase = true)
+            }
+            if (byFuzzy != null) return byFuzzy
+        }
+        return null
     }
 
     /** Opens a captured file in whatever app can handle it. */

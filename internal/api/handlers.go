@@ -1723,40 +1723,12 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 	}
 	sourced := s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, dbView, driveView)
 
-	citations := s.verifyCitations(sourced.Quotes, files)
-	if len(citations) == 0 && len(files) > 0 {
-		top := files[0]
-		content := s.store.GetFileExtractedContent([]int64{top.ID})[top.ID]
-		sender := ""
-		if top.SenderKnown() {
-			sender = top.SharedByName
-		}
-		quote := content
-		if len(quote) > 150 {
-			quote = quote[:150] + "..."
-		}
-		if quote == "" {
-			quote = top.FileName
-		}
-		citations = []model.Citation{{
-			FileID:                top.ID,
-			FileName:              top.FileName,
-			Sender:                sender,
-			SharedAt:              formatSharedAt(top.SharedAt()),
-			Folder:                top.Subject,
-			Quote:                 quote,
-			Context:               content,
-			Page:                  1,
-			Confidence:            top.AttributionConfidence,
-		}}
-	}
-
 	json.NewEncoder(w).Encode(model.NLPRetrievalResponse{
 		Files:        files,
 		DriveMatches: driveMatches,
 		Query:        model.NLPParsedQuery{Who: who, What: what, When: when, Why: why, Raw: req.Query},
 		Reply:        sourced.Answer,
-		Citations:    citations,
+		Citations:    s.verifyCitations(sourced.Quotes, files),
 	})
 }
 
