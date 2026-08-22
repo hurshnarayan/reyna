@@ -814,6 +814,14 @@ func (c *Classifier) ParseNLPQuery(query string) (who, what, when, why string) {
 	if c.IsEnabled() {
 		who, what, when, why = c.llmParseQuery(query)
 		if who != "" || what != "" {
+			if strings.EqualFold(strings.TrimSpace(who), "reyna") {
+				if what == "" {
+					what = "reyna"
+				} else if !strings.Contains(strings.ToLower(what), "reyna") {
+					what = "reyna " + what
+				}
+				who = ""
+			}
 			// Drop generic filler words from WHAT that would over-filter results
 			what = c.cleanGenericWhat(what)
 			return
@@ -822,6 +830,14 @@ func (c *Classifier) ParseNLPQuery(query string) (who, what, when, why string) {
 
 	// Fallback: keyword parsing (free, instant)
 	who, what, when, why = c.keywordParseQuery(query)
+	if strings.EqualFold(strings.TrimSpace(who), "reyna") {
+		if what == "" {
+			what = "reyna"
+		} else if !strings.Contains(strings.ToLower(what), "reyna") {
+			what = "reyna " + what
+		}
+		who = ""
+	}
 	what = c.cleanGenericWhat(what)
 	return
 }
@@ -870,10 +886,11 @@ func (c *Classifier) keywordParseQuery(query string) (who, what, when, why strin
 		"the": true, "any": true, "anyone": true, "someone": true, "we": true,
 		"i": true, "you": true, "me": true, "my": true, "some": true,
 		"a": true, "an": true, "all": true, "those": true, "these": true,
+		"reyna": true,
 	}
 
 	// Action verbs that come AFTER a person's name: "X sent me", "X shared", "X uploaded"
-	actionVerbs := []string{" sent ", " shared ", " uploaded ", " gave ", " posted "}
+	actionVerbs := []string{" sent ", " shared ", " uploaded ", " gave ", " posted ", " forwarded "}
 	for _, verb := range actionVerbs {
 		if idx := strings.Index(lower, verb); idx > 0 {
 			// Everything before the verb is potentially the WHO
@@ -941,8 +958,13 @@ func (c *Classifier) keywordParseQuery(query string) (who, what, when, why strin
 	// WHAT — if not already set, clean up remaining text
 	if what == "" && lower != "" {
 		what = lower
-		for _, w := range []string{"share", "shared", "upload", "uploaded", "sent", "send", "about", "any", "the",
-			"do we have", "has anyone shared", "find", "search for", "get me", "show me", "me", "some"} {
+		for _, w := range []string{
+			"can you find me", "can you show me", "can you get me", "can you find", "can you",
+			"find me", "show me", "get me", "search for", "find", "search",
+			"has anyone shared", "do we have", "share", "shared", "upload", "uploaded",
+			"sent", "send", "received", "receive", "about", "any", "the", "some",
+			"latest", "recently", "recent", "me",
+		} {
 			what = strings.Replace(what, w, "", -1)
 		}
 		what = strings.Trim(strings.TrimSpace(what), "?.,! ")
@@ -958,12 +980,14 @@ Parse this natural language query into structured search filters.
 Query: "%s"
 
 Rules:
-- "who": Extract the PERSON'S NAME if the user is asking about files from a specific person. Leave empty if no person mentioned.
-- "what": Extract the SPECIFIC TOPIC or SUBJECT being searched. If the user just says generic words like "notes", "files", "stuff", "documents" with no specific topic, leave this empty.
-- "when": Extract time reference as one of: today, yesterday, last_week, this_week, last_month. Leave empty if no time mentioned.
+- "who": Extract the PERSON'S NAME if the user is asking about files from a specific sender person. Leave empty if no person mentioned.
+  IMPORTANT: The assistant/app itself is named "Reyna". "Reyna" is NEVER a sender person. If the user mentions "Reyna" (e.g. "Reyna script", "Reyna document", "hey Reyna find X"), "Reyna" belongs in "what" if it is part of the topic/document name, or ignored if used as a greeting. NEVER set "who" to "Reyna".
+- "what": Extract the SPECIFIC TOPIC, KEYWORD, or SUBJECT being searched. If the user just says generic words like "notes", "files", "stuff", "documents" with no specific topic, leave this empty.
+- "when": Extract time reference as one of: today, yesterday, last_week, this_week, last_month. ONLY extract when an explicit calendar period is specified. Words like "latest", "recent", "newest", "last" indicate sorting order, NOT a time filter; leave "when" empty for them.
 - "why": One of: retrieve, search, check_existence, activity_check
 
 Examples:
+- "can you find me the latest Reyna script received" → {"who":"","what":"Reyna script","when":"","why":"search"}
 - "mohit sent some notes" → {"who":"mohit","what":"","when":"","why":"retrieve"}
 - "do we have OS notes?" → {"who":"","what":"OS","when":"","why":"check_existence"}
 - "what did priya upload yesterday?" → {"who":"priya","what":"","when":"yesterday","why":"retrieve"}
@@ -1275,7 +1299,7 @@ func (c *Classifier) GenerateRetrievalReply(rawQuery, who, what, when, why strin
 		ctx.WriteString("(no matching files found in database or Drive)\n")
 	}
 
-	prompt := fmt.Sprintf(`You are Reyna. Someone just searched the documents shared in their chats. They may be looking for anything: an invoice, a contract, a ticket, a record, a manual, notes. Write a natural, conversational reply describing what was found.
+	prompt := fmt.Sprintf(`You are Reyna. Someone just searched the documents shared in their chats. They may be looking for anything: an invoice, a contract, a ticket, a record, a manual, notes, scripts. Write a natural, conversational reply describing what was found.
 
 CRITICAL LANGUAGE RULE — read this twice:
 - Detect the language of the QUERY ITSELF (not the sender names — "rakesh" or "mohit" are proper nouns and do NOT indicate Hindi).
@@ -1284,47 +1308,25 @@ CRITICAL LANGUAGE RULE — read this twice:
 - If the query is written in Hinglish (Hindi words in Roman script like "kya bheja", "kal", "hain"), reply in Hinglish.
 - If the query is in Bhojpuri / Tamil / Bengali / Marathi / Kannada / Telugu / Malayalam, reply in that language.
 - Match the tone too — casual query → casual reply; formal query → formal reply.
-- A query like "rakesh shared notes or what?" is ENGLISH. Reply in English.
-- A query like "rakesh ne kya bheja?" is HINGLISH. Reply in Hinglish.
 
 RESPOND ONLY WITH JSON, in exactly this shape and nothing around it:
 {"answer": "...", "quotes": [{"file": "exact filename", "quote": "verbatim text copied from that file's summary"}]}
 
-- "answer" is what the user asked for and nothing else. No filename, no sender, no date, no "I found this in". The interface shows all of that separately, so repeating it here is noise around the one sentence they wanted. One or two sentences.
-- "quotes" is the evidence. Copy the lines from the summary that contain the answer, character for character. Do not paraphrase, do not tidy, do not translate. If the answer came from a table row, the quote is that row.
-- Every quote must appear word for word in a summary above. A quote that does not is worse than no quote at all, and it will be discarded.
-- If nothing above answers the question, say so plainly in "answer" and return an empty "quotes" list. Never invent either one.
-
-ANSWER THE QUESTION FIRST. This matters more than anything else below.
-- Each file carries a "summary:" holding text taken from inside the document.
-- If the query asks something factual and the answer is in there, SAY THE ANSWER, in the first line, as a plain sentence.
-  Query "which room is the operating systems exam in" with a timetable in summary → "The Operating Systems exam is in room B-207."
-  Do NOT write "the file contains the room assignments". That is describing the file instead of answering, and it is useless to someone who asked a question.
-- Do not name the file in "answer". Put the evidence in "quotes" instead.
-- If the summaries genuinely do not contain the answer, say that plainly, then list what you did find.
-- Never invent a fact that is not in a summary.
-
-Read the original query to understand intent:
-- "find / dhundo / dikhao" → list the files clearly
-- "kya bheja / what did X share" → list with sender + time
-- "do we have / hai kya" → confirm yes/no, then list
-- "what's new / kuch naya" → recency-focused list
-- Activity-check questions → confirm with names + counts
-If results are empty, say so honestly and suggest a different phrasing or topic.
-
-CRITICAL TIME RULE:
-- The "shared:" line in each file's metadata below is the GROUND TRUTH — it already contains the relative time AND the absolute time. Use it VERBATIM.
-- NEVER compute or guess relative times yourself ("2 days ago", "this morning"). NEVER override what's written.
-- If the metadata says "5 minute(s) ago", say "5 minutes ago" — not "today" or "earlier".
+HOW TO FORMULATE "answer":
+- If matching files were found:
+  - When the user is searching for / retrieving a document (e.g. "find me...", "can you get...", "where is...", "latest script", "do we have..."):
+    Clearly confirm that you found the document and mention it in a natural sentence (e.g. "Found the latest Reyna script (Reyna_SIH260150_script.pdf) in your files."). Keep it friendly and concise (1-2 sentences).
+  - When the user asks a specific factual question answered by the text (e.g. "what is the date of the exam?", "what is the formula?"):
+    State the direct answer first, and copy the relevant excerpt into "quotes".
+- If no matching files were found in the database or Drive:
+  - Say clearly and politely that you couldn't find any documents matching their query in their shared files.
+  - Return an empty "quotes" list. Never invent answers or quotes.
 
 CRITICAL ATTRIBUTION RULE:
-- "sender:" is empty for files where we do not know who shared them. That is a fact about our records, not a gap for you to fill.
-- For those files, NEVER state or guess a person. Say where and when instead: "shared in Sem 5 CS, 18 August". Do not carry a name over from another file in the list.
-- If the user asked about a specific person and some results have no sender, list them and say plainly that you are not sure who shared those.
+- "sender:" is empty for files where we do not know who shared them (e.g. found on phone). For those files, NEVER invent a sender. If the user asked about a specific person and some results have no sender, say you found the file but the original sender is unconfirmed.
 
-Formatting of "answer":
-- Plain sentences. No markdown, no bullets, no filenames, no dates.
-- Under 60 words. If the question has a one word answer, give the one word in a sentence.
+CRITICAL TIME RULE:
+- The "shared:" line in each file's metadata below is the GROUND TRUTH. Use it verbatim if mentioning time.
 
 ORIGINAL QUERY: %s
 PARSED — who:%s what:%s when:%s why:%s

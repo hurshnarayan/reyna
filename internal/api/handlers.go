@@ -1535,6 +1535,15 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 
 	// Parse the natural language query into WHO/WHAT/WHEN/WHY
 	who, what, when, why := s.classifier.ParseNLPQuery(req.Query)
+	// Reyna is the assistant/app name, not a sender person
+	if strings.EqualFold(strings.TrimSpace(who), "reyna") {
+		if what == "" {
+			what = "reyna"
+		} else if !strings.Contains(strings.ToLower(what), "reyna") {
+			what = "reyna " + what
+		}
+		who = ""
+	}
 	log.Printf("[NLP-RETRIEVE] query=%q → who=%q what=%q when=%q why=%q", req.Query, who, what, when, why)
 
 	// Resolve time window
@@ -1584,6 +1593,15 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 				groupIDs = s.store.GetUserGroupIDs(user.ID)
 			}
 		}
+		// If still empty (e.g. device token or no user-group mapping yet), search all groups in database
+		if len(groupIDs) == 0 {
+			allGroups, err := s.store.GetAllGroups()
+			if err == nil {
+				for _, g := range allGroups {
+					groupIDs = append(groupIDs, g.ID)
+				}
+			}
+		}
 	}
 	log.Printf("[NLP-RETRIEVE] groupIDs=%v", groupIDs)
 
@@ -1591,21 +1609,31 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 	if files == nil {
 		files = []model.File{}
 	}
-	// If WHO and WHAT together found nothing, retry on WHO alone before giving
-	// up. This used to pass the same `who` *and* the same filters, so it re-ran
-	// an identical query and could only ever return the same empty result.
+	// Fallback 1: If time window was set and returned nothing, retry without time window
+	if len(files) == 0 && sinceTime != nil {
+		if fallback, _ := s.store.SearchFilesNLP(groupIDs, who, what, nil, 20); len(fallback) > 0 {
+			log.Printf("[NLP-RETRIEVE] no hits with time window; falling back without time filter")
+			files = fallback
+		}
+	}
+	// Fallback 2: If WHO and WHAT together found nothing, retry on WHO alone
 	if len(files) == 0 && who != "" && (what != "" || sinceTime != nil) {
 		if fallback, _ := s.store.SearchFilesNLP(groupIDs, who, "", nil, 20); len(fallback) > 0 {
 			log.Printf("[NLP-RETRIEVE] no hits for who+what; falling back to sender only")
 			files = fallback
 		}
 	}
-	// Still nothing, and the query named a person: the file may be here but
-	// unattributed. Widen to the topic alone rather than reporting absence,
-	// and let the reply say the sender is unknown.
+	// Fallback 3: If still nothing and WHO was specified, retry on WHAT alone without time filter
 	if len(files) == 0 && who != "" && what != "" {
-		if fallback, _ := s.store.SearchFilesNLP(groupIDs, "", what, sinceTime, 20); len(fallback) > 0 {
+		if fallback, _ := s.store.SearchFilesNLP(groupIDs, "", what, nil, 20); len(fallback) > 0 {
 			log.Printf("[NLP-RETRIEVE] no hits for sender %q; falling back to topic only", who)
+			files = fallback
+		}
+	}
+	// Fallback 4: If WHO was specified and WHAT was empty (or both failed), retry searching WHO as WHAT
+	if len(files) == 0 && who != "" {
+		if fallback, _ := s.store.SearchFilesNLP(groupIDs, "", who, nil, 20); len(fallback) > 0 {
+			log.Printf("[NLP-RETRIEVE] no hits for sender %q; trying sender as topic", who)
 			files = fallback
 		}
 	}

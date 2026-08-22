@@ -448,16 +448,56 @@ class Repo private constructor(private val context: Context) {
         onCall: (okhttp3.Call) -> Unit = {},
     ): ReynaApi.Answer? = withContext(Dispatchers.IO) {
         dao.insertMessage(MessageEntity(text = question, fromUser = true, at = System.currentTimeMillis()))
+
+        // Sync pending captures first so the backend knows about all local files
+        runCatching { syncPending() }
+
         val answer = api().ask(question, onCall).getOrNull()
-        val reply = answer?.reply
+        var reply = answer?.reply
             ?: "I could not reach the backend. Your files are still safe on this phone."
 
         // Match the cited filenames back to local rows so the answer can show
         // real chips. Matched by name because the backend numbers files by its
         // own ids, which the phone does not share.
         val local = dao.allFiles()
-        val citedIds = answer?.files.orEmpty().mapNotNull { cited ->
+        var citedIds = answer?.files.orEmpty().mapNotNull { cited ->
             local.firstOrNull { it.name.equals(cited.name, ignoreCase = true) }?.id
+        }
+
+        // Local search fallback: if backend returned no matching files,
+        // check whether the local device holds matching files.
+        if (citedIds.isEmpty() && local.isNotEmpty()) {
+            val localHits = app.reyna.search.FileSearch.search(
+                query = question,
+                files = local.map { f ->
+                    app.reyna.search.SearchableFile(
+                        id = f.id,
+                        fileName = f.name,
+                        senderName = f.senderName,
+                        chatName = f.chatName,
+                        whenText = "",
+                        confidence = f.confidence,
+                        isImage = f.isImage,
+                    )
+                },
+                fuzzy = true,
+            ).filter { it.score > 0 }
+
+            if (localHits.isNotEmpty()) {
+                val topLocal = localHits.take(4)
+                citedIds = topLocal.map { it.file.id }
+                if (answer == null || reply.contains("couldn't find", ignoreCase = true) ||
+                    reply.contains("could not find", ignoreCase = true) ||
+                    reply.contains("no files found", ignoreCase = true)
+                ) {
+                    val names = topLocal.map { it.file.fileName }.joinToString(", ")
+                    reply = if (topLocal.size == 1) {
+                        "Found ${topLocal.first().file.fileName} on your phone."
+                    } else {
+                        "Found on your phone: $names"
+                    }
+                }
+            }
         }
 
         dao.insertMessage(

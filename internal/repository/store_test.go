@@ -340,3 +340,75 @@ func TestSearchFilesNLPWhenUsesPostedAt(t *testing.T) {
 		t.Errorf("got %q, want posted_today.pdf — the window must apply to posted_at, not created_at", files[0].FileName)
 	}
 }
+
+func TestSearchFilesNLPReynaScript(t *testing.T) {
+	s := newTestStore(t)
+	userID, groupID := seedGroup(t, s, "+911111111111", "Device User", "device-group@g.us")
+
+	// Reyna script file captured without sender (unattributed)
+	if _, err := s.AddFile(&model.File{
+		GroupID:               groupID,
+		UserID:                userID,
+		FileName:              "Reyna_SIH260150_script.pdf",
+		MimeType:              "application/pdf",
+		PostedAt:              time.Now().Add(-20 * time.Hour),
+		AttributionMethod:     "",
+		AttributionConfidence: 0.0,
+		SharedByName:          "",
+		SharedByPhone:         "",
+	}); err != nil {
+		t.Fatalf("AddFile: %v", err)
+	}
+
+	// 1. Search with what="reyna script"
+	files, err := s.SearchFilesNLP([]int64{groupID}, "", "reyna script", nil, 10)
+	if err != nil {
+		t.Fatalf("SearchFilesNLP: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatalf("expected to find Reyna_SIH260150_script.pdf for what='reyna script', got 0 files")
+	}
+	if files[0].FileName != "Reyna_SIH260150_script.pdf" {
+		t.Errorf("got %q, want Reyna_SIH260150_script.pdf", files[0].FileName)
+	}
+
+	// 2. Search with what="Reyna_SIH260150_script.pdf"
+	files, err = s.SearchFilesNLP([]int64{groupID}, "", "Reyna_SIH260150_script.pdf", nil, 10)
+	if err != nil {
+		t.Fatalf("SearchFilesNLP: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatalf("expected to find Reyna_SIH260150_script.pdf, got 0 files")
+	}
+
+	// 3. Search with what="script"
+	files, err = s.SearchFilesNLP([]int64{groupID}, "", "script", nil, 10)
+	if err != nil {
+		t.Fatalf("SearchFilesNLP: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatalf("expected to find Reyna_SIH260150_script.pdf for what='script', got 0 files")
+	}
+}
+
+func TestTokenizeWhatEdgeCases(t *testing.T) {
+	if tok := TokenizeWhat(""); tok != nil {
+		t.Errorf("TokenizeWhat(\"\") = %v, want nil", tok)
+	}
+	if tok := TokenizeWhat("   "); tok != nil {
+		t.Errorf("TokenizeWhat(\"   \") = %v, want nil", tok)
+	}
+	tok := TokenizeWhat("can you find me the latest Reyna script received")
+	for _, expected := range []string{"reyna", "script"} {
+		found := false
+		for _, tokItem := range tok {
+			if tokItem == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("TokenizeWhat missing %q in %v", expected, tok)
+		}
+	}
+}

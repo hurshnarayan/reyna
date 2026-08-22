@@ -37,6 +37,17 @@ class ReynaApi(
 
     data class UploadResult(val remoteId: Long, val folder: String?, val duplicate: Boolean)
 
+    /**
+     * A file the server refused and will refuse again.
+     *
+     * Separated from a network failure because the two need opposite
+     * responses. If the server cannot be reached, stopping and retrying later
+     * is right. If the server looked at this file and said no, retrying is
+     * pointless, and retrying it first forever is how one bad file blocks every
+     * file behind it.
+     */
+    class Rejected(val status: Int, message: String) : Exception(message)
+
     data class Answer(
         val reply: String,
         /** Filenames the backend cited, in order. */
@@ -114,7 +125,14 @@ class ReynaApi(
         val req = Request.Builder().url(url("/api/device/files")).auth().post(body).build()
         client.newCall(req).execute().use { resp ->
             val text = resp.body?.string().orEmpty()
-            if (!resp.isSuccessful) error("upload ${resp.code}: ${text.take(200)}")
+            if (!resp.isSuccessful) {
+                // 4xx is a verdict on this file. 5xx and anything else is the
+                // server having a bad time, which will pass.
+                if (resp.code in 400..499) {
+                    throw Rejected(resp.code, "upload ${resp.code}: ${text.take(200)}")
+                }
+                error("upload ${resp.code}: ${text.take(200)}")
+            }
             val json = JSONObject(text)
             val remoteId = json.optLong("file_id", 0)
 

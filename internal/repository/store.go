@@ -1617,6 +1617,9 @@ func (s *Store) SearchFilesContent(groupIDs []int64, query string, limit int) ([
 // Drops stopwords and tokens shorter than 3 chars so noise like "the", "a",
 // "of" doesn't widen the search to match every file in the DB.
 func TokenizeWhat(what string) []string {
+	if strings.TrimSpace(what) == "" {
+		return nil
+	}
 	stop := map[string]bool{
 		// articles / pronouns / aux
 		"the": true, "and": true, "for": true, "with": true, "from": true, "that": true,
@@ -1635,6 +1638,7 @@ func TokenizeWhat(what string) []string {
 		// generic Q&A request verbs
 		"please": true, "find": true, "show": true, "give": true, "tell": true, "send": true,
 		"share": true, "shared": true, "sent": true, "uploaded": true, "upload": true,
+		"received": true, "receive": true, "got": true, "gets": true, "getting": true,
 		"explain": true, "describe": true, "define": true, "definition": true, "exact": true,
 		"exactly": true, "example": true, "examples": true, "summary": true, "summarize": true,
 		"summarise": true, "list": true, "mention": true, "mentioned": true, "mentions": true,
@@ -1665,7 +1669,10 @@ func TokenizeWhat(what string) []string {
 	// If everything got filtered (e.g. user typed only stopwords), fall back
 	// to the original phrase so we still search something.
 	if len(out) == 0 {
-		out = []string{strings.TrimSpace(lower)}
+		trimmed := strings.TrimSpace(lower)
+		if trimmed != "" {
+			out = []string{trimmed}
+		}
 	}
 	return out
 }
