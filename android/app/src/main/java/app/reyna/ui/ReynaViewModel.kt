@@ -328,6 +328,25 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    /**
+     * Finds the local row a citation refers to.
+     *
+     * A citation carries the backend's id for the file, which is a different
+     * number from the one Room assigned, so looking it up directly matched
+     * nothing and the Open button silently did nothing at all. Matched on
+     * remoteId, which markUploaded records when the backend accepts a file,
+     * falling back to the filename for rows uploaded before ids were tracked.
+     *
+     * Returns null when the file is genuinely not on this phone, which happens
+     * when it reached the server from somewhere else.
+     */
+    fun localFileFor(remoteId: Long, fileName: String): FileEntity? {
+        val files = _files.value
+        return files.firstOrNull { it.remoteId != 0L && it.remoteId == remoteId }
+            ?: files.firstOrNull { it.id == remoteId }
+            ?: files.firstOrNull { it.name.equals(fileName, ignoreCase = true) }
+    }
+
     /** Opens a captured file in whatever app can handle it. */
     fun openFile(id: Long) {
         viewModelScope.launch {
@@ -535,6 +554,31 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Opens a file by the path a viewer already resolved, in another app.
+     *
+     * Separate from openFile because the PDF viewer holds the row already and
+     * should not look it up a second time by an id it does not have.
+     */
+    fun openInOtherApp(file: FileEntity) {
+        val app = getApplication<Application>()
+        runCatching {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                app, "${app.packageName}.files", java.io.File(file.path),
+            )
+            app.startActivity(
+                Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(uri, mimeOf(file.name, file.isImage))
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }.onFailure { _toast.value = "No app on this phone can open that file" }
+    }
+
+    /** Says something in the conversation, for outcomes with no other home. */
+    fun note(text: String) {
+        _toast.value = text
+    }
+
     /** Forgets the Drive connection. Files already in Drive are left alone. */
     fun disconnectDrive() {
         viewModelScope.launch {
@@ -599,6 +643,7 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
                     quote = quote,
                     context = o.optString("context").ifBlank { quote },
                     confidence = o.optDouble("confidence", 0.0),
+                    page = o.optInt("page", 1).coerceAtLeast(1),
                 )
             }
         }.getOrDefault(emptyList())

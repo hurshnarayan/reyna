@@ -28,12 +28,12 @@ type Group struct {
 
 // GroupSettings holds per-group configuration
 type GroupSettings struct {
-	GroupID          int64  `json:"group_id"`
-	Enabled          bool   `json:"enabled"`             // toggle: tracking on/off
-	Hidden           bool   `json:"hidden"`              // remove button: hides from dashboard until /reyna init
-	TrackingMode     string `json:"tracking_mode"`       // "auto" | "reaction"
-	AutoCommitHours  int    `json:"auto_commit_hours"`   // 0 = use server default
-	ReactionEmoji    string `json:"reaction_emoji"`      // default "📌"
+	GroupID         int64  `json:"group_id"`
+	Enabled         bool   `json:"enabled"`           // toggle: tracking on/off
+	Hidden          bool   `json:"hidden"`            // remove button: hides from dashboard until /reyna init
+	TrackingMode    string `json:"tracking_mode"`     // "auto" | "reaction"
+	AutoCommitHours int    `json:"auto_commit_hours"` // 0 = use server default
+	ReactionEmoji   string `json:"reaction_emoji"`    // default "📌"
 }
 
 // GroupMember links users to groups
@@ -48,25 +48,25 @@ type GroupMember struct {
 
 // File represents a stored file in a user's Drive repo
 type File struct {
-	ID            int64     `json:"id"`
-	GroupID       int64     `json:"group_id"`
-	UserID        int64     `json:"user_id"`
-	SharedByPhone string    `json:"shared_by_phone"`
-	SharedByName  string    `json:"shared_by_name"`
-	FileName      string    `json:"file_name"`
-	FileSize      int64     `json:"file_size"`
-	MimeType      string    `json:"mime_type"`
-	DriveFileID   string    `json:"drive_file_id"`
-	DriveFolderID string    `json:"drive_folder_id"`
-	Subject       string    `json:"subject"`
-	Tags          string    `json:"tags"`
-	Version       int       `json:"version"`
-	ParentFileID  int64     `json:"parent_file_id"`
-	WAMessageID      string    `json:"wa_message_id"`
-	Status           string    `json:"status"` // "staged" | "committed" | "deleted_in_drive"
-	ExtractedContent string    `json:"extracted_content,omitempty"`
-	ContentSummary   string    `json:"content_summary,omitempty"`
-	ContentHash      string    `json:"content_hash,omitempty"`
+	ID               int64  `json:"id"`
+	GroupID          int64  `json:"group_id"`
+	UserID           int64  `json:"user_id"`
+	SharedByPhone    string `json:"shared_by_phone"`
+	SharedByName     string `json:"shared_by_name"`
+	FileName         string `json:"file_name"`
+	FileSize         int64  `json:"file_size"`
+	MimeType         string `json:"mime_type"`
+	DriveFileID      string `json:"drive_file_id"`
+	DriveFolderID    string `json:"drive_folder_id"`
+	Subject          string `json:"subject"`
+	Tags             string `json:"tags"`
+	Version          int    `json:"version"`
+	ParentFileID     int64  `json:"parent_file_id"`
+	WAMessageID      string `json:"wa_message_id"`
+	Status           string `json:"status"` // "staged" | "committed" | "deleted_in_drive"
+	ExtractedContent string `json:"extracted_content,omitempty"`
+	ContentSummary   string `json:"content_summary,omitempty"`
+	ContentHash      string `json:"content_hash,omitempty"`
 
 	// CreatedAt is when Reyna inserted the row. PostedAt is when the message was
 	// actually sent. Under the Baileys bot these are seconds apart; once capture
@@ -175,15 +175,15 @@ type FindRequest struct {
 }
 
 type CommandRequest struct {
-	GroupWAID     string `json:"group_wa_id"`
-	Command       string `json:"command"`
-	Args          string `json:"args"`
-	UserPhone     string `json:"user_phone"`
-	UserName      string `json:"user_name"`
-	FileName      string `json:"file_name"`
-	FileSize      int64  `json:"file_size"`
-	MimeType      string `json:"mime_type"`
-	Subject       string `json:"subject"`
+	GroupWAID string `json:"group_wa_id"`
+	Command   string `json:"command"`
+	Args      string `json:"args"`
+	UserPhone string `json:"user_phone"`
+	UserName  string `json:"user_name"`
+	FileName  string `json:"file_name"`
+	FileSize  int64  `json:"file_size"`
+	MimeType  string `json:"mime_type"`
+	Subject   string `json:"subject"`
 }
 
 type CommandResponse struct {
@@ -194,14 +194,14 @@ type CommandResponse struct {
 
 // ReactionRequest is sent by the bot when a user reacts to a file message
 type ReactionRequest struct {
-	GroupWAID     string `json:"group_wa_id"`
-	UserPhone     string `json:"user_phone"`
-	UserName      string `json:"user_name"`
-	FileName      string `json:"file_name"`
-	FileSize      int64  `json:"file_size"`
-	MimeType      string `json:"mime_type"`
-	Emoji         string `json:"emoji"`
-	WAMessageID   string `json:"wa_message_id"`
+	GroupWAID   string `json:"group_wa_id"`
+	UserPhone   string `json:"user_phone"`
+	UserName    string `json:"user_name"`
+	FileName    string `json:"file_name"`
+	FileSize    int64  `json:"file_size"`
+	MimeType    string `json:"mime_type"`
+	Emoji       string `json:"emoji"`
+	WAMessageID string `json:"wa_message_id"`
 }
 
 // NLPClassifyRequest asks the NLP service to classify a file into a folder
@@ -253,7 +253,7 @@ type WaitlistRequest struct {
 // ── NLP Conversational Retrieval ──
 
 type NLPRetrievalRequest struct {
-	Query     string `json:"query"`      // natural language query
+	Query     string `json:"query"`       // natural language query
 	GroupWAID string `json:"group_wa_id"` // optional: scope to a group
 	UserPhone string `json:"user_phone"`
 }
@@ -282,8 +282,13 @@ type Citation struct {
 	// Quote is copied verbatim from the stored text of the file, and is
 	// verified to appear there before this ever reaches the user. Context is
 	// the surrounding lines, so the quote can be read where it sits.
-	Quote      string `json:"quote"`
-	Context    string `json:"context,omitempty"`
+	Quote   string `json:"quote"`
+	Context string `json:"context,omitempty"`
+
+	// Page the quote sits on, counted from markers left during extraction.
+	// Always at least 1, so a viewer never has to handle a missing page.
+	Page int `json:"page"`
+
 	Confidence float64 `json:"attribution_confidence"`
 }
 
@@ -305,11 +310,11 @@ type DriveMatch struct {
 }
 
 type NLPParsedQuery struct {
-	Who    string `json:"who"`
-	What   string `json:"what"`
-	When   string `json:"when"`
-	Why    string `json:"why"`
-	Raw    string `json:"raw"`
+	Who  string `json:"who"`
+	What string `json:"what"`
+	When string `json:"when"`
+	Why  string `json:"why"`
+	Raw  string `json:"raw"`
 }
 
 // ── Notes Q&A ──

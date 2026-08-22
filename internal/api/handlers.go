@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,10 +16,10 @@ import (
 
 	"github.com/hurshnarayan/reyna/internal/auth"
 	"github.com/hurshnarayan/reyna/internal/config"
-	"github.com/hurshnarayan/reyna/internal/repository"
 	"github.com/hurshnarayan/reyna/internal/integrations/gdrive"
 	"github.com/hurshnarayan/reyna/internal/model"
 	"github.com/hurshnarayan/reyna/internal/nlp"
+	"github.com/hurshnarayan/reyna/internal/repository"
 	"github.com/hurshnarayan/reyna/internal/reyna"
 )
 
@@ -45,7 +46,9 @@ func (s *Server) uploadLockFor(groupID int64) *sync.Mutex {
 // (not a real human name). Used to avoid storing "+1234567890" or "0440" as shared_by_name.
 func looksLikePhoneOrLID(s string) bool {
 	s = strings.TrimSpace(s)
-	if s == "" { return false }
+	if s == "" {
+		return false
+	}
 	// Strip + prefix
 	cleaned := strings.TrimPrefix(s, "+")
 	// Remove common separators
@@ -56,9 +59,14 @@ func looksLikePhoneOrLID(s string) bool {
 	// If all digits, it's a phone number or LID
 	allDigits := true
 	for _, c := range cleaned {
-		if c < '0' || c > '9' { allDigits = false; break }
+		if c < '0' || c > '9' {
+			allDigits = false
+			break
+		}
 	}
-	if allDigits && len(cleaned) >= 1 { return true }
+	if allDigits && len(cleaned) >= 1 {
+		return true
+	}
 	return false
 }
 
@@ -74,13 +82,18 @@ func (s *Server) routes() {
 	wrap := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
-			if origin == "" { origin = "*" }
+			if origin == "" {
+				origin = "*"
+			}
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Content-Type", "application/json")
-			if r.Method == "OPTIONS" { w.WriteHeader(200); return }
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(200)
+				return
+			}
 			h(w, r)
 		}
 	}
@@ -117,7 +130,9 @@ func (s *Server) routes() {
 		return func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == "OPTIONS" {
 				origin := r.Header.Get("Origin")
-				if origin == "" { origin = "*" }
+				if origin == "" {
+					origin = "*"
+				}
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Access-Control-Allow-Methods", "POST,OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
@@ -198,24 +213,42 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // ── Auth ──
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
-	var req struct { Phone, Name string }
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
+	var req struct{ Phone, Name string }
 	json.NewDecoder(r.Body).Decode(&req)
-	if req.Phone == "" { http.Error(w, `{"error":"phone required"}`, 400); return }
+	if req.Phone == "" {
+		http.Error(w, `{"error":"phone required"}`, 400)
+		return
+	}
 	user, err := s.store.UpsertUser(req.Phone, req.Name)
-	if err != nil { http.Error(w, `{"error":"registration failed"}`, 500); return }
+	if err != nil {
+		http.Error(w, `{"error":"registration failed"}`, 500)
+		return
+	}
 	s.store.AutoLinkUserToGroups(user.ID, req.Phone)
 	token, _ := auth.GenerateToken(user.ID, s.cfg.JWTSecret)
 	json.NewEncoder(w).Encode(model.AuthResponse{Token: token, User: user})
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
 	var req model.LoginRequest
 	json.NewDecoder(r.Body).Decode(&req)
-	if req.Phone == "" { http.Error(w, `{"error":"phone required"}`, 400); return }
+	if req.Phone == "" {
+		http.Error(w, `{"error":"phone required"}`, 400)
+		return
+	}
 	user, err := s.store.GetUserByPhone(req.Phone)
-	if err != nil { http.Error(w, `{"error":"user not found, register first"}`, 404); return }
+	if err != nil {
+		http.Error(w, `{"error":"user not found, register first"}`, 404)
+		return
+	}
 	s.store.AutoLinkUserToGroups(user.ID, req.Phone)
 	token, _ := auth.GenerateToken(user.ID, s.cfg.JWTSecret)
 	json.NewEncoder(w).Encode(model.AuthResponse{Token: token, User: user})
@@ -224,7 +257,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	uid := auth.GetUserID(r)
 	user, err := s.store.GetUserByID(uid)
-	if err != nil { http.Error(w, `{"error":"user not found"}`, 404); return }
+	if err != nil {
+		http.Error(w, `{"error":"user not found"}`, 404)
+		return
+	}
 	json.NewEncoder(w).Encode(user)
 }
 
@@ -262,15 +298,22 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
 	uid := auth.GetUserID(r)
 	if r.Method == "POST" {
-		var req struct { WAID string `json:"wa_id"`; Name string `json:"name"` }
+		var req struct {
+			WAID string `json:"wa_id"`
+			Name string `json:"name"`
+		}
 		json.NewDecoder(r.Body).Decode(&req)
 		group, _ := s.store.UpsertGroup(req.WAID, req.Name, uid)
-		if group != nil { s.store.AddGroupMember(group.ID, uid, "", "admin") }
+		if group != nil {
+			s.store.AddGroupMember(group.ID, uid, "", "admin")
+		}
 		json.NewEncoder(w).Encode(group)
 		return
 	}
 	groups, _ := s.store.GetUserGroups(uid)
-	if groups == nil { groups = []model.Group{} }
+	if groups == nil {
+		groups = []model.Group{}
+	}
 	json.NewEncoder(w).Encode(groups)
 }
 
@@ -278,16 +321,20 @@ func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	uid := auth.GetUserID(r)
 	gidStr := r.URL.Query().Get("group_id")
-	sortBy := r.URL.Query().Get("sort_by")     // name, date, size, subject, version
+	sortBy := r.URL.Query().Get("sort_by")       // name, date, size, subject, version
 	sortOrder := r.URL.Query().Get("sort_order") // asc, desc
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 { limit = 100 }
+	if limit <= 0 {
+		limit = 100
+	}
 
 	// Link if not yet linked
 	gids := s.store.GetUserGroupIDs(uid)
 	if len(gids) == 0 {
 		user, _ := s.store.GetUserByID(uid)
-		if user != nil { s.store.AutoLinkUserToGroups(uid, user.Phone) }
+		if user != nil {
+			s.store.AutoLinkUserToGroups(uid, user.Phone)
+		}
 		gids = s.store.GetUserGroupIDs(uid)
 	}
 
@@ -306,34 +353,49 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		gid, _ := strconv.ParseInt(gidStr, 10, 64)
 		files, _ = s.store.GetGroupFiles(gid, limit)
 	} else {
-		if len(gids) > 0 { files, _ = s.store.GetGroupsFiles(gids, limit) }
-		if len(files) == 0 { files, _ = s.store.GetUserFiles(uid, limit) }
+		if len(gids) > 0 {
+			files, _ = s.store.GetGroupsFiles(gids, limit)
+		}
+		if len(files) == 0 {
+			files, _ = s.store.GetUserFiles(uid, limit)
+		}
 	}
-	if files == nil { files = []model.File{} }
+	if files == nil {
+		files = []model.File{}
+	}
 	json.NewEncoder(w).Encode(files)
 }
-
 
 func (s *Server) handleFileVersions(w http.ResponseWriter, r *http.Request) {
 	fid, _ := strconv.ParseInt(r.URL.Query().Get("file_id"), 10, 64)
 	versions, _ := s.store.GetFileVersions(fid)
-	if versions == nil { versions = []model.FileVersion{} }
+	if versions == nil {
+		versions = []model.FileVersion{}
+	}
 	json.NewEncoder(w).Encode(versions)
 }
 
 func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
 	uid := auth.GetUserID(r)
 	var req model.AddFileRequest
 	json.NewDecoder(r.Body).Decode(&req)
 	group, err := s.store.GetGroupByWAID(req.GroupWAID)
-	if err != nil { http.Error(w, `{"error":"group not found"}`, 404); return }
+	if err != nil {
+		http.Error(w, `{"error":"group not found"}`, 404)
+		return
+	}
 	user, _ := s.store.GetUserByID(uid)
 	accessToken, driveRootID := "", ""
 	if user != nil {
 		accessToken, driveRootID = user.GoogleToken, user.DriveRootID
 		if user.GoogleRefresh != "" {
-			if t, e := s.drive.GetValidToken(user.GoogleToken, user.GoogleRefresh, 0); e == nil { accessToken = t }
+			if t, e := s.drive.GetValidToken(user.GoogleToken, user.GoogleRefresh, 0); e == nil {
+				accessToken = t
+			}
 		}
 	}
 	fileData := []byte(req.FileData)
@@ -346,7 +408,9 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 	gid, _ := strconv.ParseInt(r.URL.Query().Get("group_id"), 10, 64)
 	logs, _ := s.store.GetActivityLog(gid, 50)
-	if logs == nil { logs = []model.ActivityLog{} }
+	if logs == nil {
+		logs = []model.ActivityLog{}
+	}
 	json.NewEncoder(w).Encode(logs)
 }
 
@@ -364,13 +428,21 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeviceUpload(w http.ResponseWriter, r *http.Request) {
 	// CORS
 	origin := r.Header.Get("Origin")
-	if origin == "" { origin = "*" }
+	if origin == "" {
+		origin = "*"
+	}
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Access-Control-Allow-Methods", "POST,OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 	w.Header().Set("Content-Type", "application/json")
-	if r.Method == "OPTIONS" { w.WriteHeader(200); return }
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(200)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
 
 	// 50MB max
 	r.Body = http.MaxBytesReader(w, r.Body, 50<<20)
@@ -412,7 +484,9 @@ func (s *Server) handleDeviceUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if fileSize == 0 { fileSize = int64(len(fileBytes)) }
+	if fileSize == 0 {
+		fileSize = int64(len(fileBytes))
+	}
 	log.Printf("📤 Bot upload: %s (%d bytes) from %s (phone=%s)", fileName, len(fileBytes), userName, userPhone)
 
 	// ── Content-hash duplicate detection ──
@@ -430,7 +504,9 @@ func (s *Server) handleDeviceUpload(w http.ResponseWriter, r *http.Request) {
 	sharedByName := userName // preserve original name (pushName from WhatsApp)
 	// For the user record, use pushName if available, otherwise phone
 	userRecordName := userName
-	if userRecordName == "" { userRecordName = userPhone }
+	if userRecordName == "" {
+		userRecordName = userPhone
+	}
 	user, _ := s.store.UpsertUser(userPhone, userRecordName)
 
 	// If shared_by_name is still empty, try to get it from an existing user record
@@ -443,10 +519,16 @@ func (s *Server) handleDeviceUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	group, err := s.store.GetGroupByWAID(groupWAID)
-	if err != nil { group, _ = s.store.UpsertGroup(groupWAID, "WhatsApp Group", user.ID) }
-	if group != nil { s.store.AddGroupMember(group.ID, user.ID, userPhone, "member") }
+	if err != nil {
+		group, _ = s.store.UpsertGroup(groupWAID, "WhatsApp Group", user.ID)
+	}
+	if group != nil {
+		s.store.AddGroupMember(group.ID, user.ID, userPhone, "member")
+	}
 	groupID := int64(0)
-	if group != nil { groupID = group.ID }
+	if group != nil {
+		groupID = group.ID
+	}
 
 	// ── Per-group serialization lock ──
 	// Without this, simultaneous uploads of byte-identical files all pass the
@@ -530,13 +612,20 @@ func (s *Server) handleDeviceUpload(w http.ResponseWriter, r *http.Request) {
 	dbFile := &model.File{GroupID: groupID, UserID: user.ID, SharedByPhone: userPhone, SharedByName: sharedByName, FileName: versionedName, FileSize: fileSize, MimeType: mimeType, Subject: subject, DriveFileID: localID, DriveFolderID: folderID, Status: "staged", ContentHash: contentHash,
 		PostedAt: postedAt, AttributionMethod: attrMethod, AttributionConfidence: attrConfidence}
 	saved, err := s.store.AddFile(dbFile)
-	if err != nil { log.Printf("❌ DB: %v", err); http.Error(w, `{"error":"db save failed"}`, 500); return }
+	if err != nil {
+		log.Printf("❌ DB: %v", err)
+		http.Error(w, `{"error":"db save failed"}`, 500)
+		return
+	}
 
 	s.drive.SaveLocalFileData(saved.ID, fileBytes)
 	log.Printf("✅ Saved file %d: %s (%d bytes) — staged (classifying async)", saved.ID, fileName, len(fileBytes))
 
 	total := s.store.CountGroupFiles(groupID)
-	v := 1; if saved != nil { v = saved.Version }
+	v := 1
+	if saved != nil {
+		v = saved.Version
+	}
 	reply := s.reyna.AddResponse(fileName, v, total)
 	s.store.LogActivity(groupID, user.ID, "add", "/reyna add "+fileName, "staged")
 
@@ -551,7 +640,9 @@ func (s *Server) handleDeviceUpload(w http.ResponseWriter, r *http.Request) {
 		seen := map[string]bool{}
 		var existingFolders []string
 		for _, sub := range s.store.DistinctSubjectsForGroup(gID) {
-			if sub == "" || sub == "classifying..." || seen[sub] { continue }
+			if sub == "" || sub == "classifying..." || seen[sub] {
+				continue
+			}
 			seen[sub] = true
 			existingFolders = append(existingFolders, sub)
 		}
@@ -562,7 +653,9 @@ func (s *Server) handleDeviceUpload(w http.ResponseWriter, r *http.Request) {
 				folders, _ := s.drive.ListDriveFolders(token, driveUser.DriveRootID)
 				for _, f := range folders {
 					n := f["name"]
-					if n == "" || seen[n] { continue }
+					if n == "" || seen[n] {
+						continue
+					}
 					seen[n] = true
 					existingFolders = append(existingFolders, n)
 				}
@@ -570,7 +663,9 @@ func (s *Server) handleDeviceUpload(w http.ResponseWriter, r *http.Request) {
 		}
 
 		groupName := ""
-		if grp != nil { groupName = grp.Name }
+		if grp != nil {
+			groupName = grp.Name
+		}
 		fmeta := nlp.FileMeta{
 			SenderName: sharedByName, SenderPhone: userPhone,
 			GroupName: groupName, SharedAt: time.Now(),
@@ -632,16 +727,25 @@ func (s *Server) handleWaitlist(w http.ResponseWriter, r *http.Request) {
 
 // ── Google OAuth ──
 func (s *Server) handleGoogleAuthStart(w http.ResponseWriter, r *http.Request) {
-	if !s.drive.IsConfigured() { json.NewEncoder(w).Encode(map[string]interface{}{"configured": false}); return }
+	if !s.drive.IsConfigured() {
+		json.NewEncoder(w).Encode(map[string]interface{}{"configured": false})
+		return
+	}
 	state := r.URL.Query().Get("token")
-	if state == "" { http.Error(w, `{"error":"token required"}`, 400); return }
+	if state == "" {
+		http.Error(w, `{"error":"token required"}`, 400)
+		return
+	}
 	json.NewEncoder(w).Encode(map[string]string{"url": s.drive.GetAuthURL(state)})
 }
 
 func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	state := r.URL.Query().Get("state")
-	if code == "" { http.Error(w, "Missing code", 400); return }
+	if code == "" {
+		http.Error(w, "Missing code", 400)
+		return
+	}
 	tokenInfo, email, err := s.drive.ExchangeCode(code)
 	if err != nil {
 		w.Header().Set("Content-Type", "text/html")
@@ -684,30 +788,38 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGoogleStatus(w http.ResponseWriter, r *http.Request) {
 	uid := auth.GetUserID(r)
 	user, _ := s.store.GetUserByID(uid)
-	if user == nil { http.Error(w, `{"error":"not found"}`, 404); return }
+	if user == nil {
+		http.Error(w, `{"error":"not found"}`, 404)
+		return
+	}
 
 	rootName := ""
 	if user.GoogleRefresh != "" && user.DriveRootID != "" {
 		token, err := s.drive.GetValidToken(user.GoogleToken, user.GoogleRefresh, 0)
 		if err == nil {
 			rootName = s.drive.GetFolderName(token, user.DriveRootID)
-			if rootName == "" { rootName = "Reyna" }
+			if rootName == "" {
+				rootName = "Reyna"
+			}
 			// Update token if refreshed
 			s.store.UpdateUserGoogle(uid, user.Email, token, user.GoogleRefresh, user.DriveRootID)
 		}
 	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"connected": user.GoogleRefresh != "",
-		"email": user.Email,
-		"drive_root": user.DriveRootID,
+		"connected":       user.GoogleRefresh != "",
+		"email":           user.Email,
+		"drive_root":      user.DriveRootID,
 		"drive_root_name": rootName,
-		"configured": s.drive.IsConfigured(),
+		"configured":      s.drive.IsConfigured(),
 	})
 }
 
 func (s *Server) handleGoogleConnect(w http.ResponseWriter, r *http.Request) {
-	if !s.drive.IsConfigured() { json.NewEncoder(w).Encode(map[string]interface{}{"configured": false}); return }
+	if !s.drive.IsConfigured() {
+		json.NewEncoder(w).Encode(map[string]interface{}{"configured": false})
+		return
+	}
 	uid := auth.GetUserID(r)
 	token, _ := auth.GenerateToken(uid, s.cfg.JWTSecret)
 	json.NewEncoder(w).Encode(map[string]string{"url": s.drive.GetAuthURL(token)})
@@ -715,7 +827,10 @@ func (s *Server) handleGoogleConnect(w http.ResponseWriter, r *http.Request) {
 
 // ── Google Disconnect ──
 func (s *Server) handleGoogleDisconnect(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
 	uid := auth.GetUserID(r)
 	s.store.ClearUserGoogle(uid)
 	log.Printf("☁️ Google Drive disconnected for user %d", uid)
@@ -724,7 +839,10 @@ func (s *Server) handleGoogleDisconnect(w http.ResponseWriter, r *http.Request) 
 
 // ── File Delete (from DB + Drive) ──
 func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" && r.Method != "DELETE" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
+	if r.Method != "POST" && r.Method != "DELETE" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
 	uid := auth.GetUserID(r)
 	var req struct {
 		FileID  int64   `json:"file_id"`
@@ -736,13 +854,18 @@ func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 	if req.FileID > 0 && len(ids) == 0 {
 		ids = []int64{req.FileID}
 	}
-	if len(ids) == 0 { http.Error(w, `{"error":"file_id(s) required"}`, 400); return }
+	if len(ids) == 0 {
+		http.Error(w, `{"error":"file_id(s) required"}`, 400)
+		return
+	}
 
 	user, _ := s.store.GetUserByID(uid)
 	deleted := 0
 	for _, fid := range ids {
 		file, err := s.store.GetFileByID(fid)
-		if err != nil || file == nil { continue }
+		if err != nil || file == nil {
+			continue
+		}
 
 		// Delete from Drive if connected and has drive ID
 		if user != nil && user.GoogleRefresh != "" && file.DriveFileID != "" && !strings.HasPrefix(file.DriveFileID, "local_") && !strings.HasPrefix(file.DriveFileID, "meta_") {
@@ -764,7 +887,10 @@ func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 
 // ── Remove Staged Files ──
 func (s *Server) handleRemoveStaged(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
 	var req struct {
 		FileID  int64   `json:"file_id"`
 		FileIDs []int64 `json:"file_ids"`
@@ -788,7 +914,10 @@ func (s *Server) handleRemoveStaged(w http.ResponseWriter, r *http.Request) {
 	if req.FileID > 0 && len(ids) == 0 {
 		ids = []int64{req.FileID}
 	}
-	if len(ids) == 0 { http.Error(w, `{"error":"file_id(s) required"}`, 400); return }
+	if len(ids) == 0 {
+		http.Error(w, `{"error":"file_id(s) required"}`, 400)
+		return
+	}
 
 	removed, _ := s.store.DeleteStagedFiles(ids)
 	json.NewEncoder(w).Encode(map[string]interface{}{"removed": removed})
@@ -810,7 +939,9 @@ func (s *Server) commitStagedForUser(uid int64) (committed int64, uploaded int) 
 
 	for _, gid := range gids {
 		staged, _ := s.store.GetStagedFiles(gid)
-		if len(staged) == 0 { continue }
+		if len(staged) == 0 {
+			continue
+		}
 
 		driveUser := s.store.FindDriveConnectedUser(gid)
 		canUpload := driveUser != nil && driveUser.GoogleRefresh != "" && s.drive.IsConfigured() && driveUser.DriveRootID != "" && !strings.HasPrefix(driveUser.DriveRootID, "local_")
@@ -838,8 +969,12 @@ func (s *Server) commitStagedForUser(uid int64) (committed int64, uploaded int) 
 				// per file.
 				folderIDs := make(map[string]string, len(staged))
 				for _, f := range staged {
-					if f.Subject == "classifying..." { continue }
-					if _, done := folderIDs[f.Subject]; done { continue }
+					if f.Subject == "classifying..." {
+						continue
+					}
+					if _, done := folderIDs[f.Subject]; done {
+						continue
+					}
 					if id, ferr := s.drive.EnsureSubjectFolder(token, driveUser.DriveRootID, f.Subject); ferr == nil {
 						folderIDs[f.Subject] = id
 					}
@@ -847,17 +982,25 @@ func (s *Server) commitStagedForUser(uid int64) (committed int64, uploaded int) 
 
 				for _, f := range staged {
 					// Skip files still being classified
-					if f.Subject == "classifying..." { continue }
+					if f.Subject == "classifying..." {
+						continue
+					}
 					wg.Add(1)
 					go func(f model.File) {
 						defer wg.Done()
 						sem <- struct{}{}
 						defer func() { <-sem }()
 						folderID, ok := folderIDs[f.Subject]
-						if !ok { return }
+						if !ok {
+							return
+						}
 						fileData, _ := s.drive.GetLocalFileData(f.ID)
-						if len(fileData) == 0 { fileData, _ = s.drive.GetFileFromLocalStore(f.UserID, f.Subject, f.FileName) }
-						if len(fileData) == 0 { return }
+						if len(fileData) == 0 {
+							fileData, _ = s.drive.GetFileFromLocalStore(f.UserID, f.Subject, f.FileName)
+						}
+						if len(fileData) == 0 {
+							return
+						}
 						driveID, uerr := s.drive.UploadFileToDrive(token, folderID, f.FileName, f.MimeType, fileData)
 						if uerr == nil && driveID != "" {
 							s.store.UpdateFileDriveID(f.ID, driveID, folderID)
@@ -897,10 +1040,15 @@ func (s *Server) handleCommitStaged(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSuggestFiles(w http.ResponseWriter, r *http.Request) {
 	uid := auth.GetUserID(r)
 	q := r.URL.Query().Get("q")
-	if q == "" { json.NewEncoder(w).Encode([]string{}); return }
+	if q == "" {
+		json.NewEncoder(w).Encode([]string{})
+		return
+	}
 	gids := s.store.GetUserGroupIDs(uid)
 	names := s.store.SuggestFiles(gids, q, 10)
-	if names == nil { names = []string{} }
+	if names == nil {
+		names = []string{}
+	}
 	json.NewEncoder(w).Encode(names)
 }
 
@@ -908,14 +1056,20 @@ func (s *Server) handleSuggestFiles(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSearchFiles(w http.ResponseWriter, r *http.Request) {
 	uid := auth.GetUserID(r)
 	q := r.URL.Query().Get("q")
-	if q == "" { http.Error(w, `{"error":"q required"}`, 400); return }
+	if q == "" {
+		http.Error(w, `{"error":"q required"}`, 400)
+		return
+	}
 
 	gids := s.store.GetUserGroupIDs(uid)
 
 	// Check for /content: prefix for content search
 	if strings.HasPrefix(q, "/content:") {
 		contentQuery := strings.TrimSpace(strings.TrimPrefix(q, "/content:"))
-		if contentQuery == "" { json.NewEncoder(w).Encode([]model.File{}); return }
+		if contentQuery == "" {
+			json.NewEncoder(w).Encode([]model.File{})
+			return
+		}
 		// Search inside file contents from local storage
 		var matches []model.File
 		for _, gid := range gids {
@@ -933,14 +1087,18 @@ func (s *Server) handleSearchFiles(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		if matches == nil { matches = []model.File{} }
+		if matches == nil {
+			matches = []model.File{}
+		}
 		json.NewEncoder(w).Encode(matches)
 		return
 	}
 
 	// Strict filename search
 	files, _ := s.store.FindFilesStrict(gids, q, 20)
-	if files == nil { files = []model.File{} }
+	if files == nil {
+		files = []model.File{}
+	}
 	json.NewEncoder(w).Encode(files)
 }
 
@@ -949,10 +1107,16 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 	uid := auth.GetUserID(r)
 	fidStr := r.URL.Query().Get("file_id")
 	fid, _ := strconv.ParseInt(fidStr, 10, 64)
-	if fid == 0 { http.Error(w, `{"error":"file_id required"}`, 400); return }
+	if fid == 0 {
+		http.Error(w, `{"error":"file_id required"}`, 400)
+		return
+	}
 
 	file, err := s.store.GetFileByID(fid)
-	if err != nil || file == nil { http.Error(w, `{"error":"file not found"}`, 404); return }
+	if err != nil || file == nil {
+		http.Error(w, `{"error":"file not found"}`, 404)
+		return
+	}
 
 	// Try local data first
 	data, err := s.drive.GetLocalFileData(fid)
@@ -983,7 +1147,9 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mimeType := file.MimeType
-	if mimeType == "" { mimeType = "application/octet-stream" }
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
 	w.Header().Set("Content-Type", mimeType)
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, file.FileName))
 	w.Header().Del("Access-Control-Allow-Headers") // Let browser handle content type
@@ -995,7 +1161,10 @@ func (s *Server) handleFileExists(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("name")
 	gidStr := r.URL.Query().Get("group_id")
 	gid, _ := strconv.ParseInt(gidStr, 10, 64)
-	if name == "" { http.Error(w, `{"error":"name required"}`, 400); return }
+	if name == "" {
+		http.Error(w, `{"error":"name required"}`, 400)
+		return
+	}
 	file, exists := s.store.FileExistsInGroup(gid, name)
 	resp := map[string]interface{}{"exists": exists}
 	if exists && file != nil {
@@ -1008,16 +1177,29 @@ func (s *Server) handleFileExists(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDriveFolders(w http.ResponseWriter, r *http.Request) {
 	uid := auth.GetUserID(r)
 	user, _ := s.store.GetUserByID(uid)
-	if user == nil || user.GoogleRefresh == "" { json.NewEncoder(w).Encode([]interface{}{}); return }
+	if user == nil || user.GoogleRefresh == "" {
+		json.NewEncoder(w).Encode([]interface{}{})
+		return
+	}
 	token, err := s.drive.GetValidToken(user.GoogleToken, user.GoogleRefresh, 0)
-	if err != nil { json.NewEncoder(w).Encode([]interface{}{}); return }
+	if err != nil {
+		json.NewEncoder(w).Encode([]interface{}{})
+		return
+	}
 
 	parentID := r.URL.Query().Get("parent_id")
-	if parentID == "" { parentID = user.DriveRootID }
-	if parentID == "" { json.NewEncoder(w).Encode([]interface{}{}); return }
+	if parentID == "" {
+		parentID = user.DriveRootID
+	}
+	if parentID == "" {
+		json.NewEncoder(w).Encode([]interface{}{})
+		return
+	}
 
 	folders, _ := s.drive.ListDriveFolders(token, parentID)
-	if folders == nil { folders = []map[string]string{} }
+	if folders == nil {
+		folders = []map[string]string{}
+	}
 	json.NewEncoder(w).Encode(folders)
 }
 
@@ -1036,7 +1218,9 @@ func (s *Server) handleDriveTree(w http.ResponseWriter, r *http.Request) {
 	}
 
 	parentID := r.URL.Query().Get("parent_id")
-	if parentID == "" { parentID = user.DriveRootID }
+	if parentID == "" {
+		parentID = user.DriveRootID
+	}
 	if parentID == "" {
 		// No root set — return empty
 		json.NewEncoder(w).Encode(map[string]interface{}{"folders": []interface{}{}, "files": []interface{}{}, "root_name": "", "parent_id": "", "no_root": true})
@@ -1047,8 +1231,12 @@ func (s *Server) handleDriveTree(w http.ResponseWriter, r *http.Request) {
 
 	folders, _ := s.drive.ListDriveFolders(token, parentID)
 	files, _ := s.drive.ListDriveFiles(token, parentID)
-	if folders == nil { folders = []map[string]string{} }
-	if files == nil { files = []map[string]interface{}{} }
+	if folders == nil {
+		folders = []map[string]string{}
+	}
+	if files == nil {
+		files = []map[string]interface{}{}
+	}
 
 	rootName := ""
 	if parentID == user.DriveRootID {
@@ -1060,16 +1248,25 @@ func (s *Server) handleDriveTree(w http.ResponseWriter, r *http.Request) {
 
 // ── Change Drive Root ──
 func (s *Server) handleDriveRoot(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
 	uid := auth.GetUserID(r)
 	var req struct {
 		FolderID string `json:"folder_id"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
-	if req.FolderID == "" { http.Error(w, `{"error":"folder_id required"}`, 400); return }
+	if req.FolderID == "" {
+		http.Error(w, `{"error":"folder_id required"}`, 400)
+		return
+	}
 
 	user, _ := s.store.GetUserByID(uid)
-	if user == nil { http.Error(w, `{"error":"user not found"}`, 404); return }
+	if user == nil {
+		http.Error(w, `{"error":"user not found"}`, 404)
+		return
+	}
 	s.store.UpdateUserGoogle(uid, user.Email, user.GoogleToken, user.GoogleRefresh, req.FolderID)
 	log.Printf("📁 Drive root changed for user %d to %s", uid, req.FolderID)
 	json.NewEncoder(w).Encode(map[string]interface{}{"updated": true, "drive_root": req.FolderID})
@@ -1079,20 +1276,34 @@ func (s *Server) handleDriveRoot(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDriveRootFolders(w http.ResponseWriter, r *http.Request) {
 	uid := auth.GetUserID(r)
 	user, _ := s.store.GetUserByID(uid)
-	if user == nil || user.GoogleRefresh == "" { json.NewEncoder(w).Encode([]interface{}{}); return }
+	if user == nil || user.GoogleRefresh == "" {
+		json.NewEncoder(w).Encode([]interface{}{})
+		return
+	}
 	token, err := s.drive.GetValidToken(user.GoogleToken, user.GoogleRefresh, 0)
-	if err != nil { json.NewEncoder(w).Encode([]interface{}{}); return }
+	if err != nil {
+		json.NewEncoder(w).Encode([]interface{}{})
+		return
+	}
 	folders, _ := s.drive.ListRootFolders(token)
-	if folders == nil { folders = []map[string]string{} }
+	if folders == nil {
+		folders = []map[string]string{}
+	}
 	json.NewEncoder(w).Encode(folders)
 }
 
 // ── Folder Create (in Drive) ──
 func (s *Server) handleDriveFolderCreate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
 	uid := auth.GetUserID(r)
 	user, _ := s.store.GetUserByID(uid)
-	if user == nil || user.GoogleRefresh == "" { http.Error(w, `{"error":"drive not connected"}`, 400); return }
+	if user == nil || user.GoogleRefresh == "" {
+		http.Error(w, `{"error":"drive not connected"}`, 400)
+		return
+	}
 
 	var req struct {
 		Name     string `json:"name"`
@@ -1100,7 +1311,10 @@ func (s *Server) handleDriveFolderCreate(w http.ResponseWriter, r *http.Request)
 		SetRoot  bool   `json:"set_as_root"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
-	if req.Name == "" { http.Error(w, `{"error":"name required"}`, 400); return }
+	if req.Name == "" {
+		http.Error(w, `{"error":"name required"}`, 400)
+		return
+	}
 
 	token, err := s.drive.GetValidToken(user.GoogleToken, user.GoogleRefresh, 0)
 	if err != nil {
@@ -1138,20 +1352,32 @@ func (s *Server) handleDriveFolderCreate(w http.ResponseWriter, r *http.Request)
 
 // ── Folder Rename (in Drive) ──
 func (s *Server) handleDriveFolderRename(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
 	uid := auth.GetUserID(r)
 	user, _ := s.store.GetUserByID(uid)
-	if user == nil || user.GoogleRefresh == "" { http.Error(w, `{"error":"drive not connected"}`, 400); return }
+	if user == nil || user.GoogleRefresh == "" {
+		http.Error(w, `{"error":"drive not connected"}`, 400)
+		return
+	}
 
 	var req struct {
 		FolderID string `json:"folder_id"`
 		NewName  string `json:"new_name"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
-	if req.FolderID == "" || req.NewName == "" { http.Error(w, `{"error":"folder_id and new_name required"}`, 400); return }
+	if req.FolderID == "" || req.NewName == "" {
+		http.Error(w, `{"error":"folder_id and new_name required"}`, 400)
+		return
+	}
 
 	token, err := s.drive.GetValidToken(user.GoogleToken, user.GoogleRefresh, 0)
-	if err != nil { http.Error(w, `{"error":"token error"}`, 500); return }
+	if err != nil {
+		http.Error(w, `{"error":"token error"}`, 500)
+		return
+	}
 	s.store.UpdateUserGoogle(uid, user.Email, token, user.GoogleRefresh, user.DriveRootID)
 
 	err = s.drive.RenameDriveFolder(token, req.FolderID, req.NewName)
@@ -1167,19 +1393,31 @@ func (s *Server) handleDriveFolderRename(w http.ResponseWriter, r *http.Request)
 
 // ── Folder Delete (in Drive — moves to trash) ──
 func (s *Server) handleDriveFolderDelete(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
 	uid := auth.GetUserID(r)
 	user, _ := s.store.GetUserByID(uid)
-	if user == nil || user.GoogleRefresh == "" { http.Error(w, `{"error":"drive not connected"}`, 400); return }
+	if user == nil || user.GoogleRefresh == "" {
+		http.Error(w, `{"error":"drive not connected"}`, 400)
+		return
+	}
 
 	var req struct {
 		FolderID string `json:"folder_id"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
-	if req.FolderID == "" { http.Error(w, `{"error":"folder_id required"}`, 400); return }
+	if req.FolderID == "" {
+		http.Error(w, `{"error":"folder_id required"}`, 400)
+		return
+	}
 
 	token, err := s.drive.GetValidToken(user.GoogleToken, user.GoogleRefresh, 0)
-	if err != nil { http.Error(w, `{"error":"token error"}`, 500); return }
+	if err != nil {
+		http.Error(w, `{"error":"token error"}`, 500)
+		return
+	}
 	s.store.UpdateUserGoogle(uid, user.Email, token, user.GoogleRefresh, user.DriveRootID)
 
 	err = s.drive.DeleteFromDrive(token, req.FolderID)
@@ -1492,7 +1730,7 @@ func (s *Server) verifyCitations(quotes []nlp.QuotedSource, files []model.File) 
 			continue
 		}
 		content := s.store.GetFileExtractedContent([]int64{f.ID})[f.ID]
-		quote, context, ok := locateQuote(content, q.Quote)
+		quote, context, page, ok := locateQuote(content, q.Quote)
 		if !ok {
 			log.Printf("[CITE] dropped, quote not found in %s", f.FileName)
 			continue
@@ -1515,6 +1753,7 @@ func (s *Server) verifyCitations(quotes []nlp.QuotedSource, files []model.File) 
 			Folder:     f.Subject,
 			Quote:      quote,
 			Context:    context,
+			Page:       page,
 			Confidence: f.AttributionConfidence,
 		})
 	}
@@ -1524,25 +1763,41 @@ func (s *Server) verifyCitations(quotes []nlp.QuotedSource, files []model.File) 
 	return out
 }
 
-// locateQuote finds a quote in a document and returns it with its surroundings.
+// pageMarker matches the [[page N]] lines extraction writes at each page break.
+var pageMarker = regexp.MustCompile(`^\s*\[\[page\s+(\d+)\]\]\s*$`)
+
+// locateQuote finds a quote in a document and returns it, its surroundings, and
+// the page it sits on.
 //
 // Matched on collapsed whitespace, because a model transcribing a table will
 // reproduce the words faithfully and the spacing loosely, and rejecting a true
 // quote over a doubled space would throw away most real citations.
-func locateQuote(content, quote string) (found, context string, ok bool) {
+//
+// The page is counted from the markers extraction leaves behind. They are a
+// hint and not a contract: a document read before markers existed, or a model
+// that forgets them, yields page 1 and a viewer that opens at the beginning.
+// That is a worse answer, not a broken one.
+func locateQuote(content, quote string) (found, context string, page int, ok bool) {
 	if content == "" || strings.TrimSpace(quote) == "" {
-		return "", "", false
+		return "", "", 1, false
 	}
 	norm := func(s string) string { return strings.Join(strings.Fields(strings.ToLower(s)), " ") }
 	nContent, nQuote := norm(content), norm(quote)
 	if len(nQuote) < 8 || !strings.Contains(nContent, nQuote) {
-		return "", "", false
+		return "", "", 1, false
 	}
 
 	// Return the quote as the document writes it, by walking the lines and
 	// keeping those the quote covers.
 	lines := strings.Split(content, "\n")
+	at := 1
 	for i, line := range lines {
+		if m := pageMarker.FindStringSubmatch(line); m != nil {
+			if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+				at = n
+			}
+			continue
+		}
 		if norm(line) == "" || !strings.Contains(nQuote, norm(line)) && !strings.Contains(norm(line), nQuote) {
 			continue
 		}
@@ -1553,9 +1808,21 @@ func locateQuote(content, quote string) (found, context string, ok bool) {
 		if hi > len(lines) {
 			hi = len(lines)
 		}
-		return strings.TrimSpace(line), strings.TrimSpace(strings.Join(lines[lo:hi], "\n")), true
+		return strings.TrimSpace(line), stripPageMarkers(lines[lo:hi]), at, true
 	}
-	return strings.TrimSpace(quote), strings.TrimSpace(quote), true
+	return strings.TrimSpace(quote), strings.TrimSpace(quote), 1, true
+}
+
+// stripPageMarkers joins lines for display, leaving the scaffolding out.
+func stripPageMarkers(lines []string) string {
+	kept := make([]string, 0, len(lines))
+	for _, l := range lines {
+		if pageMarker.MatchString(l) {
+			continue
+		}
+		kept = append(kept, l)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
 func (s *Server) buildNLPReply(files []model.File, driveMatches []model.DriveMatch, who, what, when string) string {
@@ -1712,6 +1979,7 @@ func fileMatchesWhat(fileName, what string) bool {
 // "change folder") and returns files matching `what`. It searches:
 //  1. Subfolders whose name matches `what` → returns all files in them
 //  2. Within all other subfolders, files whose name matches `what`
+//
 // Capped at `maxMatches` to avoid huge responses.
 func (s *Server) collectDriveContext(groupIDs []int64, what string, maxMatches int) []model.DriveMatch {
 	if what == "" || len(groupIDs) == 0 {

@@ -358,7 +358,8 @@ func (c *Classifier) ClassifyFileWithContent(fileName, mimeType string, fileData
    Copy every fact verbatim: names, dates, times, amounts, reference numbers, room and seat codes, table rows, deadlines, contact details, terms.
    A table becomes one line per row with its columns separated by " | ".
    Do NOT write "contains a timetable with room assignments". Write the rows, with the rooms in them.
-   Skip decoration, page numbers and repeated headers. Up to 6000 characters; if the document is longer, keep the parts carrying specific facts and drop the prose.
+   Skip decoration and repeated headers. Up to 6000 characters; if the document is longer, keep the parts carrying specific facts and drop the prose.
+   Begin each page with a marker on its own line, exactly [[page 1]], [[page 2]] and so on, so a later answer can point at the page it came from. Number them as the document does if it prints page numbers, otherwise count from one.
 2. "summary": one-line summary (max 100 chars).
 3. "folder": classify into the best folder from: [%s]
 

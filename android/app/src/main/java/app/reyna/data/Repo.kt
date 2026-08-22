@@ -492,6 +492,7 @@ class Repo private constructor(private val context: Context) {
                     .put("quote", c.quote)
                     .put("context", c.context)
                     .put("confidence", c.confidence)
+                    .put("page", c.page)
             )
         }
         return arr.toString()

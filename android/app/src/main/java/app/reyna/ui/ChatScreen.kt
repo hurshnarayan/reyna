@@ -98,6 +98,8 @@ data class Source(
     val quote: String,
     val context: String,
     val confidence: Double,
+    /** Page the quote sits on, so the viewer can open there. */
+    val page: Int,
 )
 
 /**
@@ -128,6 +130,7 @@ fun ChatScreen(
     onStop: () -> Unit = {},
     onClearChat: () -> Unit = {},
     onOpenFile: (Long) -> Unit = {},
+    onOpenSource: (Source) -> Unit = {},
     onAskWhoShared: (Long) -> Unit = {},
     pendingToDrive: Int = 0,
     pushing: Boolean = false,
@@ -193,7 +196,10 @@ fun ChatScreen(
         if (sheetSources.isNotEmpty()) {
             SourcesSheet(
                 sources = sheetSources,
-                onOpenFile = onOpenFile,
+                onOpenSource = {
+                    sheetSources = emptyList()
+                    onOpenSource(it)
+                },
                 onAskWhoShared = onAskWhoShared,
                 onDismiss = { sheetSources = emptyList() },
             )
@@ -550,7 +556,7 @@ private fun PendingBanner(count: Int, pushing: Boolean, onPush: () -> Unit) {
 @Composable
 private fun SourcesSheet(
     sources: List<Source>,
-    onOpenFile: (Long) -> Unit,
+    onOpenSource: (Source) -> Unit,
     onAskWhoShared: (Long) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -573,7 +579,7 @@ private fun SourcesSheet(
                 fontWeight = FontWeight.SemiBold,
                 color = c.onSurface,
             )
-            sources.forEach { s -> SourceCard(s, onOpenFile, onAskWhoShared) }
+            sources.forEach { s -> SourceCard(s, onOpenSource, onAskWhoShared) }
         }
     }
 }
@@ -581,7 +587,7 @@ private fun SourcesSheet(
 @Composable
 private fun SourceCard(
     source: Source,
-    onOpenFile: (Long) -> Unit,
+    onOpenSource: (Source) -> Unit,
     onAskWhoShared: (Long) -> Unit,
 ) {
     val c = reynaColors
@@ -638,7 +644,7 @@ private fun SourceCard(
 
         Spacer(Modifier.height(11.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            SheetAction("Open") { onOpenFile(source.fileId) }
+            SheetAction("Open") { onOpenSource(source) }
             if (source.confidence < Attribution.MIN_NAMED) {
                 Spacer(Modifier.width(8.dp))
                 SheetAction("Who shared this?") { onAskWhoShared(source.fileId) }

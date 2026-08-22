@@ -60,6 +60,8 @@ class ReynaApi(
         val quote: String,
         val context: String,
         val confidence: Double,
+        /** Page the quote sits on. Always at least 1. */
+        val page: Int,
     )
 
     data class CitedFile(
@@ -375,6 +377,7 @@ class ReynaApi(
                 quote = quote,
                 context = o.optString("context").ifBlank { quote },
                 confidence = o.optDouble("attribution_confidence", 0.0),
+                page = o.optInt("page", 1).coerceAtLeast(1),
             )
         }
     }

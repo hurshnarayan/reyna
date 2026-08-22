@@ -174,6 +174,7 @@ private fun MainShell(vm: ReynaViewModel) {
     var trackingOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
     var repairFor by remember { mutableStateOf<Long?>(null) }
+    var viewing by remember { mutableStateOf<ViewingPdf?>(null) }
 
     val messages by vm.messages.collectAsState()
     val files by vm.files.collectAsState()
@@ -193,8 +194,9 @@ private fun MainShell(vm: ReynaViewModel) {
         ActivityResultContracts.OpenDocument(),
     ) { uri -> uri?.let { vm.importExport(it) { } } }
 
-    BackHandler(enabled = trackingOpen || settingsOpen || repairFor != null) {
+    BackHandler(enabled = trackingOpen || settingsOpen || repairFor != null || viewing != null) {
         when {
+            viewing != null -> viewing = null
             repairFor != null -> repairFor = null
             settingsOpen -> settingsOpen = false
             else -> trackingOpen = false
@@ -203,6 +205,20 @@ private fun MainShell(vm: ReynaViewModel) {
 
     Box(Modifier.fillMaxSize().background(c.background).statusBarsPadding()) {
         when {
+            viewing != null -> Column(Modifier.fillMaxSize()) {
+                val v = viewing!!
+                SubToolbar(
+                    title = v.file.name,
+                    action = "Open in another app",
+                    onAction = { vm.openInOtherApp(v.file) },
+                ) { viewing = null }
+                PdfViewerScreen(
+                    file = java.io.File(v.file.path),
+                    quote = v.quote,
+                    startPage = v.page,
+                )
+            }
+
             repairFor != null -> Column(Modifier.fillMaxSize()) {
                 SubToolbar("Who shared this?") { repairFor = null }
                 RepairScreen(
@@ -246,6 +262,21 @@ private fun MainShell(vm: ReynaViewModel) {
                             onStop = vm::stopAnswering,
                             onClearChat = vm::clearChat,
                             onOpenFile = vm::openFile,
+                            onOpenSource = { src ->
+                                // A citation names the backend's file, so the
+                                // local row has to be resolved before anything
+                                // can be opened. PDFs get the page viewer;
+                                // everything else has no page to jump to and
+                                // goes to whatever app the phone already uses.
+                                val local = vm.localFileFor(src.fileId, src.fileName)
+                                when {
+                                    local == null ->
+                                        vm.note("That file is not on this phone.")
+                                    local.name.endsWith(".pdf", ignoreCase = true) ->
+                                        viewing = ViewingPdf(local, src.quote, src.page)
+                                    else -> vm.openInOtherApp(local)
+                                }
+                            },
                             onAskWhoShared = { repairFor = it },
                             pendingToDrive = driveState?.pending ?: 0,
                             pushing = pushing,
@@ -270,8 +301,20 @@ private fun MainShell(vm: ReynaViewModel) {
     }
 }
 
+/** What the PDF viewer is currently showing. */
+private data class ViewingPdf(
+    val file: app.reyna.data.FileEntity,
+    val quote: String,
+    val page: Int,
+)
+
 @Composable
-private fun SubToolbar(title: String, onBack: () -> Unit) {
+private fun SubToolbar(
+    title: String,
+    action: String? = null,
+    onAction: (() -> Unit)? = null,
+    onBack: () -> Unit,
+) {
     val c = reynaColors
     Column {
         Row(
@@ -285,7 +328,26 @@ private fun SubToolbar(title: String, onBack: () -> Unit) {
                 Icon(Icons.Rounded.ArrowBack, "Back", tint = c.onSurface, modifier = Modifier.size(22.dp))
             }
             Spacer(Modifier.size(4.dp))
-            Text(title, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = c.onSurface)
+            Text(
+                title,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = c.onSurface,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (action != null && onAction != null) {
+                Spacer(Modifier.size(8.dp))
+                Box(
+                    Modifier
+                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(7.dp))
+                        .clickable { onAction() }
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                ) {
+                    Text(action, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = c.accent)
+                }
+            }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.divider))
     }
