@@ -1719,6 +1719,14 @@ func (s *Store) CountCommittedFiles(groupID int64) int {
 // for a WhatsApp document called DOC-20260818-WA0041.pdf means not findable at
 // all. These are the ones a backfill has to revisit.
 func (s *Store) FilesMissingContent(limit int) ([]model.File, error) {
+	// Documents only, never photographs.
+	//
+	// A phone's WhatsApp folder is overwhelmingly images: 762 of 903 in the
+	// library this was written against, most of them forwards and memes.
+	// Reading them costs the same as reading a contract and returns a
+	// description nobody will ever search for. On a metered or rate limited
+	// model that is where the entire allowance goes, and the documents people
+	// actually want never get read at all.
 	rows, err := s.db.Query(
 		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name,
 		        file_size, mime_type, drive_file_id, drive_folder_id, subject, tags,
@@ -1727,6 +1735,7 @@ func (s *Store) FilesMissingContent(limit int) ([]model.File, error) {
 		   FROM files
 		  WHERE (extracted_content IS NULL OR extracted_content = '')
 		    AND status != 'deleted_in_drive'
+		    AND mime_type NOT LIKE 'image/%'
 		  ORDER BY posted_at DESC
 		  LIMIT ?`, limit)
 	if err != nil {

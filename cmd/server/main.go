@@ -136,8 +136,17 @@ func main() {
 	// time instead of never. One at a time on purpose: a question asked right
 	// now should not queue behind a hundred documents.
 	go func() {
+		// Backs off hard when the model refuses.
+		//
+		// On a free tier capped per day, a worker that retries every twenty
+		// seconds spends the entire day's allowance within minutes of it
+		// resetting, and it does so at four in the morning when nobody is
+		// asking anything. The user then finds no quota left for the one
+		// question they actually wanted answered. A refusal now means an hour
+		// of silence, which leaves the allowance for interactive use.
+		backoff := 20 * time.Second
 		for {
-			time.Sleep(20 * time.Second)
+			time.Sleep(backoff)
 			pending, err := store.FilesMissingContent(1)
 			if err != nil || len(pending) == 0 {
 				continue
@@ -155,8 +164,13 @@ func main() {
 				f.FileName, f.MimeType, data, nil, nlp.FileMeta{},
 			)
 			if content == "" && summary == "" {
+				// Almost always a refused call rather than an empty document.
+				if backoff < time.Hour {
+					backoff = time.Hour
+				}
 				continue
 			}
+			backoff = 20 * time.Second
 			store.UpdateFileContent(f.ID, content, summary)
 			if subject != "" && (f.Subject == "" || f.Subject == "Uncategorized" || f.Subject == "Documents") {
 				store.UpdateFileSubject(f.ID, subject)

@@ -577,9 +577,20 @@ func (s *Server) handleDeviceUpload(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var extractedContent, contentSummary string
-		if len(data) > 0 && (strings.Contains(mime, "pdf") || nlp.IsOfficeDoc(mime)) {
+		switch {
+		case len(data) > 0 && (strings.Contains(mime, "pdf") || nlp.IsOfficeDoc(mime)):
 			classifySubject, _, _, extractedContent, contentSummary = s.classifier.ClassifyFileWithContent(fName, mime, data, existingFolders, fmeta)
-		} else {
+
+		case strings.HasPrefix(mime, "image/"):
+			// Photographs get a folder without asking a model.
+			//
+			// A model call per image is a call spent deciding that a forwarded
+			// photo belongs in Photos. Multiply that by the several hundred
+			// images a real phone holds and it is the whole daily allowance,
+			// spent before a single document has been read.
+			classifySubject = "Photos"
+
+		default:
 			classifySubject, _, _ = s.classifier.ClassifyFile(fName, existingFolders)
 		}
 
