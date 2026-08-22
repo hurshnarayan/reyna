@@ -132,6 +132,33 @@ tunnel-up:
     echo
     echo "Then: just apk-release"
 
+# Keep the tunnel alive, restarting and rewiring it whenever it dies.
+tunnel-keep:
+    #!/usr/bin/env bash
+    # A free trycloudflare tunnel drops on its own, several times a day in
+    # practice. This watches it and brings it back, rewiring the server and the
+    # OAuth redirect each time.
+    #
+    # It cannot keep the address: a quick tunnel gets a new hostname on every
+    # start, so an APK built against the old one stops working. Making that
+    # invisible needs the app to look the address up somewhere stable, which is
+    # a separate piece of work. Until then this keeps the backend reachable and
+    # tells you when the address changed.
+    set -uo pipefail
+    while true; do
+      if ! pgrep -f 'cloudflared tunnel --url' >/dev/null 2>&1; then
+        echo "$(date '+%H:%M:%S') tunnel down, restarting"
+        just tunnel-up || true
+        echo "$(date '+%H:%M:%S') new address: $(cat /tmp/reyna-tunnel-url.txt 2>/dev/null)"
+        echo "  rebuild the app with: just apk-release"
+      elif ! curl -sf -m 15 -o /dev/null "$(cat /tmp/reyna-tunnel-url.txt 2>/dev/null)/api/health"; then
+        echo "$(date '+%H:%M:%S') tunnel process alive but not answering, restarting"
+        pkill -f 'cloudflared tunnel --url' 2>/dev/null || true
+        sleep 2
+      fi
+      sleep 20
+    done
+
 # Print the current tunnel address and the redirect URI to register.
 tunnel-url:
     @u=$(cat /tmp/reyna-tunnel-url.txt 2>/dev/null); echo "$u"; echo "$u/api/auth/google/callback"
