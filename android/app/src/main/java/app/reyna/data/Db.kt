@@ -209,6 +209,9 @@ interface ReynaDao {
     @Query("SELECT * FROM messages ORDER BY at ASC")
     fun observeMessages(): Flow<List<MessageEntity>>
 
+    @Query("SELECT * FROM messages ORDER BY at DESC LIMIT :limit")
+    suspend fun recentMessages(limit: Int): List<MessageEntity>
+
     @Query("SELECT COUNT(*) FROM messages")
     suspend fun messageCount(): Int
 

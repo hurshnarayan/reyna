@@ -1533,8 +1533,8 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse the natural language query into WHO/WHAT/WHEN/WHY
-	who, what, when, why := s.classifier.ParseNLPQuery(req.Query)
+	// Parse the natural language query into WHO/WHAT/WHEN/WHY with conversation history
+	who, what, when, why := s.classifier.ParseNLPQueryWithHistory(req.Query, req.History)
 	// Reyna is the assistant/app name, not a sender person
 	if strings.EqualFold(strings.TrimSpace(who), "reyna") {
 		if what == "" {
@@ -1544,7 +1544,7 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 		}
 		who = ""
 	}
-	log.Printf("[NLP-RETRIEVE] query=%q → who=%q what=%q when=%q why=%q", req.Query, who, what, when, why)
+	log.Printf("[NLP-RETRIEVE] query=%q history_turns=%d → who=%q what=%q when=%q why=%q", req.Query, len(req.History), who, what, when, why)
 
 	// Resolve time window
 	var sinceTime *time.Time
@@ -1721,7 +1721,7 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 	if len(files) > maxCitedFiles {
 		files = files[:maxCitedFiles]
 	}
-	sourced := s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, dbView, driveView)
+	sourced := s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, dbView, driveView, req.History)
 	citations := s.verifyCitations(sourced.Quotes, files)
 	if len(citations) == 0 && len(files) > 0 {
 		lowerReply := strings.ToLower(sourced.Answer)

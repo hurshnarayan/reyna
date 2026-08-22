@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hurshnarayan/reyna/internal/integrations/llm"
+	"github.com/hurshnarayan/reyna/internal/model"
 )
 
 // geminiInlineMaxBytes is the safe ceiling for inline base64-encoded file data
@@ -811,9 +812,14 @@ Respond ONLY with JSON: {"content": "...", "summary": "..."}`, fileName, mimeTyp
 // ParseNLPQuery parses a natural language query into structured components.
 // Uses AI as primary parser, keyword as fallback (per PDF: "the main killer feature").
 func (c *Classifier) ParseNLPQuery(query string) (who, what, when, why string) {
-	// Primary: Use LLM for accurate parsing of any natural language
+	return c.ParseNLPQueryWithHistory(query, nil)
+}
+
+// ParseNLPQueryWithHistory parses a query with recent conversation history for pronoun/context resolution.
+func (c *Classifier) ParseNLPQueryWithHistory(query string, history []model.ChatMessageContext) (who, what, when, why string) {
+	// Primary: Use LLM for accurate parsing of any natural language with context
 	if c.IsEnabled() {
-		who, what, when, why = c.llmParseQuery(query)
+		who, what, when, why = c.llmParseQueryWithHistory(query, history)
 		if who != "" || what != "" {
 			if strings.EqualFold(strings.TrimSpace(who), "reyna") {
 				if what == "" {
@@ -975,17 +981,40 @@ func (c *Classifier) keywordParseQuery(query string) (who, what, when, why strin
 }
 
 func (c *Classifier) llmParseQuery(query string) (who, what, when, why string) {
+	return c.llmParseQueryWithHistory(query, nil)
+}
+
+func (c *Classifier) llmParseQueryWithHistory(query string, history []model.ChatMessageContext) (who, what, when, why string) {
+	var histSection string
+	if len(history) > 0 {
+		var histBuf strings.Builder
+		histBuf.WriteString("Recent Conversation History:\n")
+		for _, h := range history {
+			role := "User"
+			if h.Role == "assistant" {
+				role = "Assistant"
+			}
+			fmt.Fprintf(&histBuf, "%s: %s\n", role, h.Text)
+			if len(h.FileNames) > 0 {
+				fmt.Fprintf(&histBuf, "  (Files cited: %s)\n", strings.Join(h.FileNames, ", "))
+			}
+		}
+		histBuf.WriteString("\n")
+		histSection = histBuf.String()
+	}
+
 	prompt := fmt.Sprintf(`You are a query parser for a file retrieval system covering documents shared in a person's chats.
 Parse this natural language query into structured search filters.
 
-Query: "%s"
+%sCurrent Query: "%s"
 
 Rules:
 - "who": Extract the PERSON'S NAME if the user is asking about files from a specific sender person. Leave empty if no person mentioned.
   IMPORTANT: The assistant/app itself is named "Reyna". "Reyna" is NEVER a sender person. If the user mentions "Reyna" (e.g. "Reyna script", "Reyna document", "hey Reyna find X"), "Reyna" belongs in "what" if it is part of the topic/document name, or ignored if used as a greeting. NEVER set "who" to "Reyna".
-- "what": Extract the SPECIFIC TOPIC, KEYWORD, or SUBJECT being searched. If the user just says generic words like "notes", "files", "stuff", "documents" with no specific topic, leave this empty.
+- "what": Extract the SPECIFIC TOPIC, KEYWORD, or SUBJECT being searched.
+  CONTEXT RESOLUTION RULE: If the query uses pronouns or follow-up phrases (e.g. "can you find it?", "what does it say?", "explain module 1 from that", "open it", "summarize it", "who sent it?", "send that to me", "where is that exam?"), RESOLVE the referred topic or file from the Conversation History and output that specific topic/filename in "what". If there is no previous context and the user uses generic words like "notes", "files", "stuff", leave this empty.
 - "when": Extract time reference as one of: today, yesterday, last_week, this_week, last_month. ONLY extract when an explicit calendar period is specified. Words like "latest", "recent", "newest", "last" indicate sorting order, NOT a time filter; leave "when" empty for them.
-- "why": One of: retrieve, search, check_existence, activity_check
+- "why": One of: retrieve, search, check_existence, activity_check, qa
 
 Examples:
 - "can you find me the latest Reyna script received" → {"who":"","what":"Reyna script","when":"","why":"search"}
@@ -996,7 +1025,7 @@ Examples:
 - "rakesh shared quantum mechanics pdf" → {"who":"rakesh","what":"quantum mechanics","when":"","why":"retrieve"}
 
 Respond ONLY with JSON, no other text:
-{"who":"","what":"","when":"","why":"retrieve"}`, query)
+{"who":"","what":"","when":"","why":"retrieve"}`, histSection, query)
 
 	result, err := c.llm.Complete(prompt, 600)
 	if err != nil {
@@ -1279,9 +1308,27 @@ func cleanLLMReply(s string) string {
 // retrieval results. This replaces the old template-string buildNLPReply with
 // a conversational, multi-language, intent-aware response. Falls back to a
 // simple template if the LLM call fails.
-func (c *Classifier) GenerateRetrievalReply(rawQuery, who, what, when, why string, files []RetrievalFile, driveMatches []RetrievalFile) SourcedReply {
+func (c *Classifier) GenerateRetrievalReply(rawQuery, who, what, when, why string, files []RetrievalFile, driveMatches []RetrievalFile, history []model.ChatMessageContext) SourcedReply {
 	if !c.IsEnabled() {
 		return SourcedReply{Answer: fallbackRetrievalReply(rawQuery, files, driveMatches, who, what, when)}
+	}
+
+	var histSection string
+	if len(history) > 0 {
+		var histBuf strings.Builder
+		histBuf.WriteString("RECENT CONVERSATION HISTORY:\n")
+		for _, h := range history {
+			role := "User"
+			if h.Role == "assistant" {
+				role = "Assistant (Reyna)"
+			}
+			fmt.Fprintf(&histBuf, "%s: %s\n", role, h.Text)
+			if len(h.FileNames) > 0 {
+				fmt.Fprintf(&histBuf, "  (Files cited: %s)\n", strings.Join(h.FileNames, ", "))
+			}
+		}
+		histBuf.WriteString("\n")
+		histSection = histBuf.String()
 	}
 
 	var ctx strings.Builder
@@ -1312,9 +1359,10 @@ func (c *Classifier) GenerateRetrievalReply(rawQuery, who, what, when, why strin
 		ctx.WriteString("(no matching files found in database or Drive)\n")
 	}
 
-	prompt := fmt.Sprintf(`You are Reyna. Someone just searched the documents shared in their chats. They may be looking for anything: an invoice, a contract, a ticket, a record, a manual, notes, scripts. Write a natural, conversational reply describing what was found.
+	prompt := fmt.Sprintf(`You are Reyna. You are a personal document assistant helping someone find and understand files in their chats.
+Write a natural, conversational reply describing what was found or directly answering their question.
 
-CRITICAL LANGUAGE RULE — read this twice:
+%sCRITICAL LANGUAGE RULE — read this twice:
 - Detect the language of the QUERY ITSELF (not the sender names — "rakesh" or "mohit" are proper nouns and do NOT indicate Hindi).
 - If the query is written in English, reply ONLY in English.
 - If the query is written in Hindi (Devanagari), reply in Hindi.
@@ -1322,38 +1370,32 @@ CRITICAL LANGUAGE RULE — read this twice:
 - If the query is in Bhojpuri / Tamil / Bengali / Marathi / Kannada / Telugu / Malayalam, reply in that language.
 - Match the tone too — casual query → casual reply; formal query → formal reply.
 
+CONVERSATION CONTEXT & FOLLOW-UP QUESTIONS:
+- If recent conversation history is present above, this may be a follow-up (e.g. "can you find it?", "what does it say?", "explain module 1 from that", "who sent it?").
+- Connect pronouns ("it", "that", "this file") to the file or topic from recent conversation turns.
+- Answer naturally without asking the user to re-specify the file if it was already discussed!
+
 RESPOND ONLY WITH JSON, in exactly this shape and nothing around it:
 {"answer": "...", "quotes": [{"file": "exact filename", "quote": "verbatim text copied from that file's summary"}]}
 
-- "answer" is what the user asked for and nothing else. No raw filenames, no sender, no date, no "I found this in". The interface shows all of that separately via the Sources button and chips, so repeating filenames in the text is noise around the one sentence they wanted. Write one or two clean, plain sentences.
-- "quotes" is the evidence. Copy the lines from the summary that contain the answer or describe the topic, character for character. Do not paraphrase, do not tidy, do not translate. If the answer came from a table row, the quote is that row.
-- Every quote must appear word for word in a summary above.
-- If nothing above answers the question, say so plainly in "answer" and return an empty "quotes" list. Never invent either one.
+- "answer" is what the user asked for and nothing else. No raw filenames list. Write one or two clean, natural conversational sentences.
+- "quotes" is the evidence. Copy the lines from the summary or filename that contain the answer or describe the topic.
+- Every quote must correspond to a file above.
+- If nothing above answers the question, say so plainly in "answer" and return an empty "quotes" list.
 
-ANSWER THE QUESTION FIRST. This matters more than anything else:
+ANSWER THE QUESTION FIRST:
 - Each file carries a "summary:" holding text taken from inside the document.
 - If the query asks something factual and the answer is in there, SAY THE ANSWER directly in plain sentences.
   Example: "which room is the operating systems exam in" → "The Operating Systems exam is scheduled to be held in room B-207."
   Example: "can you find me the latest Reyna script received" → "The latest Reyna script covers the meeting and presentation deck for SIH."
-- Do not name the file in "answer". Put the evidence in "quotes" instead.
-- If the summaries genuinely do not contain the answer, say that plainly, then summarize what you did find.
-- Never invent a fact that is not in a summary.
-
-Formatting of "answer":
-- Plain sentences. No markdown, no bullets, no filenames in parentheses, no dates.
-- Under 50 words.
-
-CRITICAL TIME RULE:
-- The "shared:" line in each file's metadata below is the GROUND TRUTH. Use it verbatim if mentioning time.
-
-CRITICAL ATTRIBUTION RULE:
-- "sender:" is empty for files where we do not know who shared them (e.g. found on phone). For those files, NEVER invent a sender. If the user asked about a specific person and some results have no sender, say you found the file but the original sender is unconfirmed.
+  Example: "can you find it?" (after asking about C programming) → "I found the C programming lab manual in your Lab folder."
+- Do not dump lists of filenames in "answer". Put the evidence in "quotes" instead.
 
 ORIGINAL QUERY: %s
 PARSED — who:%s what:%s when:%s why:%s
 
 %s
-Your reply:`, rawQuery, who, what, when, why, ctx.String())
+Your reply:`, histSection, rawQuery, who, what, when, why, ctx.String())
 
 	result, err := c.llm.Complete(prompt, 900)
 	if err != nil || result == "" {

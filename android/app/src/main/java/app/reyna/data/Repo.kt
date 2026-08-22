@@ -447,12 +447,22 @@ class Repo private constructor(private val context: Context) {
         question: String,
         onCall: (okhttp3.Call) -> Unit = {},
     ): ReynaApi.Answer? = withContext(Dispatchers.IO) {
+        // Collect recent conversation turns before inserting current query
+        val recent = dao.recentMessages(6).reversed().filter { it.text.isNotBlank() }
+        val history = recent.map { msg ->
+            ReynaApi.ChatContext(
+                role = if (msg.fromUser) "user" else "assistant",
+                text = msg.text,
+                fileNames = decodeCitations(msg.citations).map { it.fileName },
+            )
+        }
+
         dao.insertMessage(MessageEntity(text = question, fromUser = true, at = System.currentTimeMillis()))
 
         // Sync pending captures first so the backend knows about all local files
         runCatching { syncPending() }
 
-        val answer = api().ask(question, onCall).getOrNull()
+        val answer = api().ask(question, history, onCall).getOrNull()
         var reply = answer?.reply
             ?: "I could not reach the backend. Your files are still safe on this phone."
 
@@ -516,6 +526,29 @@ class Repo private constructor(private val context: Context) {
             )
         )
         answer
+    }
+
+    private fun decodeCitations(json: String): List<ReynaApi.Citation> {
+        if (json.isBlank()) return emptyList()
+        return runCatching {
+            val arr = org.json.JSONArray(json)
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                val quote = o.optString("quote")
+                if (quote.isBlank()) return@mapNotNull null
+                ReynaApi.Citation(
+                    fileId = o.optLong("file_id", 0),
+                    fileName = o.optString("file_name"),
+                    sender = o.optString("sender").ifBlank { null },
+                    sharedAt = o.optString("shared_at").ifBlank { null },
+                    folder = o.optString("folder").ifBlank { null },
+                    quote = quote,
+                    context = o.optString("context").ifBlank { quote },
+                    confidence = o.optDouble("confidence", 0.0),
+                    page = o.optInt("page", 1).coerceAtLeast(1),
+                )
+            }
+        }.getOrDefault(emptyList())
     }
 
     /**

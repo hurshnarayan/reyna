@@ -151,27 +151,41 @@ class ReynaApi(
         }
     }.onFailure { Log.w(TAG, "upload failed: ${it.message}") }
 
+    data class ChatContext(
+        val role: String,
+        val text: String,
+        val fileNames: List<String> = emptyList(),
+    )
+
     /**
-     * Asks a question. The backend parses it, searches, and writes the reply.
-     *
-     * [onCall] receives the in-flight call so the caller can cancel it. An
-     * answer can take twenty seconds when the backend has to read documents,
-     * and a user who has changed their mind needs the socket actually torn
-     * down, not a cancelled coroutine quietly discarding a reply the server is
-     * still working on.
+     * Queries the NLP retrieve endpoint with natural language and conversation history.
      */
-    fun ask(question: String, onCall: (okhttp3.Call) -> Unit = {}): Result<Answer> = runCatching {
-        // The identity has to travel with the question. The server scopes a
-        // search to the groups the asker belongs to, and it resolves the asker
-        // from a JWT or from this phone field. The device token is not a JWT,
-        // so without this the search resolved to no user, matched no groups,
-        // and answered "couldn't find anything" for files it had just stored.
-        val payload = JSONObject()
+    fun ask(
+        question: String,
+        history: List<ChatContext> = emptyList(),
+        onCall: (okhttp3.Call) -> Unit = {}
+    ): Result<Answer> = runCatching {
+        val payloadObj = JSONObject()
             .put("query", question)
             .put("user_phone", DEVICE_IDENTITY)
-            .toString()
-            .toRequestBody(JSON)
 
+        if (history.isNotEmpty()) {
+            val histArr = org.json.JSONArray()
+            for (h in history) {
+                val hObj = JSONObject()
+                    .put("role", h.role)
+                    .put("text", h.text)
+                if (h.fileNames.isNotEmpty()) {
+                    val fnArr = org.json.JSONArray()
+                    h.fileNames.forEach { fnArr.put(it) }
+                    hObj.put("file_names", fnArr)
+                }
+                histArr.put(hObj)
+            }
+            payloadObj.put("history", histArr)
+        }
+
+        val payload = payloadObj.toString().toRequestBody(JSON)
         val req = Request.Builder().url(url("/api/nlp/retrieve")).auth().post(payload).build()
         val call = client.newCall(req)
         onCall(call)

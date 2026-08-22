@@ -252,10 +252,18 @@ type WaitlistRequest struct {
 
 // ── NLP Conversational Retrieval ──
 
+type ChatMessageContext struct {
+	Role      string   `json:"role"`                 // "user" or "assistant"
+	Text      string   `json:"text"`                 // message text
+	FileIDs   []int64  `json:"file_ids,omitempty"`   // file IDs referenced
+	FileNames []string `json:"file_names,omitempty"` // filenames referenced/cited
+}
+
 type NLPRetrievalRequest struct {
-	Query     string `json:"query"`       // natural language query
-	GroupWAID string `json:"group_wa_id"` // optional: scope to a group
-	UserPhone string `json:"user_phone"`
+	Query     string               `json:"query"`       // natural language query
+	GroupWAID string               `json:"group_wa_id"` // optional: scope to a group
+	UserPhone string               `json:"user_phone"`
+	History   []ChatMessageContext `json:"history,omitempty"` // recent chat history for context
 }
 
 type NLPRetrievalResponse struct {
