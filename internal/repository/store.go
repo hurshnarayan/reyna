@@ -1485,18 +1485,51 @@ func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *ti
 		whoRankArgs = whoMatchArgs
 	}
 
-	// WHAT filter — tokenized OR-match with rank-by-hits.
+	// WHAT filter — tokenized OR-match with weighted rank-by-hits.
 	tokens := TokenizeWhat(what)
 	rankExpr := "0"
+	var rankArgs []interface{}
 	if what != "" && len(tokens) > 0 {
+		cleanPhrase := strings.TrimSpace(strings.ToLower(what))
 		var orParts []string
 		var rankParts []string
-		for _, tok := range tokens {
-			orParts = append(orParts, "(LOWER(f.file_name) LIKE ? OR LOWER(f.subject) LIKE ? OR LOWER(f.tags) LIKE ? OR LOWER(f.extracted_content) LIKE ? OR LOWER(f.content_summary) LIKE ?)")
-			rankParts = append(rankParts, "(CASE WHEN LOWER(f.file_name) LIKE ? OR LOWER(f.subject) LIKE ? OR LOWER(f.tags) LIKE ? OR LOWER(f.extracted_content) LIKE ? OR LOWER(f.content_summary) LIKE ? THEN 1 ELSE 0 END)")
-			like := "%" + tok + "%"
-			args = append(args, like, like, like, like, like)
+
+		// 1. Exact phrase match boost in filename or subject (e.g. "c programming", "reyna script")
+		if strings.Contains(cleanPhrase, " ") {
+			phraseLike := "%" + cleanPhrase + "%"
+			orParts = append(orParts, "LOWER(f.file_name) LIKE ?", "LOWER(f.subject) LIKE ?")
+			args = append(args, phraseLike, phraseLike)
+			rankParts = append(rankParts, "(CASE WHEN LOWER(f.file_name) LIKE ? THEN 60 WHEN LOWER(f.subject) LIKE ? THEN 40 ELSE 0 END)")
+			rankArgs = append(rankArgs, phraseLike, phraseLike)
 		}
+
+		// 2. Individual token matches with heavy weighting on filename and subject
+		for _, tok := range tokens {
+			like := "%" + tok + "%"
+			if len(tok) <= 2 {
+				// Short token / acronym (e.g. "c", "os", "ai", "db"): match only filename, subject, tags
+				orParts = append(orParts, "(LOWER(f.file_name) LIKE ? OR LOWER(f.subject) LIKE ? OR LOWER(f.tags) LIKE ?)")
+				args = append(args, like, like, like)
+				rankParts = append(rankParts, "(CASE WHEN LOWER(f.file_name) LIKE ? THEN 25 WHEN LOWER(f.subject) LIKE ? THEN 15 ELSE 0 END)")
+				rankArgs = append(rankArgs, like, like)
+			} else {
+				orParts = append(orParts, "(LOWER(f.file_name) LIKE ? OR LOWER(f.subject) LIKE ? OR LOWER(f.tags) LIKE ? OR LOWER(f.extracted_content) LIKE ? OR LOWER(f.content_summary) LIKE ?)")
+				args = append(args, like, like, like, like, like)
+				rankParts = append(rankParts, "(CASE WHEN LOWER(f.file_name) LIKE ? THEN 25 WHEN LOWER(f.subject) LIKE ? THEN 15 WHEN LOWER(f.extracted_content) LIKE ? THEN 2 ELSE 0 END)")
+				rankArgs = append(rankArgs, like, like, like)
+			}
+		}
+
+		// 3. Multi-token AND boost in filename (when all tokens appear together in filename)
+		if len(tokens) >= 2 {
+			var andParts []string
+			for _, tok := range tokens {
+				andParts = append(andParts, "LOWER(f.file_name) LIKE ?")
+				rankArgs = append(rankArgs, "%"+tok+"%")
+			}
+			rankParts = append(rankParts, "(CASE WHEN ("+strings.Join(andParts, " AND ")+") THEN 40 ELSE 0 END)")
+		}
+
 		conditions = append(conditions, "("+strings.Join(orParts, " OR ")+")")
 		rankExpr = strings.Join(rankParts, " + ")
 	}
@@ -1513,10 +1546,7 @@ func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *ti
 	// in the statement: WHO rank first, then content rank.
 	args = append(args, whoRankArgs...)
 	if rankExpr != "0" {
-		for _, tok := range tokens {
-			like := "%" + tok + "%"
-			args = append(args, like, like, like, like, like)
-		}
+		args = append(args, rankArgs...)
 	}
 	args = append(args, interface{}(limit))
 
@@ -1657,10 +1687,16 @@ func TokenizeWhat(what string) []string {
 		}
 		return ' '
 	}, lower)
+	shortAllowed := map[string]bool{
+		"c": true, "r": true, "go": true, "os": true, "ai": true, "ml": true,
+		"ds": true, "db": true, "cn": true, "se": true, "ia": true, "be": true,
+		"it": true, "cs": true, "ee": true, "ec": true, "me": true, "cv": true,
+		"py": true, "js": true, "ui": true, "ux": true, "ip": true,
+	}
 	var out []string
 	seen := map[string]bool{}
 	for _, tok := range strings.Fields(cleaned) {
-		if len(tok) < 3 || stop[tok] || seen[tok] {
+		if (len(tok) < 3 && !shortAllowed[tok]) || stop[tok] || seen[tok] {
 			continue
 		}
 		seen[tok] = true

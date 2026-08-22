@@ -463,39 +463,45 @@ class Repo private constructor(private val context: Context) {
         var citedIds = answer?.files.orEmpty().mapNotNull { cited ->
             local.firstOrNull { it.name.equals(cited.name, ignoreCase = true) }?.id
         }
+        var citations = answer?.citations.orEmpty()
 
-        // Local search fallback: if backend returned no matching files,
-        // check whether the local device holds matching files.
-        if (citedIds.isEmpty() && local.isNotEmpty()) {
-            val localHits = app.reyna.search.FileSearch.search(
-                query = question,
-                files = local.map { f ->
-                    app.reyna.search.SearchableFile(
-                        id = f.id,
-                        fileName = f.name,
-                        senderName = f.senderName,
-                        chatName = f.chatName,
-                        whenText = "",
-                        confidence = f.confidence,
-                        isImage = f.isImage,
-                    )
-                },
-                fuzzy = true,
-            ).filter { it.score > 0 }
+        // Offline fallback: if backend could not be reached, search local files cleanly
+        if (answer == null && local.isNotEmpty()) {
+            val qLower = question.lowercase()
+            val stopWords = setOf(
+                "find", "any", "the", "for", "with", "from", "that", "this", "file", "files",
+                "pdf", "pdfs", "doc", "docs", "notes", "note", "can", "you", "me", "show",
+                "tell", "what", "where", "which", "is", "are", "have", "please", "received", "get"
+            )
+            val tokens = qLower.split(Regex("[^a-zA-Z0-9]+")).filter {
+                it.isNotBlank() && !stopWords.contains(it)
+            }
+            if (tokens.isNotEmpty()) {
+                val matched = local.filter { f ->
+                    val nameLower = f.name.lowercase()
+                    tokens.any { tok -> nameLower.contains(tok) }
+                }.sortedByDescending { f ->
+                    val nameLower = f.name.lowercase()
+                    tokens.count { tok -> nameLower.contains(tok) }
+                }.take(3)
 
-            if (localHits.isNotEmpty()) {
-                val topLocal = localHits.take(4)
-                citedIds = topLocal.map { it.file.id }
-                if (answer == null || reply.contains("couldn't find", ignoreCase = true) ||
-                    reply.contains("could not find", ignoreCase = true) ||
-                    reply.contains("no files found", ignoreCase = true)
-                ) {
-                    val names = topLocal.map { it.file.fileName }.joinToString(", ")
-                    reply = if (topLocal.size == 1) {
-                        "Found ${topLocal.first().file.fileName} on your phone."
-                    } else {
-                        "Found on your phone: $names"
+                if (matched.isNotEmpty()) {
+                    citedIds = matched.map { it.id }
+                    citations = matched.map { f ->
+                        ReynaApi.Citation(
+                            fileId = f.id,
+                            fileName = f.name,
+                            sender = f.senderName,
+                            sharedAt = "",
+                            folder = f.folder,
+                            quote = f.name,
+                            context = "File on your phone: ${f.name}",
+                            confidence = f.confidence,
+                            page = 1,
+                        )
                     }
+                    val names = matched.joinToString(", ") { it.name }
+                    reply = "I found $names on your phone."
                 }
             }
         }
@@ -506,7 +512,7 @@ class Repo private constructor(private val context: Context) {
                 fromUser = false,
                 at = System.currentTimeMillis(),
                 fileIds = citedIds.joinToString(","),
-                citations = encodeCitations(answer?.citations.orEmpty()),
+                citations = encodeCitations(citations),
             )
         )
         answer

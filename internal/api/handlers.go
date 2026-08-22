@@ -1722,13 +1722,53 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 		files = files[:maxCitedFiles]
 	}
 	sourced := s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, dbView, driveView)
+	citations := s.verifyCitations(sourced.Quotes, files)
+	if len(citations) == 0 && len(files) > 0 {
+		lowerReply := strings.ToLower(sourced.Answer)
+		isNegative := strings.Contains(lowerReply, "couldn't find") ||
+			strings.Contains(lowerReply, "could not find") ||
+			strings.Contains(lowerReply, "no files") ||
+			strings.Contains(lowerReply, "no documents") ||
+			strings.Contains(lowerReply, "unable to find")
+		if !isNegative {
+			top := files[0]
+			sender := ""
+			if top.SenderKnown() {
+				sender = top.SharedByName
+			}
+			content := s.store.GetFileExtractedContent([]int64{top.ID})[top.ID]
+			quote := top.FileName
+			context := "Document: " + top.FileName
+			if top.Subject != "" {
+				context += " (" + top.Subject + ")"
+			}
+			if content != "" {
+				quote = content
+				if len(quote) > 150 {
+					quote = quote[:150] + "..."
+				}
+				context = content
+			}
+			citations = []model.Citation{{
+				FileID:                top.ID,
+				FileName:              top.FileName,
+				Sender:                sender,
+				SharedAt:              formatSharedAt(top.SharedAt()),
+				Folder:                top.Subject,
+				Quote:                 quote,
+				Context:               context,
+				Page:                  1,
+				Confidence:            top.AttributionConfidence,
+			}}
+		}
+	}
 
 	json.NewEncoder(w).Encode(model.NLPRetrievalResponse{
 		Files:        files,
 		DriveMatches: driveMatches,
 		Query:        model.NLPParsedQuery{Who: who, What: what, When: when, Why: why, Raw: req.Query},
 		Reply:        sourced.Answer,
-		Citations:    s.verifyCitations(sourced.Quotes, files),
+		Citations:    citations,
 	})
 }
 
@@ -1759,8 +1799,18 @@ func (s *Server) verifyCitations(quotes []nlp.QuotedSource, files []model.File) 
 		content := s.store.GetFileExtractedContent([]int64{f.ID})[f.ID]
 		quote, context, page, ok := locateQuote(content, q.Quote)
 		if !ok {
-			log.Printf("[CITE] dropped, quote not found in %s", f.FileName)
-			continue
+			// If file has no extracted full text yet, allow metadata citation of the file
+			if content == "" {
+				quote = f.FileName
+				context = "Document: " + f.FileName
+				if f.Subject != "" {
+					context += " (" + f.Subject + ")"
+				}
+				page = 1
+			} else {
+				log.Printf("[CITE] dropped, quote not found in %s", f.FileName)
+				continue
+			}
 		}
 		key := f.FileName + "|" + quote
 		if seen[key] {
@@ -1931,6 +1981,25 @@ func (s *Server) buildNLPReply(files []model.File, driveMatches []model.DriveMat
 // v3: DRIVE FOLDER WALKER (used by NLP retrieval + Q&A)
 // ══════════════════════════════════════════
 
+func tokenMatchesWord(text, token string) bool {
+	if token == "" {
+		return false
+	}
+	if len(token) > 2 {
+		return strings.Contains(text, token)
+	}
+	// Short token (1-2 chars, e.g. "c", "os", "ai", "db"): require word boundary
+	fields := strings.FieldsFunc(text, func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+	})
+	for _, f := range fields {
+		if f == token {
+			return true
+		}
+	}
+	return false
+}
+
 // folderMatchesWhat returns true if a Drive folder name plausibly matches the
 // "what" of an NLP query. Uses substring + a small abbrev table so that
 // "OS notes" matches "Operating Systems", "compiler" matches "Compiler Design",
@@ -1944,9 +2013,9 @@ func folderMatchesWhat(folderName, what string) bool {
 	if fn == w || strings.Contains(fn, w) || strings.Contains(w, fn) {
 		return true
 	}
-	// token-level overlap: any significant token in `what` appearing in folder name
+	// token-level overlap: significant tokens in `what` appearing as bounded words
 	for _, tok := range repository.TokenizeWhat(w) {
-		if strings.Contains(fn, tok) {
+		if tokenMatchesWord(fn, tok) {
 			return true
 		}
 	}
@@ -1995,7 +2064,7 @@ func fileMatchesWhat(fileName, what string) bool {
 		return true
 	}
 	for _, tok := range repository.TokenizeWhat(w) {
-		if strings.Contains(fn, tok) {
+		if tokenMatchesWord(fn, tok) {
 			return true
 		}
 	}
