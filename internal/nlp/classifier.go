@@ -35,6 +35,16 @@ func (c *Classifier) IsEnabled() bool {
 	return c.llm != nil && c.llm.IsEnabled()
 }
 
+// OutOfAllowanceUntil reports whether the day's model allowance is spent, and
+// when it returns. Callers use it to answer plainly instead of doing work that
+// cannot produce an answer.
+func (c *Classifier) OutOfAllowanceUntil() (time.Time, bool) {
+	if c.llm == nil || !c.llm.IsEnabled() {
+		return time.Time{}, false
+	}
+	return llm.QuotaExhaustedUntil()
+}
+
 // ProviderName returns the active LLM provider name
 func (c *Classifier) ProviderName() string {
 	if c.llm == nil {
@@ -1648,9 +1658,13 @@ func fallbackRetrievalReply(rawQuery string, files, driveMatches []RetrievalFile
 	b.WriteString(".")
 
 	// The reason, stated rather than hidden. Someone whose question went
-	// unanswered is owed the cause, especially when it clears by itself.
-	b.WriteString(" I could not read them to answer properly, because today's " +
-		"reading allowance is used up. It resets tomorrow. The sources button " +
-		"lists everything I matched.")
+	// unanswered is owed the cause.
+	//
+	// Running out of the daily allowance no longer reaches this function: it is
+	// detected before any work is done and answered directly, because it is the
+	// common case and deserves a plain sentence rather than a list. What is
+	// left here is a model call that failed for some other reason, so this must
+	// not claim to know which.
+	b.WriteString(" I could not read them to answer properly just now. Trying again may work.")
 	return b.String()
 }

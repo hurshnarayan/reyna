@@ -112,6 +112,14 @@ Consequences that are already designed in, and should not be undone:
   two must stay in agreement: the phone uses its copy to decide which unsent
   files to push ahead of a question. Adjacent query words score far higher than
   scattered ones, which is what tells "Module 1" from "Module4_part1".
+- **Running out of allowance now says so immediately, and says only that.**
+  `Classifier.OutOfAllowanceUntil` is checked before the Drive walk, the
+  document reads and the model call, because every one of those exists to
+  produce an answer and without a model there is no answer to produce. The
+  reply is one sentence naming the local reset time; the matched files are
+  still attached so the sources button works. 20s to 0.03s. The list-style
+  fallback in `fallbackRetrievalReply` is now reached only by model failures
+  that are not quota, and no longer claims to know the cause.
 - **Running out of allowance took two minutes to say so.** A 429 already
   failed fast per model, but every attempt still consumed a slot in the rate
   gate, which permits fifteen a minute, and one question makes several calls

@@ -1727,6 +1727,31 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// ── Out of allowance: say so, and stop ──
+	//
+	// On a free tier of roughly sixty model calls a day this is a state the
+	// user genuinely reaches, most often in the evening, and it is not
+	// recoverable by anything they can do. Everything below this point exists
+	// to produce an answer, and without a model there is no answer to produce:
+	// the Drive walk alone costs twenty seconds and the document reads cost
+	// more, all of it spent arriving at the same admission.
+	//
+	// So admit it immediately. The files that matched are still attached, so
+	// the sources button opens them and the documents are still reachable; the
+	// reply itself just says what happened and when it clears, because a
+	// filename list dressed up as a reply is not an answer and reads as one.
+	if until, spent := s.classifier.OutOfAllowanceUntil(); spent {
+		log.Printf("[NLP-RETRIEVE] out of allowance until %s; answering without a model", until.Format(time.RFC1123))
+		stage.Final(model.NLPRetrievalResponse{
+			Status:    model.NLPStatusAnswered,
+			Files:     files,
+			Query:     model.NLPParsedQuery{Who: who, What: what, When: when, Why: why, Raw: req.Query},
+			Reply:     outOfAllowanceReply(until, len(files)),
+			Citations: nil,
+		})
+		return
+	}
+
 	// Also walk the user's existing Drive folder tree for matches that were
 	// never captured by the bot. This is the fix for "Reyna only sees its own
 	// staging table" — older notes already organised in Drive are now searchable.
@@ -1895,6 +1920,32 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 		Reply:        sourced.Answer,
 		Citations:    citations,
 	})
+}
+
+// outOfAllowanceReply is what Reyna says when it has no model calls left.
+//
+// Plain, short, and about the situation rather than about the files. An
+// earlier version named the closest matches and explained itself over three
+// sentences, which still read as an attempt at an answer and so still felt
+// like being fobbed off. What the user needs is the fact and the time it
+// clears; the files are one tap away under the sources button either way.
+func outOfAllowanceReply(until time.Time, matched int) string {
+	when := "later today"
+	if !until.IsZero() {
+		local := until.In(istLocation)
+		if local.YearDay() == time.Now().In(istLocation).YearDay() {
+			when = "around " + local.Format("3:04 pm")
+		} else {
+			when = "around " + local.Format("3:04 pm") + " tomorrow"
+		}
+	}
+	msg := "I have used up today's reading allowance, so I cannot answer questions until it resets " + when + "."
+	if matched > 0 {
+		msg += " Your documents are all still here, and the ones that matched are under the sources button."
+	} else {
+		msg += " Your documents are all still here, and the Search tab still finds them by name."
+	}
+	return msg
 }
 
 // scoredFiles drops the scores, for the places that only need the files.

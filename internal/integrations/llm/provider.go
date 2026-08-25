@@ -353,6 +353,39 @@ func blockModel(model string, body []byte) {
 	}
 }
 
+// QuotaExhaustedUntil reports whether every configured model has spent its
+// daily allowance, and when the first of them comes back.
+//
+// Exported so a request can find this out before doing any work. Discovering
+// it at the point of the model call means the search, the Drive walk and the
+// document reads have all already happened, and every one of them is wasted:
+// there is nothing left that can turn them into an answer. Asked up front, the
+// same fact becomes an immediate, honest reply.
+//
+// Returns false when no model has been walled, which includes the ordinary
+// case of never having hit a limit at all.
+func QuotaExhaustedUntil() (time.Time, bool) {
+	models := geminiModels()
+	if len(models) == 0 {
+		return time.Time{}, false
+	}
+	quotaWall.mu.Lock()
+	defer quotaWall.mu.Unlock()
+
+	now := time.Now()
+	var soonest time.Time
+	for _, m := range models {
+		t, ok := quotaWall.until[m]
+		if !ok || now.After(t) {
+			return time.Time{}, false
+		}
+		if soonest.IsZero() || t.Before(soonest) {
+			soonest = t
+		}
+	}
+	return soonest, true
+}
+
 // nextPacificMidnight is when Google's free tier daily counters roll over.
 func nextPacificMidnight() time.Time {
 	loc, err := time.LoadLocation("America/Los_Angeles")
