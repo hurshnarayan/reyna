@@ -1378,10 +1378,10 @@ CONVERSATION CONTEXT & FOLLOW-UP QUESTIONS:
 RESPOND ONLY WITH JSON, in exactly this shape and nothing around it:
 {"answer": "...", "quotes": [{"file": "exact filename", "quote": "verbatim text copied from that file's summary"}]}
 
-- "answer" is what the user asked for and nothing else. No raw filenames list. Write one or two clean, natural conversational sentences.
-- "quotes" is the evidence. Copy the lines from the summary or filename that contain the answer or describe the topic.
-- Every quote must correspond to a file above.
-- If nothing above answers the question, say so plainly in "answer" and return an empty "quotes" list.
+- "answer" is what the user asked for and nothing else. No raw filenames list. Write one or two clean, natural conversational sentences, under 50 words, plain text with no markdown and no bullets.
+- "quotes" is the evidence. Copy the lines from the summary that contain the answer, character for character. Do not paraphrase, do not tidy, do not translate. If the answer came from a table row, the quote is that row.
+- Every quote must appear word for word in a summary above. A quote that is only a filename is not evidence and will be discarded.
+- If nothing above answers the question, say so plainly in "answer" and return an empty "quotes" list. Never invent either one.
 
 ANSWER THE QUESTION FIRST:
 - Each file carries a "summary:" holding text taken from inside the document.
@@ -1390,6 +1390,13 @@ ANSWER THE QUESTION FIRST:
   Example: "can you find me the latest Reyna script received" → "The latest Reyna script covers the meeting and presentation deck for SIH."
   Example: "can you find it?" (after asking about C programming) → "I found the C programming lab manual in your Lab folder."
 - Do not dump lists of filenames in "answer". Put the evidence in "quotes" instead.
+- Never invent a fact that is not in a summary.
+
+CRITICAL TIME RULE:
+- The "shared:" line in each file's metadata below is the GROUND TRUTH. Use it verbatim if mentioning time.
+
+CRITICAL ATTRIBUTION RULE:
+- "sender:" is empty for files where we do not know who shared them. For those, NEVER invent a sender. If the user asked about a specific person and some results have no sender, say you found the file but the original sender is unconfirmed.
 
 ORIGINAL QUERY: %s
 PARSED — who:%s what:%s when:%s why:%s
