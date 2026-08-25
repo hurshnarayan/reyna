@@ -159,3 +159,35 @@ func TestContainsWordIsCaseInsensitive(t *testing.T) {
 		t.Fatal("uppercase body text did not match a lowercase token")
 	}
 }
+
+// A passing mention in the text must not rank level with a title that says
+// exactly what was asked for. A pitch deck mentioning artificial intelligence,
+// a question and a paper was offered as the answer to "question paper for AI".
+func TestTitleCoverageBeatsScatteredMentions(t *testing.T) {
+	tokens := []string{"question", "paper", "ai"}
+	real := Scored("AI model question paper.pdf", "PYQ", "", tokens)
+	deck := Scored("ReynaSIH.pptx", "Projects",
+		"Reyna uses AI to answer any question about a paper you were sent", tokens)
+
+	if real.Coverage != 1.0 {
+		t.Fatalf("title match coverage = %v, want 1.0", real.Coverage)
+	}
+	if deck.Coverage >= real.Coverage {
+		t.Fatalf("body mentions matched the title: deck=%v real=%v", deck.Coverage, real.Coverage)
+	}
+	if deck.Coverage >= Floor(real.Coverage) {
+		t.Fatalf("deck survived the floor: coverage=%v floor=%v", deck.Coverage, Floor(real.Coverage))
+	}
+}
+
+// But a content-only match must still win when it is all there is.
+func TestContentOnlyStillSurvivesWhenNothingBetterExists(t *testing.T) {
+	tokens := []string{"bernoulli"}
+	only := Scored("M01 Introduction.pptx", "", "Bernoulli's equation appears here", tokens)
+	if only.Coverage <= 0 {
+		t.Fatal("content-only match scored nothing")
+	}
+	if only.Coverage < Floor(only.Coverage) {
+		t.Fatal("the best available fell below its own floor")
+	}
+}

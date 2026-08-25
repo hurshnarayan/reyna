@@ -46,6 +46,13 @@ func (s *Server) uploadLockFor(groupID int64) *sync.Mutex {
 
 // looksLikePhoneOrLID checks if a string looks like a phone number or WhatsApp LID
 // (not a real human name). Used to avoid storing "+1234567890" or "0440" as shared_by_name.
+// isDeviceIdentity reports whether this is the phone's own placeholder rather
+// than a person. The app uploads everything under it, so it appears as both a
+// user phone and, once a user record exists, a user name.
+func isDeviceIdentity(s string) bool {
+	return strings.EqualFold(strings.TrimSpace(s), deviceIdentity)
+}
+
 func looksLikePhoneOrLID(s string) bool {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -520,6 +527,19 @@ func (s *Server) handleDeviceUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The phone is not a person.
+	//
+	// Everything captured on-device uploads under the identity "device", and a
+	// user record gets upserted for it, so the lookup above found a name that
+	// is not a phone number, decided it was human, and stored it as the sender.
+	// Twelve hundred files ended up attributed to somebody called "device",
+	// which then appeared in answers as "(by device)". That is exactly the
+	// failure the confidence threshold exists to prevent: a file whose sender
+	// is unknown must say so, not name a placeholder.
+	if isDeviceIdentity(sharedByName) {
+		sharedByName = ""
+	}
+
 	group, err := s.store.GetGroupByWAID(groupWAID)
 	if err != nil {
 		group, _ = s.store.UpsertGroup(groupWAID, "WhatsApp Group", user.ID)
@@ -591,11 +611,21 @@ func (s *Server) handleDeviceUpload(w http.ResponseWriter, r *http.Request) {
 	attrMethod := r.FormValue("attribution_method")
 	attrConfidence, _ := strconv.ParseFloat(r.FormValue("attribution_confidence"), 64)
 	if attrMethod == "" {
-		// No attribution reported: trust the presence of a name, nothing more.
-		if sharedByName == "" && userPhone == "" {
+		// No attribution reported means nobody worked out who shared this.
+		//
+		// This used to record AttrBaileys at full confidence whenever a name or
+		// a phone was present, and AttrBaileys specifically means "stated by
+		// the WhatsApp Web protocol, authoritative". A file arriving from the
+		// phone with no attribution has been through no such thing. Combined
+		// with the device placeholder above it minted twelve hundred certain
+		// attributions to a sender that does not exist.
+		if sharedByName == "" || isDeviceIdentity(userPhone) {
 			attrMethod, attrConfidence = model.AttrNone, 0.0
 		} else {
-			attrMethod, attrConfidence = model.AttrBaileys, 1.0
+			// A real name, but nothing said where it came from. Kept, because
+			// the bot and export paths do supply names this way, and held below
+			// the naming threshold so it is never stated as fact.
+			attrMethod, attrConfidence = model.AttrNone, 0.5
 		}
 	}
 	// A client cannot promise more than certainty, and must not be able to talk

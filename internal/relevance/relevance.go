@@ -204,20 +204,38 @@ func Scored(name, folder, content string, tokens []string) Result {
 	nameWords := Words(name)
 	folderWords := Words(folder)
 
+	// Coverage counts a word in the title for more than the same word buried in
+	// the text.
+	//
+	// It used to count them the same, and coverage is what the floor cuts on,
+	// so any document that happened to mention all the words anywhere scored as
+	// complete a match as one whose name said exactly that. A pitch deck that
+	// mentioned artificial intelligence, a question and a paper in passing
+	// therefore ranked alongside "AI model question paper.pdf" and was offered
+	// as an answer to a request for it.
+	//
+	// Body text still counts, at half. A document really about something says
+	// so in the text and a content-only match is often all there is, so the
+	// relative floor keeps those when nothing better exists; what it stops is a
+	// passing mention standing level with a title.
+	var credit float64
 	for _, tok := range tokens {
 		switch {
 		case Match(nameWords, tok):
 			r.Matched++
+			credit += 1.0
 			r.Score += 25
 		case Match(folderWords, tok):
 			r.Matched++
+			credit += 1.0
 			r.Score += 12
 		case ContainsWord(content, tok):
 			r.Matched++
+			credit += 0.5
 			r.Score += 4
 		}
 	}
-	r.Coverage = float64(r.Matched) / float64(len(tokens))
+	r.Coverage = credit / float64(len(tokens))
 
 	for i := 0; i+1 < len(tokens); i++ {
 		if adjacentIn(nameWords, tokens[i], tokens[i+1]) {

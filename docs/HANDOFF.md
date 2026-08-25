@@ -112,6 +112,34 @@ Consequences that are already designed in, and should not be undone:
   two must stay in agreement: the phone uses its copy to decide which unsent
   files to push ahead of a question. Adjacent query words score far higher than
   scattered ones, which is what tells "Module 1" from "Module4_part1".
+- **Every on-device file claimed a certain sender called "device".** Everything
+  captured on the phone uploads under the identity `device`, a user record was
+  upserted for it, and the sender lookup found a name that was not a phone
+  number and concluded it was human. Those rows were then stamped `AttrBaileys`
+  at confidence 1.0, which asserts the sender was stated by the WhatsApp
+  protocol as a fact. Answers said "(by device)". This is the exact failure the
+  0.70 threshold exists to prevent, and it defeated it by lying about the
+  method. The device identity is now never a sender, an upload with no stated
+  attribution is no longer promoted to Baileys, and `unnameTheDevice` cleared
+  the 1220 rows already affected.
+- **A passing mention ranked level with a title.** Coverage counted a word in
+  the filename and the same word buried in body text equally, and coverage is
+  what the relevance floor cuts on, so any document mentioning all the words
+  anywhere scored as complete a match as one whose name said exactly that. A
+  pitch deck was offered as the answer to "question paper for AI" because it
+  mentioned artificial intelligence, a question and a paper in passing. Body
+  matches now count half. The floor is still relative, so a content-only match
+  still wins when it is all there is.
+- **The no-model reply was a directory listing.** When the daily allowance runs
+  out, retrieval falls back to a template, which is a state the user genuinely
+  sees rather than a corner case. It printed "Found 9 file(s) shared in your
+  groups" over a bullet list tagged "(by device)" and "(by You)", ending in
+  "...and 4 more" that could not be tapped because it was a sentence, not a
+  control. It now says plainly that the documents were not read and why, names
+  the two best matches, and leaves the rest to the sources button, which is a
+  real control on real rows. It states no total: the Drive walker matches whole
+  folders, so counting it would claim a textbook in an "Artificial
+  Intelligence" folder is a question paper.
 - **Content search stopped after the first 4000 characters.** Retrieval does
   look inside documents, not only at filenames, and it always did: the SQL
   matches `extracted_content`. But the Go ranker that replaced the SQL ranking

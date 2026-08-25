@@ -1587,41 +1587,70 @@ type QuotedSource struct {
 	Quote    string
 }
 
+// fallbackRetrievalReply is what Reyna says when it cannot read anything.
+//
+// Reached when the model call fails, which on a free allowance of about sixty
+// calls a day means the allowance is spent. It is a real state the user will
+// see, not a corner case, so it has to be honest about what happened rather
+// than dressing up a directory listing as a reply.
+//
+// What it used to do was print "Found 9 file(s) shared in your groups" over a
+// bulleted list of filenames, each tagged "(by device)" or "(by You)", ending
+// in "...and 4 more" that could not be tapped because it was a sentence rather
+// than a control. None of that answered the question, the parenthetical named
+// the phone as a person, and the count pointed at files the user had no way to
+// reach. The files themselves are already listed properly under the sources
+// button, which is a real control on real rows.
+//
+// So: say plainly that the documents were not read, name the two best matches
+// so the reply is still worth something, and stop.
 func fallbackRetrievalReply(rawQuery string, files, driveMatches []RetrievalFile, who, what, when string) string {
-	if len(files) == 0 && len(driveMatches) == 0 {
-		msg := "Couldn't find anything matching that"
+	total := len(files) + len(driveMatches)
+	if total == 0 {
+		msg := "I could not find anything matching that"
 		if who != "" {
 			msg += " from " + who
 		}
 		if what != "" {
 			msg += " about \"" + what + "\""
 		}
-		return msg + ". Try rephrasing or being more specific."
+		return msg + "."
 	}
+
+	// The best matches by name, which is the ordering the ranking already
+	// produced. Two, because this is a sentence and not a list.
+	named := make([]string, 0, 2)
+	for _, f := range files {
+		if len(named) == 2 {
+			break
+		}
+		named = append(named, f.Name)
+	}
+	for _, m := range driveMatches {
+		if len(named) == 2 {
+			break
+		}
+		named = append(named, m.Name)
+	}
+
+	// Named, not counted.
+	//
+	// A total here would be an overclaim: it includes everything the Drive
+	// walker returned, and that matches whole folders, so a request for a
+	// question paper about AI counts a textbook sitting in an "Artificial
+	// Intelligence" folder. Saying "16 documents that look right" asserts
+	// something about sixteen files that nothing has checked. The two best are
+	// ranked, so those can be named; the rest are behind the sources button
+	// where they are presented as matches rather than as answers.
 	var b strings.Builder
-	if len(files) > 0 {
-		b.WriteString(fmt.Sprintf("Found %d file(s) shared in your groups:\n", len(files)))
-		for i, f := range files {
-			if i >= 5 {
-				b.WriteString(fmt.Sprintf("...and %d more\n", len(files)-5))
-				break
-			}
-			b.WriteString(fmt.Sprintf("• **%s** — %s", f.Name, f.Folder))
-			if f.Sender != "" {
-				b.WriteString(" (by " + f.Sender + ")")
-			}
-			b.WriteString("\n")
-		}
-	}
-	if len(driveMatches) > 0 {
-		b.WriteString(fmt.Sprintf("\nPlus %d already in your Drive:\n", len(driveMatches)))
-		for i, m := range driveMatches {
-			if i >= 5 {
-				b.WriteString(fmt.Sprintf("...and %d more\n", len(driveMatches)-5))
-				break
-			}
-			b.WriteString(fmt.Sprintf("• **%s** — in %s/\n", m.Name, m.Folder))
-		}
-	}
+	b.WriteString("The closest I have is ")
+	b.WriteString(strings.Join(named, ", then "))
+	b.WriteString(".")
+
+	// The reason, stated rather than hidden. Someone whose question went
+	// unanswered is owed the cause, especially when it clears by itself.
+	b.WriteString(" I could not read them to answer properly, because today's " +
+		"reading allowance is used up. It resets tomorrow. The sources button " +
+		"lists everything I matched.")
 	return b.String()
 }

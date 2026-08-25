@@ -149,8 +149,43 @@ func (s *Store) migrate() error {
 	if err := s.releaseFalselyUnreadable(); err != nil {
 		return err
 	}
+	if err := s.unnameTheDevice(); err != nil {
+		return err
+	}
 
 	return nil
+}
+
+// unnameTheDevice strips the attributions that named the phone as a person.
+//
+// Everything captured on-device uploads under the identity "device", a user
+// record was upserted for it, and the sender lookup found a name that was not
+// a phone number and concluded it was human. Those rows were then stamped
+// AttrBaileys at confidence 1.0, which claims the sender was stated by the
+// WhatsApp protocol as a fact. Answers duly said "(by device)".
+//
+// The confidence threshold exists precisely so a file whose sender is unknown
+// says so. These rows asserted the opposite with full certainty, so they are
+// reset to unattributed: no name, no method, no confidence. Nothing is lost
+// that was ever real, and the repair screen can still ask the user who shared
+// something.
+func (s *Store) unnameTheDevice() error {
+	res, err := s.db.Exec(`
+		UPDATE files
+		   SET shared_by_name = '',
+		       attribution_method = ?,
+		       attribution_confidence = 0
+		 WHERE LOWER(TRIM(COALESCE(shared_by_name,''))) = 'device'`,
+		model.AttrNone)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("[MIGRATE] cleared %d attribution(s) that named the device as the sender", n)
+	}
+	// The user record itself, so the lookup cannot recreate the name.
+	_, err = s.db.Exec(`UPDATE users SET name='' WHERE LOWER(TRIM(COALESCE(name,''))) = 'device'`)
+	return err
 }
 
 // releaseFalselyUnreadable gives back the files that a failed reading retired.
