@@ -2394,26 +2394,44 @@ var istLocation = func() *time.Location {
 // string. We pre-compute this and feed it to the LLM rather than letting the
 // LLM compute relative time itself — otherwise it hallucinates ("2 days ago"
 // when the file was 2 minutes ago).
+// formatSharedAt says when a file arrived, the way a person would.
+//
+// This is read under a filename while somebody decides which of six documents
+// they meant, so it has to be scannable at a glance. It used to render as
+// "1 day(s) ago (on Sun Aug 23 20:56 IST)", which is both ungrammatical and
+// longer than the filename it sits beneath. The exact stamp is kept for
+// anything older than a week, where the day of the week has stopped being a
+// useful way to place something.
 func formatSharedAt(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	now := time.Now()
-	delta := now.Sub(t)
-	var rel string
+	local := t.In(istLocation)
+	delta := time.Since(t)
 	switch {
-	case delta < 60*time.Second:
-		rel = "just now"
-	case delta < 60*time.Minute:
-		rel = fmt.Sprintf("%d minute(s) ago", int(delta.Minutes()))
+	case delta < time.Minute:
+		return "just now"
+	case delta < time.Hour:
+		return plural(int(delta.Minutes()), "minute") + " ago"
 	case delta < 24*time.Hour:
-		rel = fmt.Sprintf("%d hour(s) ago", int(delta.Hours()))
+		return plural(int(delta.Hours()), "hour") + " ago"
+	case delta < 48*time.Hour:
+		return "yesterday at " + local.Format("15:04")
 	case delta < 7*24*time.Hour:
-		rel = fmt.Sprintf("%d day(s) ago", int(delta.Hours()/24))
+		return local.Format("Monday") + " at " + local.Format("15:04")
+	case local.Year() == time.Now().In(istLocation).Year():
+		return local.Format("2 January")
 	default:
-		rel = fmt.Sprintf("%d day(s) ago", int(delta.Hours()/24))
+		return local.Format("2 January 2006")
 	}
-	return fmt.Sprintf("%s (on %s)", rel, t.In(istLocation).Format("Mon Jan 2 15:04 IST"))
+}
+
+// plural writes a count with its unit, singular when there is one of them.
+func plural(n int, unit string) string {
+	if n == 1 {
+		return "1 " + unit
+	}
+	return fmt.Sprintf("%d %ss", n, unit)
 }
 
 // hasContentCues returns true if the query mentions something specific that

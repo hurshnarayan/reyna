@@ -305,7 +305,6 @@ private fun MainShell(vm: ReynaViewModel) {
                                     else -> vm.openInOtherApp(local)
                                 }
                             },
-                            onDismissChoice = vm::dismissChoice,
                         )
                         Tab.Search -> FilesScreen(
                             files = vm.searchableFiles(),

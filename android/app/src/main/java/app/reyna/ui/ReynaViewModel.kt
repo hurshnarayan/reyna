@@ -307,11 +307,6 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
         run(pending.question, fileIds, recordQuestion = false)
     }
 
-    /** Drops the choice without answering. The question stays in the conversation. */
-    fun dismissChoice() {
-        _pendingChoice.value = null
-    }
-
     /**
      * Puts an answer on the clipboard.
      *

@@ -1,4 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  The plate behind the launcher icon, and the ground the launch splash paints.
+
+  Matches the app's own background rather than being a black disc. The mark is
+  three drops and nothing else; a filled circle is a container it does not
+  need, and one that stayed black regardless of theme made the launch screen
+  open on a hard black puck before a near-white app.
+-->
 <resources>
-    <color name="ic_launcher_background">#000000</color>
+    <color name="ic_launcher_background">#FCFCFB</color>
 </resources>

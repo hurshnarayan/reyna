@@ -39,24 +39,24 @@ import app.reyna.ui.theme.Dimens
 import app.reyna.ui.theme.reynaColors
 
 /**
- * Reyna's avatar: the mark on a solid disc.
+ * Reyna's avatar: the mark, and nothing behind it.
  *
- * Reyna is the other party in this conversation, so it gets an avatar in the
- * toolbar exactly where a messaging app puts the person you are talking to.
+ * Reyna is the other party in this conversation, so it sits in the toolbar
+ * where a messaging app puts the person you are talking to.
+ *
+ * No disc. The mark used to be reversed out of a black circle, which is a
+ * container the logo does not need and which reads as a sticker pasted onto
+ * the page rather than part of it. Drawn straight onto the background in the
+ * foreground colour, it is dark on a light theme and light on a dark one
+ * without anything having to switch.
  */
 @Composable
 fun ReynaAvatar(size: Dp = 34.dp) {
     val c = reynaColors
-    Box(
-        Modifier.size(size).clip(CircleShape).background(c.onSurface),
-        contentAlignment = Alignment.Center,
-    ) {
-        // 0.56 of the disc is the mark's specified clear space, which is one
-        // bead diameter on its own grid. Sizing it by eye instead is what
-        // makes a logo look slightly wrong in a way nobody can name.
+    Box(Modifier.size(size), contentAlignment = Alignment.Center) {
         ReynaLogo(
-            color = c.background,
-            modifier = Modifier.size(size * 0.56f),
+            color = c.onSurface,
+            modifier = Modifier.size(size * 0.82f),
             contentDescription = null,
         )
     }

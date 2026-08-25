@@ -1,15 +1,11 @@
 <!--
-  Launcher foreground: the mark, in the ink colour, for a light system theme.
+  The mark for the launch screen: drops only, no plate behind them.
 
-  The adaptive icon safe zone is the middle 66dp of 108dp, because a launcher
-  may mask the icon to any shape. The mark keeps its own 100 by 100 grid and is
-  placed inside that zone by one scale and translate, so the geometry stays
-  identical to every other copy rather than being redrawn to fit. Scale 0.68
-  puts its 76 by 69 bounding box at roughly 52 by 47, which clears the zone on
-  every side; the translate is 54 minus 50 times the scale, which centres it.
-
-  The drops are dark here and light in drawable-night, so the mark reads
-  against its plate in either system theme instead of being white on white.
+  Drawn on a 108 grid to match what the splash screen expects, with the mark
+  inset to the same safe zone the launcher icon uses so the two are the same
+  size at the same moment. Nothing is masked to a circle here, which is the
+  whole point: the launch screen shows the logo, not a puck with the logo cut
+  out of it.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
@@ -17,8 +13,8 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group
-        android:scaleX="0.68" android:scaleY="0.68"
-        android:translateX="20" android:translateY="20">
+        android:scaleX="0.62" android:scaleY="0.62"
+        android:translateX="23" android:translateY="23">
         <path
             android:fillColor="#FF1A1A18"
             android:pathData="M 50.00 84.54 C 44.86 61.83 40.66 42.72 40.66 24.79 C 40.66 19.66 44.86 15.46 50.00 15.46 C 55.13 15.46 59.33 19.66 59.33 24.79 C 59.33 42.72 55.13 61.83 50.00 84.54Z" />

@@ -1,4 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Reyna" parent="android:Theme.Material.Light.NoActionBar" />
+    <!--
+      The launch screen.
+
+      Android 12 and up builds this from the app icon, and with nothing
+      declared it used the launcher icon's plate: the app opened on a hard
+      black disc and then became a near-white screen, which is a flash of the
+      wrong colour before anything has loaded.
+
+      The ground is the app's own background and the icon is the bare mark, so
+      the launch screen is the first frame of the app rather than a splash
+      pasted in front of it. No icon background is set, deliberately: setting
+      one reintroduces the disc.
+
+      windowBackground matters as much as the splash attributes. It is what is
+      shown on Android 11, which has no splash screen API, and what remains
+      behind the window while the first frame is composed.
+    -->
+    <style name="Theme.Reyna" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/ic_launcher_background</item>
+        <item name="android:windowSplashScreenBackground">@color/ic_launcher_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_splash_mark</item>
+    </style>
 </resources>

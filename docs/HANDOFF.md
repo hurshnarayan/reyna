@@ -42,6 +42,27 @@ Two Go dependencies in total: `golang-jwt/jwt/v5` and `mattn/go-sqlite3`. Keep
 it that way; `internal/docs` reads Office files with `archive/zip` and
 `encoding/xml` rather than adding one.
 
+## Running it without a phone
+
+The Android command line tools are installed at
+`/opt/homebrew/share/android-commandlinetools`, which is also `sdk.dir` in
+`android/local.properties`. Nothing is on the PATH by default, so:
+
+```
+export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
+export PATH=$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH
+emulator -avd reyna_pixel -no-snapshot-load -gpu swiftshader_indirect &
+```
+
+An AVD named `reyna_pixel` already exists (arm64, API 35). Then
+`just point-at-emulator`, `just build`, `adb install -r -g`, and
+`adb exec-out screencap -p > shot.png` to see what it looks like. Put the URL
+back with `just point-at <tunnel url>` before building a release.
+
+There is no ffmpeg on this machine, so an animation cannot be checked by
+recording it and splitting the frames. Rendering the same maths in Python with
+Pillow and looking at a contact sheet works, and is how the splash was checked.
+
 ## Getting running
 
 ```
@@ -204,9 +225,35 @@ hundred grid:
   66dp safe zone by a single scale and translate, so the geometry stays
   identical rather than being redrawn to fit.
 
+There is no disc behind it. The mark is the three drops; a filled circle is a
+container it does not need, and one that stayed black regardless of theme meant
+the app opened on a hard black puck before a near-white screen. Drawn straight
+onto the background in the foreground colour, it is dark on a light theme and
+light on a dark one without anything having to switch. That holds in four
+places, and all four had to be fixed separately: the toolbar avatar, the
+onboarding screen, the adaptive launcher icon (`drawable/` and
+`drawable-night/`), and the Android 12 launch screen, which is configured in
+`values/themes.xml` and `values-night/themes.xml` and otherwise falls back to
+the launcher icon's plate.
+
+On the onboarding screen the mark assembles itself: a drop falls, lands, ripples,
+and the three drops splash up out of the point of impact. That motion is the
+mark's own construction rather than something laid over it, since all three
+drops are rotations about a pivot below the mark and their tails already point
+at it. In chat the drops jiggle out of step with each other while an answer is
+being put together, which replaced a spinner and keeps one piece of visual
+language on the screen rather than two.
+
+Two traps worth knowing. A Compose `Canvas` clips to its bounds, so the falling
+drop cannot start above the frame; it starts just inside the top edge and fades
+in. And onboarding content sits in a `verticalScroll`, which hands its child an
+unbounded height, so `Arrangement.Center` silently did nothing and the mark sat
+jammed at the top of the page; the viewport is now measured outside the scroll
+and passed in as a minimum height.
+
 Minimum size 16dp; below that the gaps close and it stops being three shapes.
-Do not put a bar under it, outline it, squash it, or fill it with a gradient.
-The old lightning bolt is gone.
+Do not put a bar under it, outline it, squash it, fill it with a gradient, or
+put it back on a disc. The old lightning bolt is gone.
 
 ## Still open
 
@@ -219,11 +266,10 @@ The old lightning bolt is gone.
   time. Rating buttons were left out on purpose, because nothing records a
   rating and a control that silently discards what you tell it is worse than no
   control; read aloud was left out because it needs text to speech wired up.
-- **None of the app changes have been run on a device.** The backend was tested
-  end to end against the real database and the Kotlin compiles and unit tests
-  pass, but the choice sheet, the preview tap and the staged progress text have
-  not been seen on a phone. `adb` was not on the PATH in that session and there
-  was no SDK copy at the usual location.
+- The candidate preview tap (**Open** on a row in the choice sheet) has not been
+  exercised. Everything else in the chat has: the choice sheet, picking a
+  document, the streamed progress, the bubble-less answers and the action row
+  were all run on the emulator in both themes.
 - Multiple conversations, like an LLM app. Not started.
 - Drive folder policy: one root folder, never invent folders. Not started.
 - The SIH hackathon deck. Not started.

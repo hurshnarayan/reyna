@@ -1,11 +1,5 @@
 package app.reyna.ui
 
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -70,7 +64,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextOverflow
 import app.reyna.attribution.Attribution
 import app.reyna.ui.components.ConfidenceDot
-import app.reyna.ui.components.ReynaLogo
+import app.reyna.ui.components.ReynaMarkThinking
 import app.reyna.ui.components.Bubble
 import app.reyna.ui.components.BubbleText
 import app.reyna.ui.components.BubbleTime
@@ -156,11 +150,17 @@ fun ChatScreen(
     choice: ReynaViewModel.PendingChoice? = null,
     onChooseCandidate: (List<Long>) -> Unit = {},
     onPreviewCandidate: (Long, String) -> Unit = { _, _ -> },
-    onDismissChoice: () -> Unit = {},
 ) {
     val c = reynaColors
     val listState = rememberLazyListState()
     var sheetSources by remember { mutableStateOf<List<Source>>(emptyList()) }
+
+    // Whether the choice sheet is on screen, kept apart from whether there is
+    // a choice to make. Dismissing the sheet used to throw the candidates away
+    // and strand the question; now it only closes the sheet, and the answer
+    // that asked keeps a way back into it.
+    var sheetOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(choice) { if (choice != null) sheetOpen = true }
 
     // A conversation opens at the newest message, not the oldest.
     LaunchedEffect(messages.size) {
@@ -215,6 +215,8 @@ fun ChatScreen(
                     // older one would have to discard everything said after
                     // it, which is a bigger thing than the button looks like.
                     canRetry = !sending && i == messages.lastIndex,
+                    hasChoice = choice != null && !sheetOpen && i == messages.lastIndex,
+                    onReopenChoice = { sheetOpen = true },
                 )
             }
             // A visible "working on it" turn. Twenty seconds of nothing reads
@@ -222,12 +224,12 @@ fun ChatScreen(
             if (sending) item { ThinkingRow(stage) }
         }
 
-        if (choice != null) {
+        if (choice != null && sheetOpen) {
             ChoiceSheet(
                 choice = choice,
                 onChoose = onChooseCandidate,
                 onPreview = onPreviewCandidate,
-                onDismiss = onDismissChoice,
+                onDismiss = { sheetOpen = false },
             )
         }
 
@@ -352,7 +354,7 @@ private fun ThinkingRow(stage: String) {
         Modifier.fillMaxWidth().padding(top = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        BreathingMark(Modifier.size(17.dp))
+        ReynaMarkThinking(color = c.onSurface, modifier = Modifier.size(19.dp))
         Spacer(Modifier.width(10.dp))
         // The server says which document it is reading, and reading is where
         // nearly all the time goes. One fixed label for the whole wait made a
@@ -367,34 +369,6 @@ private fun ThinkingRow(stage: String) {
     }
 }
 
-/**
- * The mark, breathing, while Reyna works.
- *
- * A spinner says only that something is running. The mark fading in and out
- * says the same thing without introducing a second piece of visual language
- * into a screen that already has one, and it is what the eye returns to while
- * waiting. Slow on purpose: anything quick enough to read as a spinner is
- * fast enough to be irritating for the half minute a document takes to read.
- */
-@Composable
-private fun BreathingMark(modifier: Modifier = Modifier) {
-    val c = reynaColors
-    val pulse = rememberInfiniteTransition(label = "mark")
-    val alpha by pulse.animateFloat(
-        initialValue = 0.32f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 950, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "alpha",
-    )
-    ReynaLogo(
-        color = c.accent.copy(alpha = alpha),
-        modifier = modifier,
-        contentDescription = null,
-    )
-}
 
 @Composable
 private fun MessageRow(
@@ -403,6 +377,8 @@ private fun MessageRow(
     onCopy: (String) -> Unit = {},
     onRetry: (ChatMessage) -> Unit = {},
     canRetry: Boolean = false,
+    hasChoice: Boolean = false,
+    onReopenChoice: () -> Unit = {},
 ) {
     if (msg.fromUser) {
         // A question is a thing somebody said, so it keeps its bubble. Both
@@ -413,7 +389,7 @@ private fun MessageRow(
         }
         return
     }
-    AnswerBlock(msg, onShowSources, onCopy, onRetry, canRetry)
+    AnswerBlock(msg, onShowSources, onCopy, onRetry, canRetry, hasChoice, onReopenChoice)
 }
 
 /**
@@ -437,6 +413,8 @@ private fun AnswerBlock(
     onCopy: (String) -> Unit,
     onRetry: (ChatMessage) -> Unit,
     canRetry: Boolean,
+    hasChoice: Boolean,
+    onReopenChoice: () -> Unit,
 ) {
     val c = reynaColors
     Column(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 2.dp)) {
@@ -458,6 +436,8 @@ private fun AnswerBlock(
             onCopy = onCopy,
             onRetry = onRetry,
             canRetry = canRetry,
+            hasChoice = hasChoice,
+            onReopenChoice = onReopenChoice,
         )
     }
 }
@@ -482,11 +462,27 @@ private fun AnswerActions(
     onCopy: (String) -> Unit,
     onRetry: (ChatMessage) -> Unit,
     canRetry: Boolean,
+    hasChoice: Boolean,
+    onReopenChoice: () -> Unit,
 ) {
     val c = reynaColors
     var copied by remember(msg.text) { mutableStateOf(false) }
 
     Row(verticalAlignment = Alignment.CenterVertically) {
+        // A dismissed choice has to be reachable again.
+        //
+        // Swiping the sheet away used to strand the question: Reyna had asked
+        // which document was meant, the candidates were gone, and the only way
+        // back was to type the question a second time. The choice outlives the
+        // sheet now, and this is the way back into it.
+        if (hasChoice) {
+            ActionChip(
+                icon = Icons.Rounded.Article,
+                label = "Choose a document",
+                onClick = onReopenChoice,
+            )
+            Spacer(Modifier.width(2.dp))
+        }
         // Evidence first, because it is the only control here that changes
         // what the user knows rather than what they have.
         //
@@ -922,16 +918,16 @@ private fun ChoiceSheet(
                 .padding(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            // The prompt itself is the title. Reyna already said it in the
+            // conversation behind this sheet, and printing it a second time
+            // under a generic heading made the same sentence appear twice on
+            // one screen.
             Text(
-                "Which one did you mean?",
-                fontSize = 17.sp,
+                choice.prompt.ifBlank { "Which one did you mean?" },
+                fontSize = 16.sp,
+                lineHeight = 22.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = c.onSurface,
-            )
-            Text(
-                choice.prompt,
-                fontSize = 13.sp,
-                color = c.onSurfaceMuted,
             )
             choice.candidates.forEach { cand ->
                 CandidateCard(cand, onChoose = { onChoose(listOf(cand.fileId)) }, onPreview = { onPreview(cand.fileId, cand.fileName) })

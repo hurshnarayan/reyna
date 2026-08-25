@@ -6,6 +6,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -45,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import app.reyna.R
 import app.reyna.permissions.Permissions
 import app.reyna.ui.theme.Dimens
+import app.reyna.ui.components.ReynaMarkSplash
 import app.reyna.ui.theme.reynaColors
 
 /**
@@ -132,9 +135,28 @@ fun OnboardingScreen(
             }
         }
 
-        Box(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+        // BoxWithConstraints, so a step that wants to be centred has a height
+        // to be centred in.
+        //
+        // The content scrolls, because a permission step on a small screen in
+        // a large font does not fit. Inside a scroll a child asking to fill
+        // the height gets the height of its own content instead of the
+        // viewport, so the welcome screen's centring silently did nothing and
+        // the mark sat jammed against the top of the page with the rest of the
+        // screen empty below it. Handing the step a minimum height fixes the
+        // centring without taking the scrolling away.
+        BoxWithConstraints(Modifier.weight(1f)) {
+            // Measured outside the scroll, not inside it.
+            //
+            // A scrolling container hands its child an unbounded height, so
+            // asking for the viewport from within one returns infinity and any
+            // minimum built from it means nothing. The constraints are read
+            // here, where weight(1f) has already fixed the height, and the
+            // scrolling is applied to the content underneath.
+            val viewport = maxHeight
+            Box(Modifier.verticalScroll(rememberScrollState())) {
             when (step) {
-                OnboardingStep.Welcome -> Welcome()
+                OnboardingStep.Welcome -> Welcome(Modifier.heightIn(min = viewport))
                 OnboardingStep.Notifications -> PermissionStep(
                     icon = Icons.Rounded.NotificationsActive,
                     title = "Let Reyna see who shared a file",
@@ -166,6 +188,7 @@ fun OnboardingScreen(
                     onGrant = { onGrant(Permissions.Kind.Battery) },
                 )
                 OnboardingStep.Drive -> DriveStep(driveConnect, onConnectDrive)
+            }
             }
         }
 
@@ -218,23 +241,22 @@ private fun ProgressBar(fraction: Float) {
 }
 
 @Composable
-private fun Welcome() {
+private fun Welcome(modifier: Modifier = Modifier) {
     val c = reynaColors
     Column(
-        Modifier.fillMaxSize(),
+        modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(
-            Modifier.size(84.dp).clip(CircleShape).background(c.onSurface),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                painterResource(R.drawable.ic_reyna_mark), null,
-                tint = c.background, modifier = Modifier.size(46.dp),
-            )
-        }
-        Spacer(Modifier.height(28.dp))
+        // The mark assembles itself here, which is the one place in the app
+        // with the room and the attention for it. No disc behind it: the logo
+        // is the three drops, and a filled circle is a container it does not
+        // need.
+        ReynaMarkSplash(
+            color = c.onSurface,
+            modifier = Modifier.size(104.dp),
+        )
+        Spacer(Modifier.height(30.dp))
         Text(
             "Your chats already have\nwhat you need",
             fontSize = 27.sp,
