@@ -217,6 +217,21 @@ interface ReynaDao {
 
     @Query("DELETE FROM messages")
     suspend fun clearMessages()
+
+    /**
+     * Drops one answer and anything after it, so a question can be asked
+     * again.
+     *
+     * By timestamp rather than id, because that is the order the conversation
+     * is read in and the order the history is built from. Nothing is written
+     * back over the old answer: a reply that has been replaced should leave no
+     * trace, or the next question carries a turn the user rejected.
+     */
+    @Query("DELETE FROM messages WHERE at >= :from")
+    suspend fun deleteMessagesFrom(from: Long)
+
+    @Query("SELECT * FROM messages WHERE at < :before AND fromUser = 1 ORDER BY at DESC LIMIT 1")
+    suspend fun lastQuestionBefore(before: Long): MessageEntity?
 }
 
 @Database(

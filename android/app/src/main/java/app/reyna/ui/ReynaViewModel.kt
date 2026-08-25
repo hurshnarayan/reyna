@@ -171,6 +171,7 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
                         text = plainText(m.text),
                         fromUser = m.fromUser,
                         time = timeOf(m.at),
+                        at = m.at,
                         // Chips are rebuilt from the local rows rather than
                         // stored with the message, so an answer always shows
                         // the current attribution rather than what was true
@@ -290,7 +291,7 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
         // would interleave two answers into the same conversation.
         if (_sending.value) return
         _pendingChoice.value = null
-        run(question, emptyList())
+        run(question, emptyList(), recordQuestion = true)
     }
 
     /**
@@ -303,7 +304,7 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
         val pending = _pendingChoice.value ?: return
         if (_sending.value || fileIds.isEmpty()) return
         _pendingChoice.value = null
-        run(pending.question, fileIds)
+        run(pending.question, fileIds, recordQuestion = false)
     }
 
     /** Drops the choice without answering. The question stays in the conversation. */
@@ -311,7 +312,46 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
         _pendingChoice.value = null
     }
 
-    private fun run(question: String, fileIds: List<Long>) {
+    /**
+     * Puts an answer on the clipboard.
+     *
+     * The text as it was read, not the citations. Somebody copying a reply is
+     * taking it somewhere else, and a block of quoted source material pasted
+     * behind it is never what they meant.
+     */
+    fun copyAnswer(text: String) {
+        if (text.isBlank()) return
+        val clip = getApplication<Application>()
+            .getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        clip.setPrimaryClip(android.content.ClipData.newPlainText("Reyna", text))
+        // Android 13 and up shows its own copy confirmation, so saying it
+        // again would put two notices on screen for one action.
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) {
+            _toast.value = "Copied"
+        }
+    }
+
+    /**
+     * Answers the same question again, discarding the reply that was given.
+     *
+     * The old answer is deleted rather than left above the new one. A reply
+     * the user rejected is not part of the conversation, and leaving it in
+     * would feed it back as context to the very request meant to replace it.
+     */
+    fun retry(answerAt: Long) {
+        if (_sending.value) return
+        viewModelScope.launch {
+            val question = repo.questionBehind(answerAt) ?: run {
+                _toast.value = "Nothing to ask again"
+                return@launch
+            }
+            repo.forgetFrom(answerAt)
+            _pendingChoice.value = null
+            run(question, emptyList(), recordQuestion = false)
+        }
+    }
+
+    private fun run(question: String, fileIds: List<Long>, recordQuestion: Boolean) {
         askJob = viewModelScope.launch {
             _sending.value = true
             _stage.value = ""
@@ -319,13 +359,14 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
                 if (repo.deviceToken.isBlank()) {
                     // Still records the turn and answers honestly, rather than
                     // dropping the question on the floor.
-                    repo.ask(question, fileIds)
+                    repo.ask(question, fileIds, recordQuestion)
                     _toast.value = "Set a device token in Settings to reach the backend"
                     return@launch
                 }
                 val answer = repo.ask(
                     question = question,
                     fileIds = fileIds,
+                    recordQuestion = recordQuestion,
                     onStage = { _stage.value = it },
                 ) { call -> askCall = call }
 

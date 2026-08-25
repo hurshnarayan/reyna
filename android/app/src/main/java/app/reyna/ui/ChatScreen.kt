@@ -1,5 +1,11 @@
 package app.reyna.ui
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,10 +32,12 @@ import androidx.compose.material.icons.rounded.AddCircleOutline
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Article
 import androidx.compose.material.icons.rounded.BarChart
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CloudUpload
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Stop
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -62,6 +70,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextOverflow
 import app.reyna.attribution.Attribution
 import app.reyna.ui.components.ConfidenceDot
+import app.reyna.ui.components.ReynaLogo
 import app.reyna.ui.components.Bubble
 import app.reyna.ui.components.BubbleText
 import app.reyna.ui.components.BubbleTime
@@ -113,6 +122,8 @@ data class ChatMessage(
     val text: String,
     val fromUser: Boolean,
     val time: String,
+    /** When this turn was written, which is where a retry rewinds to. */
+    val at: Long = 0,
     val files: List<FoundFile> = emptyList(),
     /** Evidence, shown behind a button rather than under the answer. */
     val sources: List<Source> = emptyList(),
@@ -136,6 +147,8 @@ fun ChatScreen(
     pushing: Boolean = false,
     onPushToDrive: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
+    onCopy: (String) -> Unit = {},
+    onRetry: (ChatMessage) -> Unit = {},
     sending: Boolean = false,
     /** What Reyna is doing right now. Empty falls back to a generic line. */
     stage: String = "",
@@ -193,7 +206,16 @@ fun ChatScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(messages.size) { i ->
-                MessageRow(messages[i], onShowSources = { sheetSources = it })
+                MessageRow(
+                    msg = messages[i],
+                    onShowSources = { sheetSources = it },
+                    onCopy = onCopy,
+                    onRetry = onRetry,
+                    // Only the newest answer offers another go. Re-running an
+                    // older one would have to discard everything said after
+                    // it, which is a bigger thing than the button looks like.
+                    canRetry = !sending && i == messages.lastIndex,
+                )
             }
             // A visible "working on it" turn. Twenty seconds of nothing reads
             // as a broken app, and this is also what the Stop button refers to.
@@ -323,83 +345,218 @@ private fun IconButton(
 @Composable
 private fun ThinkingRow(stage: String) {
     val c = reynaColors
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-        Bubble(fromUser = false) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(14.dp),
-                    strokeWidth = 2.dp,
-                    color = c.onSurfaceMuted,
-                )
-                Spacer(Modifier.width(9.dp))
-                // The server says which document it is reading, and reading is
-                // where nearly all the time goes. One fixed label for the whole
-                // wait made a question that was progressing normally look
-                // exactly like one that had hung.
-                Text(
-                    stage.ifBlank { "Looking through your files" },
-                    fontSize = 14.sp,
-                    color = c.onSurfaceMuted,
-                    maxLines = 2,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                )
-            }
-        }
+    // No bubble, because the answer that replaces this will not have one
+    // either. A bubble here and prose afterwards makes the reply appear to
+    // jump out of a box when it lands.
+    Row(
+        Modifier.fillMaxWidth().padding(top = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        BreathingMark(Modifier.size(17.dp))
+        Spacer(Modifier.width(10.dp))
+        // The server says which document it is reading, and reading is where
+        // nearly all the time goes. One fixed label for the whole wait made a
+        // question progressing normally look exactly like one that had hung.
+        Text(
+            stage.ifBlank { "Looking through your files" },
+            fontSize = 14.sp,
+            color = c.onSurfaceMuted,
+            maxLines = 2,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+        )
     }
+}
+
+/**
+ * The mark, breathing, while Reyna works.
+ *
+ * A spinner says only that something is running. The mark fading in and out
+ * says the same thing without introducing a second piece of visual language
+ * into a screen that already has one, and it is what the eye returns to while
+ * waiting. Slow on purpose: anything quick enough to read as a spinner is
+ * fast enough to be irritating for the half minute a document takes to read.
+ */
+@Composable
+private fun BreathingMark(modifier: Modifier = Modifier) {
+    val c = reynaColors
+    val pulse = rememberInfiniteTransition(label = "mark")
+    val alpha by pulse.animateFloat(
+        initialValue = 0.32f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 950, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "alpha",
+    )
+    ReynaLogo(
+        color = c.accent.copy(alpha = alpha),
+        modifier = modifier,
+        contentDescription = null,
+    )
 }
 
 @Composable
 private fun MessageRow(
     msg: ChatMessage,
     onShowSources: (List<Source>) -> Unit,
+    onCopy: (String) -> Unit = {},
+    onRetry: (ChatMessage) -> Unit = {},
+    canRetry: Boolean = false,
+) {
+    if (msg.fromUser) {
+        // A question is a thing somebody said, so it keeps its bubble. Both
+        // sides losing theirs would leave a page of undifferentiated text with
+        // no way to see who was speaking.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Bubble(fromUser = true) { BubbleText(msg.text, fromUser = true) }
+        }
+        return
+    }
+    AnswerBlock(msg, onShowSources, onCopy, onRetry, canRetry)
+}
+
+/**
+ * An answer, with no bubble around it.
+ *
+ * A bubble is a container for something one party said to another, which is
+ * the right shape for a question and the wrong one for a document being read
+ * back. Boxing the answer capped it at 286dp, broke every line short of the
+ * margin, and made a four sentence reply look like a wall of chat. Set on the
+ * page instead, the answer is just the text, which is what the user came for,
+ * and the eye goes to the words rather than to the shape holding them.
+ *
+ * What replaces the bubble as a boundary is the space above it and the row of
+ * controls below. Both only exist on answers, so the alternation between a
+ * right-aligned bubble and full-width prose is what carries the turn-taking.
+ */
+@Composable
+private fun AnswerBlock(
+    msg: ChatMessage,
+    onShowSources: (List<Source>) -> Unit,
+    onCopy: (String) -> Unit,
+    onRetry: (ChatMessage) -> Unit,
+    canRetry: Boolean,
+) {
+    val c = reynaColors
+    Column(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 2.dp)) {
+        if (msg.text.isNotEmpty()) {
+            Text(
+                msg.text,
+                fontSize = 15.5.sp,
+                // Looser than a bubble's, because a full width line needs more
+                // room between rows to stay readable across the measure.
+                lineHeight = 24.sp,
+                color = c.onSurface,
+            )
+        }
+
+        Spacer(Modifier.height(9.dp))
+        AnswerActions(
+            msg = msg,
+            onShowSources = onShowSources,
+            onCopy = onCopy,
+            onRetry = onRetry,
+            canRetry = canRetry,
+        )
+    }
+}
+
+/**
+ * The controls under an answer: what it rests on, and what to do with it.
+ *
+ * Quiet by default and never in the way of the reading. Everything here is an
+ * action on the answer above it, which is why it sits under that answer rather
+ * than in a menu somewhere: the moment you want to copy a reply is the moment
+ * you have finished reading it.
+ *
+ * Deliberately absent: rating buttons, because nothing records a rating and a
+ * control that silently discards what you tell it is worse than no control;
+ * and read aloud, which needs the text to speech engine wired up and is not
+ * free to add.
+ */
+@Composable
+private fun AnswerActions(
+    msg: ChatMessage,
+    onShowSources: (List<Source>) -> Unit,
+    onCopy: (String) -> Unit,
+    onRetry: (ChatMessage) -> Unit,
+    canRetry: Boolean,
+) {
+    val c = reynaColors
+    var copied by remember(msg.text) { mutableStateOf(false) }
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        // Evidence first, because it is the only control here that changes
+        // what the user knows rather than what they have.
+        //
+        // A one line answer used to arrive beneath four file cards, which made
+        // the reply three times taller than the thing asked for and made a
+        // correct answer look like a guess. The sources are still one tap
+        // away, because an app that claims not to invent things has to let
+        // people check.
+        if (msg.sources.isNotEmpty()) {
+            ActionChip(
+                icon = Icons.Rounded.Article,
+                label = if (msg.sources.size == 1) "1 source" else "${msg.sources.size} sources",
+                onClick = { onShowSources(msg.sources) },
+            )
+            Spacer(Modifier.width(2.dp))
+        }
+
+        ActionIcon(
+            icon = if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+            label = if (copied) "Copied" else "Copy",
+        ) {
+            onCopy(msg.text)
+            copied = true
+        }
+
+        if (canRetry) {
+            ActionIcon(icon = Icons.Rounded.Refresh, label = "Try again") { onRetry(msg) }
+        }
+
+        Spacer(Modifier.width(6.dp))
+        Text(msg.time, fontSize = 11.sp, color = c.onSurfaceFaint)
+    }
+}
+
+/** One icon-only control in the row under an answer. */
+@Composable
+private fun ActionIcon(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
+) {
+    val c = reynaColors
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(7.dp))
+            .clickable(onClick = onClick)
+            .padding(6.dp),
+    ) {
+        Icon(icon, contentDescription = label, tint = c.onSurfaceMuted, modifier = Modifier.size(15.dp))
+    }
+}
+
+/** One labelled control in the row under an answer. */
+@Composable
+private fun ActionChip(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
 ) {
     val c = reynaColors
     Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = if (msg.fromUser) Arrangement.End else Arrangement.Start,
+        Modifier
+            .clip(RoundedCornerShape(7.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Bubble(fromUser = msg.fromUser) {
-            Column {
-                if (msg.text.isNotEmpty()) {
-                    BubbleText(msg.text, msg.fromUser)
-                }
-                // Evidence sits behind a control, not under the answer.
-                //
-                // A one line answer used to arrive beneath four file cards,
-                // which made the reply three times taller than the thing asked
-                // for and made a correct answer look like a guess. The sources
-                // are still one tap away, because an app that claims not to
-                // invent things has to let people check.
-                if (msg.sources.isNotEmpty()) {
-                    Spacer(Modifier.height(7.dp))
-                    Row(
-                        Modifier
-                            .clip(RoundedCornerShape(7.dp))
-                            .clickable { onShowSources(msg.sources) }
-                            .padding(horizontal = 7.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            Icons.Rounded.Article,
-                            null,
-                            tint = c.onSurfaceMuted,
-                            modifier = Modifier.size(14.dp),
-                        )
-                        Spacer(Modifier.width(5.dp))
-                        Text(
-                            if (msg.sources.size == 1) "1 source" else "${msg.sources.size} sources",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = c.onSurfaceMuted,
-                        )
-                    }
-                }
-                Spacer(Modifier.height(3.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    BubbleTime(msg.time, msg.fromUser)
-                }
-            }
-        }
+        Icon(icon, null, tint = c.onSurfaceMuted, modifier = Modifier.size(14.dp))
+        Spacer(Modifier.width(5.dp))
+        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = c.onSurfaceMuted)
     }
 }
 

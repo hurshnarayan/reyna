@@ -535,12 +535,28 @@ class Repo private constructor(private val context: Context) {
         question: String,
         /** Files the user picked from a previous "which one did you mean". */
         fileIds: List<Long> = emptyList(),
+        /**
+         * Whether to write the question into the conversation.
+         *
+         * False when the question is already there: answering a choice, and
+         * asking again after discarding a reply, are both second attempts at a
+         * turn the user only took once.
+         */
+        recordQuestion: Boolean = true,
         /** Called with what Reyna is doing, as it changes. */
         onStage: (String) -> Unit = {},
         onCall: (okhttp3.Call) -> Unit = {},
     ): ReynaApi.Answer? = withContext(Dispatchers.IO) {
         // Collect recent conversation turns before inserting current query
-        val recent = dao.recentMessages(6).reversed().filter { it.text.isNotBlank() }
+        val recent = dao.recentMessages(6).reversed()
+            .filter { it.text.isNotBlank() }
+            // The question being asked is not context for itself.
+            //
+            // It is already in the conversation when a choice is answered or a
+            // reply is discarded and asked again, so without this the server
+            // sees a history ending in the identical question and resolves the
+            // new one as a follow-up to it.
+            .dropLastWhile { !recordQuestion && it.fromUser && it.text == question }
         val history = recent.map { msg ->
             ReynaApi.ChatContext(
                 role = if (msg.fromUser) "user" else "assistant",
@@ -549,7 +565,7 @@ class Repo private constructor(private val context: Context) {
             )
         }
 
-        if (fileIds.isEmpty()) {
+        if (recordQuestion) {
             dao.insertMessage(MessageEntity(text = question, fromUser = true, at = System.currentTimeMillis()))
         }
 
@@ -730,6 +746,28 @@ class Repo private constructor(private val context: Context) {
      * from the conversation instead of sending the user off to the Files tab to
      * find what they were already holding.
      */
+    /**
+     * The question an answer was given to, and the point to rewind to.
+     *
+     * Returns null when there is nothing to re-ask, which is the case for the
+     * very first turn and for anything Reyna said unprompted.
+     */
+    suspend fun questionBehind(answerAt: Long): String? = withContext(Dispatchers.IO) {
+        dao.lastQuestionBefore(answerAt)?.text?.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * Removes an answer and everything after it.
+     *
+     * The question stays. Asking again means answering the same question a
+     * second time, not asking a new one, and leaving the old reply behind
+     * would put a turn the user rejected into the history the next request
+     * carries.
+     */
+    suspend fun forgetFrom(at: Long) = withContext(Dispatchers.IO) {
+        dao.deleteMessagesFrom(at)
+    }
+
     suspend fun say(text: String, fileIds: List<Long> = emptyList()) = withContext(Dispatchers.IO) {
         dao.insertMessage(
             MessageEntity(

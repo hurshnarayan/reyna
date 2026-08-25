@@ -284,6 +284,8 @@ private fun MainShell(vm: ReynaViewModel) {
                             pushing = pushing,
                             onPushToDrive = vm::pushToDrive,
                             onOpenSettings = { settingsOpen = true },
+                            onCopy = vm::copyAnswer,
+                            onRetry = { vm.retry(it.at) },
                             sending = sending,
                             stage = stage,
                             choice = choice,

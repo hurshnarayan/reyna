@@ -107,7 +107,7 @@ class CaptureService : Service() {
         return NotificationCompat.Builder(this, CHANNEL)
             .setContentTitle("Reyna")
             .setContentText(text)
-            .setSmallIcon(R.drawable.ic_bolt_logo)
+            .setSmallIcon(R.drawable.ic_reyna_mark)
             .setOngoing(true)
             .setContentIntent(open)
             .setPriority(NotificationCompat.PRIORITY_LOW)

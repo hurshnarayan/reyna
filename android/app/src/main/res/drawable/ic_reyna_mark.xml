@@ -1,0 +1,34 @@
+<!--
+  The Reyna mark: three rising drops forming a crown.
+
+  Every drop is the same curve placed three times, rotated about a pivot below
+  the mark, the outer pair splayed thirty degrees from the axis. The tails stop
+  level and short of that pivot, so the three shapes never touch. That gap is
+  the design; fuse them and the mark becomes a blob with notches in it. The
+  centre drop is longer and heavier than the outer pair, which is what makes
+  the silhouette read as a crown rather than a fan.
+
+  Kept on the artwork's own 100 by 100 grid so the numbers can be checked
+  against the specification rather than re-derived. Tinted from the theme, so
+  one file serves the light and dark notification icons.
+
+  Minimum size is 16dp. Below that the gaps close and it stops being three
+  shapes. Do not add a bar beneath it, outline it, squash it, or fill it with a
+  gradient.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="100"
+    android:viewportHeight="100"
+    android:tint="?android:attr/colorForeground">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M 50.00 84.54 C 44.86 61.83 40.66 42.72 40.66 24.79 C 40.66 19.66 44.86 15.46 50.00 15.46 C 55.13 15.46 59.33 19.66 59.33 24.79 C 59.33 42.72 55.13 61.83 50.00 84.54Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M 43.77 81.22 C 31.35 68.74 20.98 58.17 14.26 46.53 C 12.00 42.62 13.35 37.57 17.27 35.31 C 21.18 33.05 26.23 34.40 28.49 38.31 C 35.21 49.96 39.17 64.22 43.77 81.22Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M 56.22 81.22 C 60.82 64.22 64.79 49.96 71.51 38.31 C 73.77 34.40 78.82 33.05 82.73 35.31 C 86.64 37.57 88.00 42.62 85.74 46.53 C 79.02 58.17 68.65 68.74 56.22 81.22Z" />
+</vector>

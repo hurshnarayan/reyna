@@ -230,7 +230,7 @@ private fun Welcome() {
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                painterResource(R.drawable.ic_bolt_logo), null,
+                painterResource(R.drawable.ic_reyna_mark), null,
                 tint = c.background, modifier = Modifier.size(46.dp),
             )
         }

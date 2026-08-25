@@ -51,11 +51,13 @@ fun ReynaAvatar(size: Dp = 34.dp) {
         Modifier.size(size).clip(CircleShape).background(c.onSurface),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            painter = painterResource(R.drawable.ic_bolt_logo),
+        // 0.56 of the disc is the mark's specified clear space, which is one
+        // bead diameter on its own grid. Sizing it by eye instead is what
+        // makes a logo look slightly wrong in a way nobody can name.
+        ReynaLogo(
+            color = c.background,
+            modifier = Modifier.size(size * 0.56f),
             contentDescription = null,
-            tint = c.background,
-            modifier = Modifier.size(size * 0.58f),
         )
     }
 }

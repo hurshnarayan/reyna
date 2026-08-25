@@ -184,8 +184,41 @@ Consequences that are already designed in, and should not be undone:
   now sets `thinkingBudget: 0` and reports `finishReason`, so an empty
   candidate is diagnosable rather than looking like an empty document.
 
+## The mark
+
+Reyna's logo is three rising drops forming a crown, specified in the "Reyna
+Mark" artifact and reproduced from its geometry rather than eyeballed. Every
+drop is the same curve placed three times, rotated about a pivot below the
+mark, the outer pair splayed thirty degrees. The tails stop level and short of
+that pivot so the shapes never touch, and the centre drop is longer and heavier
+than the outer pair, which is what makes it read as a crown rather than a fan.
+
+It lives in three places, all carrying the same numbers on the same hundred by
+hundred grid:
+
+- `ui/components/ReynaMark.kt` draws it in Compose, taking whatever colour it
+  is given. Use `ReynaLogo` and size it with a modifier.
+- `res/drawable/ic_reyna_mark.xml` is the tinted vector, for the notification
+  icon and anything that needs a drawable.
+- `res/drawable/ic_launcher_foreground.xml` places it in the adaptive icon's
+  66dp safe zone by a single scale and translate, so the geometry stays
+  identical rather than being redrawn to fit.
+
+Minimum size 16dp; below that the gaps close and it stops being three shapes.
+Do not put a bar under it, outline it, squash it, or fill it with a gradient.
+The old lightning bolt is gone.
+
 ## Still open
 
+- **The seamless chat layout has not been seen on a device.** Answers now
+  render as full-width prose with no bubble, since a bubble is a container for
+  something one party said and the wrong shape for a document read back: it
+  capped the answer at 286dp and made four sentences look like a wall of chat.
+  Questions keep their bubble, which is what carries the turn-taking. Under
+  each answer is a quiet row of controls: sources, copy, try again, and the
+  time. Rating buttons were left out on purpose, because nothing records a
+  rating and a control that silently discards what you tell it is worse than no
+  control; read aloud was left out because it needs text to speech wired up.
 - **None of the app changes have been run on a device.** The backend was tested
   end to end against the real database and the Kotlin compiles and unit tests
   pass, but the choice sheet, the preview tap and the staged progress text have
