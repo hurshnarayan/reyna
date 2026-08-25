@@ -11,15 +11,26 @@ import (
 
 	"github.com/hurshnarayan/reyna/internal/api"
 	"github.com/hurshnarayan/reyna/internal/config"
-	"github.com/hurshnarayan/reyna/internal/repository"
 	"github.com/hurshnarayan/reyna/internal/integrations/gdrive"
 	"github.com/hurshnarayan/reyna/internal/integrations/llm"
+	"github.com/hurshnarayan/reyna/internal/model"
 	"github.com/hurshnarayan/reyna/internal/nlp"
+	"github.com/hurshnarayan/reyna/internal/repository"
 )
 
 // unreadableSentinel marks a file whose bytes are gone, so the backfill queue
 // does not offer it again on every pass.
-const unreadableSentinel = "[unreadable]"
+const unreadableSentinel = repository.UnreadableSentinel
+
+const (
+	// backfillDailyReads is how much of the daily model allowance the
+	// background reader may spend. The rest is kept for questions.
+	backfillDailyReads = 8
+
+	// quietBefore is how long after a question the background reader waits
+	// before touching the model again.
+	quietBefore = 10 * time.Minute
+)
 
 func main() {
 	cfg := config.Load()
@@ -144,14 +155,47 @@ func main() {
 		// asking anything. The user then finds no quota left for the one
 		// question they actually wanted answered. A refusal now means an hour
 		// of silence, which leaves the allowance for interactive use.
-		backoff := 20 * time.Second
+		backoff := 2 * time.Minute
+		spentToday, day := 0, time.Now().YearDay()
 		for {
 			time.Sleep(backoff)
-			pending, err := store.FilesMissingContent(1)
+
+			// The daily allowance is small and shared. Most of it is held back
+			// for questions, because a document read because somebody asked
+			// about it is worth several read because it happened to be next in
+			// a queue. Without this the worker spent the whole day's calls
+			// within minutes of midnight and every question after that was
+			// answered from filenames alone.
+			if d := time.Now().YearDay(); d != day {
+				day, spentToday = d, 0
+			}
+			if spentToday >= backfillDailyReads {
+				continue
+			}
+
+			// Never read while somebody is mid-conversation. Their question
+			// gets the next call.
+			if api.SinceLastQuestion() < quietBefore {
+				continue
+			}
+
+			pending, err := store.FilesMissingContent(20)
 			if err != nil || len(pending) == 0 {
 				continue
 			}
-			f := pending[0]
+			var f *model.File
+			for i := range pending {
+				if api.ReadableForExtraction(pending[i].MimeType, pending[i].FileName) {
+					f = &pending[i]
+					break
+				}
+				// Nothing in here to read. Retire it so the queue moves on
+				// instead of offering the same photograph forever.
+				store.UpdateFileContent(pending[i].ID, unreadableSentinel, "")
+			}
+			if f == nil {
+				continue
+			}
 			data, derr := drive.GetLocalFileData(f.ID)
 			if derr != nil || len(data) == 0 {
 				// Nothing to read. Marked with a sentinel rather than an empty
@@ -170,7 +214,8 @@ func main() {
 				}
 				continue
 			}
-			backoff = 20 * time.Second
+			backoff = 2 * time.Minute
+			spentToday++
 			store.UpdateFileContent(f.ID, content, summary)
 			if subject != "" && (f.Subject == "" || f.Subject == "Uncategorized" || f.Subject == "Documents") {
 				store.UpdateFileSubject(f.ID, subject)
@@ -193,4 +238,3 @@ func main() {
 		log.Fatalf("Server failed: %v", err)
 	}
 }
-

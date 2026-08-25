@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hurshnarayan/reyna/internal/auth"
@@ -1533,6 +1534,8 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	lastQuestion.Store(time.Now().Unix())
+
 	// Parse the natural language query into WHO/WHAT/WHEN/WHY with conversation history
 	who, what, when, why := s.classifier.ParseNLPQueryWithHistory(req.Query, req.History)
 	// Reyna is the assistant/app name, not a sender person
@@ -1648,14 +1651,37 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("[NLP-RETRIEVE] db_files=%d drive_matches=%d (after metadata pass)", len(files), len(driveMatches))
 
+	// ── Read anything that matched but has never been read ──
+	//
+	// A file reaches the server long before anybody reads it: extraction is a
+	// model call, the allowance is small, and the background worker crawls the
+	// library slowly. So the ordinary case is a document whose *name* plainly
+	// answers the question sitting in the results with nothing inside it, and
+	// an answer that says "I have no information about module 4" while the
+	// search screen lists a file called "Module 4".
+	//
+	// Read them now, at the moment someone is asking, and keep what is read.
+	// This is also the only sane way to spend a small allowance: on the three
+	// documents a person actually asked about rather than the next three in a
+	// queue of a thousand.
+	readNow := s.ensureContent(files, onDemandReads, time.Now().Add(onDemandBudget))
+	if readNow > 0 {
+		log.Printf("[NLP-RETRIEVE] read %d file(s) on demand", readNow)
+	}
+
 	// ── Deep content retrieval (Fix 3 from earlier) ──
 	// If metadata search returned nothing, OR the query has specific content
 	// cues that metadata can't catch ("the diagram with R1 R2", "the page
 	// mentioning Wien bridge"), send candidate PDFs to Gemini and ask which
 	// ones actually match. Cost: ~₹0.05 per candidate, capped at 5.
-	if len(files) == 0 || hasContentCues(req.Query) {
+	// Skipped when the top matches already have text, including text read a
+	// moment ago. Deep retrieval exists to find documents the metadata search
+	// missed; asking it to re-confirm files that were just read costs a model
+	// call and several seconds each and cannot change the answer. Leaving it
+	// on doubled a seventy second query for nothing.
+	if len(files) == 0 || (hasContentCues(req.Query) && readNow == 0 && !topFilesRead(s, files)) {
 		log.Printf("[NLP-RETRIEVE] triggering deep content retrieval")
-		deepHits := s.deepContentRetrieve(groupIDs, req.Query, who, sinceTime, 5)
+		deepHits := s.deepContentRetrieve(groupIDs, req.Query, who, what, sinceTime, 5)
 		if len(deepHits) > 0 {
 			// Merge: deep hits take priority, then add metadata hits not already present
 			seen := map[int64]bool{}
@@ -1750,15 +1776,15 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 				context = content
 			}
 			citations = []model.Citation{{
-				FileID:                top.ID,
-				FileName:              top.FileName,
-				Sender:                sender,
-				SharedAt:              formatSharedAt(top.SharedAt()),
-				Folder:                top.Subject,
-				Quote:                 quote,
-				Context:               context,
-				Page:                  1,
-				Confidence:            top.AttributionConfidence,
+				FileID:     top.ID,
+				FileName:   top.FileName,
+				Sender:     sender,
+				SharedAt:   formatSharedAt(top.SharedAt()),
+				Folder:     top.Subject,
+				Quote:      quote,
+				Context:    context,
+				Page:       1,
+				Confidence: top.AttributionConfidence,
 			}}
 		}
 	}
@@ -2240,6 +2266,132 @@ func hasContentCues(query string) bool {
 	return false
 }
 
+// onDemandReads and onDemandBudget bound the reading done while somebody
+// waits. Three documents is enough to cover a question that names one, and
+// thirty seconds is roughly the point past which a person assumes the app has
+// hung. Whatever is not read this time is read by the background worker.
+const (
+	onDemandReads  = 3
+	onDemandBudget = 30 * time.Second
+)
+
+// lastQuestion is when somebody last asked something, as unix seconds.
+//
+// The background reader consults it. A person waiting for an answer and a
+// worker grinding through a backlog are competing for the same small daily
+// allowance, and the person has to win.
+var lastQuestion atomic.Int64
+
+// SinceLastQuestion reports how long ago the last question arrived.
+func SinceLastQuestion() time.Duration {
+	t := lastQuestion.Load()
+	if t == 0 {
+		return 24 * time.Hour
+	}
+	return time.Since(time.Unix(t, 0))
+}
+
+// readableExtensions are the file types that yield text without OCR.
+//
+// Photographs, video and audio are absent on purpose. They cost a model call
+// each and answer nothing, and on a normal phone they outnumber documents
+// twenty to one, so including them meant the allowance was spent on holiday
+// snaps while the documents went unread.
+var readableExtensions = map[string]bool{
+	".pdf": true,
+	".doc": true, ".docx": true, ".odt": true, ".rtf": true,
+	".ppt": true, ".pptx": true, ".odp": true,
+	".xls": true, ".xlsx": true, ".ods": true, ".csv": true,
+	".txt": true, ".md": true, ".log": true, ".json": true,
+	".xml": true, ".html": true, ".htm": true, ".epub": true,
+}
+
+// ReadableForExtraction reports whether reading this file could ever produce
+// text. The extension decides, because the mime type arrives from a phone and
+// is frequently application/octet-stream.
+func ReadableForExtraction(mimeType, fileName string) bool {
+	if strings.HasPrefix(mimeType, "image/") ||
+		strings.HasPrefix(mimeType, "video/") ||
+		strings.HasPrefix(mimeType, "audio/") {
+		return false
+	}
+	i := strings.LastIndex(fileName, ".")
+	if i < 0 {
+		return false
+	}
+	return readableExtensions[strings.ToLower(fileName[i:])]
+}
+
+// readAndStore reads one file and keeps the text. Returns what it read, or the
+// unreadable sentinel, or "" when the bytes are simply not here.
+func (s *Server) readAndStore(f model.File) string {
+	data, err := s.drive.GetLocalFileData(f.ID)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	content, summary := s.classifier.ExtractContent(f.FileName, f.MimeType, f.FileSize, data)
+	if strings.TrimSpace(content) == "" {
+		// Recorded rather than left blank, so the same file is not offered for
+		// reading again on every question for the rest of its life.
+		s.store.UpdateFileContent(f.ID, repository.UnreadableSentinel, "")
+		log.Printf("[READ] %s produced no text", f.FileName)
+		return repository.UnreadableSentinel
+	}
+	s.store.UpdateFileContent(f.ID, content, summary)
+	log.Printf("[READ] %s -> %d chars", f.FileName, len(content))
+	return content
+}
+
+// topFilesRead reports whether the files an answer would actually cite have
+// text behind them.
+func topFilesRead(s *Server, files []model.File) bool {
+	n := maxCitedFiles
+	if len(files) < n {
+		n = len(files)
+	}
+	if n == 0 {
+		return false
+	}
+	ids := make([]int64, 0, n)
+	for _, f := range files[:n] {
+		ids = append(ids, f.ID)
+	}
+	have := s.store.GetFileExtractedContent(ids)
+	for _, id := range ids {
+		if c := have[id]; c != "" && c != repository.UnreadableSentinel {
+			return true
+		}
+	}
+	return false
+}
+
+// ensureContent reads any of these files that have never been read, best
+// match first, and stops at either limit. Returns how many it read.
+func (s *Server) ensureContent(files []model.File, max int, deadline time.Time) int {
+	if max <= 0 || len(files) == 0 {
+		return 0
+	}
+	ids := make([]int64, 0, len(files))
+	for _, f := range files {
+		ids = append(ids, f.ID)
+	}
+	have := s.store.GetFileExtractedContent(ids)
+
+	read := 0
+	for _, f := range files {
+		if read >= max || time.Now().After(deadline) {
+			break
+		}
+		if have[f.ID] != "" || !ReadableForExtraction(f.MimeType, f.FileName) {
+			continue
+		}
+		if s.readAndStore(f) != "" {
+			read++
+		}
+	}
+	return read
+}
+
 // deepContentRetrieve does an expensive but accurate AI-powered search:
 // for each candidate file (ranked by metadata + recency), it sends the
 // actual PDF bytes to Gemini and asks "does this document match the user's
@@ -2255,13 +2407,22 @@ const maxCitedFiles = 4
 // deepRetrieveBudget bounds how long a query may spend reading documents.
 const deepRetrieveBudget = 20 * time.Second
 
-func (s *Server) deepContentRetrieve(groupIDs []int64, rawQuery string, who string, sinceTime *time.Time, maxCandidates int) []model.File {
+func (s *Server) deepContentRetrieve(groupIDs []int64, rawQuery, who, what string, sinceTime *time.Time, maxCandidates int) []model.File {
 	if maxCandidates <= 0 {
 		maxCandidates = 5
 	}
-	// Pull candidate pool: WHO + WHEN filter only, no WHAT (we're going to
-	// let Gemini decide WHAT). If WHO is empty, get the most recent files.
-	candidates, _ := s.store.SearchFilesNLP(groupIDs, who, "", sinceTime, maxCandidates*2)
+	// Candidates are what the user asked for, widening only when that finds
+	// nothing.
+	//
+	// This used to search on WHO and WHEN alone and deliberately ignore WHAT,
+	// on the theory that the model should decide relevance. On a library of a
+	// few dozen files that works. On a few thousand it means the five files
+	// sent for reading are simply the five most recent ones, and a document
+	// named after the exact thing being asked about is never even a candidate.
+	candidates, _ := s.store.SearchFilesNLP(groupIDs, who, what, sinceTime, maxCandidates*2)
+	if len(candidates) == 0 && what != "" {
+		candidates, _ = s.store.SearchFilesNLP(groupIDs, who, "", sinceTime, maxCandidates*2)
+	}
 	if len(candidates) == 0 && who != "" {
 		// Drop the WHO filter — maybe the user misspelled the sender
 		candidates, _ = s.store.SearchFilesNLP(groupIDs, "", "", sinceTime, maxCandidates*2)
@@ -2308,16 +2469,25 @@ func (s *Server) deepContentRetrieve(groupIDs []int64, rawQuery string, who stri
 		// slower, costs far more of a rate limited quota, and answers no
 		// better. Bytes are only sent when there is no cached text at all.
 		content := s.store.GetFileExtractedContent([]int64{f.ID})[f.ID]
-		if content != "" {
+		if content == "" && ReadableForExtraction(f.MimeType, f.FileName) {
+			// Read it properly and keep the text, rather than asking the model
+			// a yes/no question and throwing the reading away. The old path
+			// spent a whole model call to learn that a file matched, then
+			// handed the answer generator a filename with no contents, so the
+			// reply was "I found it but I have no information about it".
+			content = s.readAndStore(f)
+		}
+		switch {
+		case content != "" && content != repository.UnreadableSentinel:
 			matched, confidence = s.classifier.MatchesQueryText(rawQuery, f.FileName, content)
-		} else if strings.Contains(f.MimeType, "pdf") || strings.Contains(f.MimeType, "image") {
+		case strings.Contains(f.MimeType, "image"):
 			data, derr := s.drive.GetLocalFileData(f.ID)
 			if derr != nil || len(data) == 0 {
 				log.Printf("[DEEP-RETRIEVE] skip %s, no local bytes", f.FileName)
 				continue
 			}
 			matched, confidence = s.classifier.MatchesQuery(rawQuery, f.FileName, f.MimeType, data)
-		} else {
+		default:
 			continue
 		}
 		if matched && confidence >= 0.3 {

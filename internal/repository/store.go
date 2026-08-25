@@ -1387,6 +1387,14 @@ func (s *Store) FindDriveConnectedUser(groupID int64) *model.User {
 
 // ── Content Extraction ──
 
+// UnreadableSentinel marks a file whose bytes could not be turned into text.
+//
+// Stored rather than left empty so the file stops being offered for reading on
+// every pass. An empty extracted_content means "not read yet"; this means
+// "tried, and there is nothing here".
+const UnreadableSentinel = "[unreadable]"
+
+
 // UpdateFileContent stores extracted content and summary for a file
 func (s *Store) UpdateFileContent(fileID int64, content, summary string) error {
 	_, err := s.db.Exec(
