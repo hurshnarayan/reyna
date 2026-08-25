@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hurshnarayan/reyna/internal/docs"
 	"github.com/hurshnarayan/reyna/internal/integrations/llm"
 	"github.com/hurshnarayan/reyna/internal/model"
 )
@@ -45,9 +46,10 @@ func (c *Classifier) ProviderName() string {
 
 // ClassifyFile determines the best folder for a file based on its name.
 // Folder Priority Logic (from PDF):
-//   1st: User-created folders — your structure wins
-//   2nd: Reyna-created folders — from past classifications
-//   3rd: Create new folder — only when nothing fits
+//
+//	1st: User-created folders — your structure wins
+//	2nd: Reyna-created folders — from past classifications
+//	3rd: Create new folder — only when nothing fits
 func (c *Classifier) ClassifyFile(fileName string, existingFolders []string) (folder string, isNew bool, confidence float64) {
 	// Priority 1 & 2: Try keyword match against existing folders (user + reyna folders)
 	if match, conf := c.keywordMatchFolder(fileName, existingFolders); match != "" {
@@ -125,20 +127,20 @@ func (c *Classifier) keywordMatchFolder(fileName string, folders []string) (stri
 		}
 		// Check common abbreviations
 		abbrevs := map[string][]string{
-			"dsa":           {"data structure", "algorithm", "sorting", "linked list", "tree", "graph"},
-			"os":            {"operating system", "process", "thread", "scheduling", "memory management"},
-			"dbms":          {"database", "sql", "normalization", "er diagram", "relational"},
-			"cn":            {"computer network", "networking", "tcp", "udp", "osi", "routing"},
-			"daa":           {"design and analysis", "algorithm", "complexity", "dynamic programming"},
-			"coa":           {"computer organization", "architecture", "pipeline", "cache"},
-			"compiler":      {"compiler design", "lexical", "parsing", "syntax"},
-			"maths":         {"math", "calculus", "linear algebra", "probability", "statistics"},
-			"physics":       {"physics", "mechanics", "thermodynamics", "optics", "quantum"},
-			"chemistry":     {"chemistry", "organic", "inorganic", "physical chemistry"},
-			"pyq":           {"previous year", "past paper", "exam paper", "question paper"},
-			"assignment":    {"assignment", "homework", "submission"},
-			"lab":           {"lab", "practical", "experiment"},
-			"notes":         {"notes", "lecture", "module", "unit"},
+			"dsa":        {"data structure", "algorithm", "sorting", "linked list", "tree", "graph"},
+			"os":         {"operating system", "process", "thread", "scheduling", "memory management"},
+			"dbms":       {"database", "sql", "normalization", "er diagram", "relational"},
+			"cn":         {"computer network", "networking", "tcp", "udp", "osi", "routing"},
+			"daa":        {"design and analysis", "algorithm", "complexity", "dynamic programming"},
+			"coa":        {"computer organization", "architecture", "pipeline", "cache"},
+			"compiler":   {"compiler design", "lexical", "parsing", "syntax"},
+			"maths":      {"math", "calculus", "linear algebra", "probability", "statistics"},
+			"physics":    {"physics", "mechanics", "thermodynamics", "optics", "quantum"},
+			"chemistry":  {"chemistry", "organic", "inorganic", "physical chemistry"},
+			"pyq":        {"previous year", "past paper", "exam paper", "question paper"},
+			"assignment": {"assignment", "homework", "submission"},
+			"lab":        {"lab", "practical", "experiment"},
+			"notes":      {"notes", "lecture", "module", "unit"},
 		}
 		if expanded, ok := abbrevs[fl]; ok {
 			for _, term := range expanded {
@@ -739,47 +741,81 @@ Respond ONLY with JSON, no other text:
 // PDFs are base64-encoded and sent as document blocks to Claude/Gemini.
 // For providers that don't support doc blocks (OpenAI/Grok), falls back to filename analysis.
 func (c *Classifier) ExtractContent(fileName, mimeType string, fileSize int64, fileData []byte) (content string, summary string) {
+	// Read it here when the format allows it.
+	//
+	// Free, instant, exact, and it does not touch a daily allowance measured
+	// in tens of calls. Only PDFs genuinely need the model, because nothing in
+	// the standard library turns a PDF into text.
+	if docs.CanExtract(fileName) {
+		if text, err := docs.Text(fileName, fileData); err == nil && strings.TrimSpace(text) != "" {
+			return text, c.summarise(fileName, text)
+		}
+	}
+
 	if !c.IsEnabled() {
 		return "", ""
 	}
 
-	prompt := fmt.Sprintf(`You are a document analysis agent for a personal file archive holding any kind of document.
-Analyze this document and extract:
-1. "content": detailed description of the topics, concepts, chapters, key terms it covers (max 800 chars)
-2. "summary": one-line summary (max 100 chars)
+	// Only PDFs and images reach the model. Everything else either was read
+	// above or cannot be read at all, and guessing a document's contents from
+	// its filename is worse than admitting it has not been read: it produces a
+	// confident paragraph about a document nobody has opened, and the answer
+	// generator has no way to tell that apart from a real reading.
+	canSend := len(fileData) > 0 && len(fileData) <= geminiInlineMaxBytes &&
+		(strings.Contains(mimeType, "pdf") || strings.Contains(mimeType, "image"))
+	if !canSend {
+		return "", ""
+	}
+
+	prompt := fmt.Sprintf(`Read this document and return what it actually says.
+
+1. "content": the document's readable text, not a description of it. Transcribe it.
+   Copy every fact verbatim: names, dates, times, amounts, reference numbers, room and seat codes, table rows, deadlines, contact details, terms, definitions, formulas.
+   A table becomes one line per row with its columns separated by " | ".
+   Do NOT write "contains a timetable with room assignments". Write the rows, with the rooms in them.
+   Skip decoration and repeated headers. Up to 6000 characters.
+   Begin each page with a marker on its own line, exactly [[page 1]], [[page 2]] and so on.
+2. "summary": one line, under 100 characters, saying what the document is.
 
 Filename: "%s"
 
 Respond ONLY with JSON, no other text:
 {"content": "...", "summary": "..."}`, fileName)
 
-	var result string
-	var err error
-
-	// Try sending actual file data for deep extraction (PDF, images).
-	// Never slice raw bytes — that corrupts the file. Only send if it fits inline.
-	if len(fileData) > 0 && len(fileData) <= geminiInlineMaxBytes && (strings.Contains(mimeType, "pdf") || strings.Contains(mimeType, "image")) {
-		result, err = c.llm.CompleteWithDoc(prompt, fileData, mimeType, 1500)
-	} else {
-		// For DOCXs and other types, use filename-based analysis
-		result, err = c.llm.Complete(prompt, 800)
-	}
-
+	result, err := c.llm.CompleteWithDoc(prompt, fileData, mimeType, 8000)
 	if err != nil {
-		log.Printf("[EXTRACT] Error: %v, falling back to filename analysis", err)
-		return c.extractFromFilename(fileName, mimeType, fileSize)
+		log.Printf("[EXTRACT] %s: %v", fileName, err)
+		return "", ""
 	}
 
 	var resp struct {
 		Content string `json:"content"`
 		Summary string `json:"summary"`
 	}
-	result = llm.CleanJSON(result)
-	if err := json.Unmarshal([]byte(result), &resp); err != nil {
-		log.Printf("[EXTRACT] Parse error: %v", err)
-		return c.extractFromFilename(fileName, mimeType, fileSize)
+	if err := json.Unmarshal([]byte(llm.CleanJSON(result)), &resp); err != nil {
+		log.Printf("[EXTRACT] %s: parse error: %v", fileName, err)
+		return "", ""
 	}
 	return resp.Content, resp.Summary
+}
+
+// summarise writes the one line shown beside a file, from text already in hand.
+//
+// Falls back to the opening line rather than spending a model call: the
+// summary is a label, and a label is not worth one of the day's few calls when
+// the full text is already stored and searchable.
+func (c *Classifier) summarise(fileName, text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "[[page") {
+			continue
+		}
+		if len(line) > 100 {
+			line = line[:100]
+		}
+		return line
+	}
+	return fileName
 }
 
 // extractFromFilename is the fallback when file data can't be sent to the LLM
