@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CloudUpload
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -38,6 +39,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.reyna.R
@@ -81,7 +83,7 @@ fun OnboardingScreen(
     onGrant: (Permissions.Kind) -> Unit,
     onContinue: () -> Unit,
     onSkip: () -> Unit,
-    connectingDrive: Boolean = false,
+    driveConnect: DriveConnectState = DriveConnectState.Idle,
     onConnectDrive: () -> Unit = {},
 ) {
     val c = reynaColors
@@ -163,7 +165,7 @@ fun OnboardingScreen(
                     granted = granted[Permissions.Kind.Battery] == true,
                     onGrant = { onGrant(Permissions.Kind.Battery) },
                 )
-                OnboardingStep.Drive -> DriveStep(connectingDrive, onConnectDrive)
+                OnboardingStep.Drive -> DriveStep(driveConnect, onConnectDrive)
             }
         }
 
@@ -177,7 +179,10 @@ fun OnboardingScreen(
                 enabled = canContinue,
                 onClick = onContinue,
             )
-            if (skippable && !canContinue || step == OnboardingStep.Drive || step == OnboardingStep.Battery) {
+            val connected = driveConnect is DriveConnectState.Connected
+            if ((skippable && !canContinue || step == OnboardingStep.Battery) ||
+                (step == OnboardingStep.Drive && !connected)
+            ) {
                 Spacer(Modifier.height(10.dp))
                 Text(
                     "Skip for now",
@@ -355,8 +360,17 @@ private fun FirstScan(count: Int, scanning: Boolean) {
     }
 }
 
+/**
+ * Connecting Drive, with the outcome on the screen.
+ *
+ * The consent screen runs in a browser and finishes on the server, so the app
+ * only learns the result when it is resumed. Until it does, the button has to
+ * say it is waiting; once it does, it has to say which way it went. Reporting
+ * only through a snackbar left every outcome looking the same as no outcome,
+ * which is how a working button got reported as dead.
+ */
 @Composable
-private fun DriveStep(connecting: Boolean, onConnectDrive: () -> Unit) {
+private fun DriveStep(state: DriveConnectState, onConnectDrive: () -> Unit) {
     val c = reynaColors
     Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
         Box(
@@ -373,10 +387,63 @@ private fun DriveStep(connecting: Boolean, onConnectDrive: () -> Unit) {
                 "Everything works without it. Files stay on this phone and are still searchable.",
             fontSize = 15.sp, color = c.onSurfaceMuted, lineHeight = 22.sp,
         )
-        Spacer(Modifier.height(22.dp))
-        SecondaryButton(if (connecting) "Connecting" else "Connect Drive") {
-            if (!connecting) onConnectDrive()
+
+        if (state is DriveConnectState.Failed) {
+            Spacer(Modifier.height(18.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(c.partial.copy(alpha = 0.10f))
+                    .padding(12.dp),
+            ) {
+                Text(state.reason, fontSize = 13.sp, color = c.partial, lineHeight = 19.sp)
+            }
         }
+
+        Spacer(Modifier.height(22.dp))
+        when (state) {
+            is DriveConnectState.Connected -> Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.CheckCircle, null, tint = c.confident, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.size(8.dp))
+                Text(
+                    if (state.email.isBlank()) "Connected" else "Connected as ${state.email}",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = c.confident,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            // Inert on purpose while the browser is open. Tapping again would
+            // mint a second consent URL and leave two half-finished flows.
+            DriveConnectState.Connecting -> BusyButton("Waiting for Google")
+            is DriveConnectState.Failed -> SecondaryButton("Try again", onConnectDrive)
+            DriveConnectState.Idle -> SecondaryButton("Connect Drive", onConnectDrive)
+        }
+    }
+}
+
+/** A button that is visibly working and deliberately does nothing when tapped. */
+@Composable
+private fun BusyButton(text: String) {
+    val c = reynaColors
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(CircleShape)
+            .border(1.5.dp, c.onSurfaceMuted, CircleShape)
+            .padding(vertical = 14.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CircularProgressIndicator(
+            Modifier.size(16.dp),
+            color = c.onSurfaceMuted,
+            strokeWidth = 2.dp,
+        )
+        Spacer(Modifier.size(10.dp))
+        Text(text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = c.onSurfaceMuted)
     }
 }
 

@@ -15,10 +15,30 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
+
+/**
+ * Where the Drive connection has got to.
+ *
+ * Modelled as a state rather than a boolean because the outcome has to stay on
+ * the screen. Onboarding is exactly where a snackbar is missed: the user is
+ * coming back from a browser, looking at the button they pressed, and a button
+ * that has quietly gone back to saying "Connect Drive" is indistinguishable
+ * from one that never did anything. It has to say what happened and let them
+ * try again.
+ */
+sealed interface DriveConnectState {
+    data object Idle : DriveConnectState
+    data object Connecting : DriveConnectState
+    data class Connected(val email: String) : DriveConnectState
+    data class Failed(val reason: String) : DriveConnectState
+}
 
 /**
  * All app state, in one place.
@@ -75,8 +95,13 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
      * needs to be told something is in progress. Without this the row sat
      * unchanged through the whole round trip and looked like the tap missed.
      */
-    private val _connectingDrive = MutableStateFlow(false)
-    val connectingDrive: StateFlow<Boolean> = _connectingDrive.asStateFlow()
+    private val _driveConnect = MutableStateFlow<DriveConnectState>(DriveConnectState.Idle)
+    val driveConnect: StateFlow<DriveConnectState> = _driveConnect.asStateFlow()
+
+    /** The one bit of the above that the settings sheet cares about. */
+    val connectingDrive: StateFlow<Boolean> = _driveConnect
+        .map { it is DriveConnectState.Connecting }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     /** True while an answer is in flight, so the composer can offer Stop. */
     private val _sending = MutableStateFlow(false)
@@ -196,6 +221,7 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
         // Scanning starts as soon as storage is granted, so the results screen
         // has something to show by the time the user reaches it.
         if (next == OnboardingStep.FirstScan) runFirstScan()
+        if (next == OnboardingStep.Drive) refreshDriveConnect()
     }
 
     fun onboardingBack() {
@@ -520,23 +546,21 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
      * opening a page that will fail.
      */
     fun connectDrive() {
-        if (_connectingDrive.value) return
+        if (_driveConnect.value is DriveConnectState.Connecting) return
         viewModelScope.launch {
             if (repo.deviceToken.isBlank()) {
-                _toast.value = "Set a device token first"
+                fail("Set a device token first")
                 return@launch
             }
-            _connectingDrive.value = true
+            _driveConnect.value = DriveConnectState.Connecting
             val url = when (val r = repo.driveConnect()) {
                 is Repo.DriveConnect.Url -> r.value
                 Repo.DriveConnect.NotConfigured -> {
-                    _connectingDrive.value = false
-                    _toast.value = "Drive is not set up on the server yet"
+                    fail("Drive is not set up on the server yet")
                     return@launch
                 }
                 Repo.DriveConnect.Unreachable -> {
-                    _connectingDrive.value = false
-                    _toast.value = "Cannot reach the backend. Check it is running and on the same network."
+                    fail("Cannot reach the backend. Check it is running and on the same network.")
                     return@launch
                 }
             }
@@ -544,11 +568,14 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
             val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             runCatching { app.startActivity(intent) }
-                .onFailure {
-                    _connectingDrive.value = false
-                    _toast.value = "No browser on this phone"
-                }
+                .onFailure { fail("No browser on this phone") }
         }
+    }
+
+    /** One place to put a Drive failure, so the screen and the snackbar agree. */
+    private fun fail(reason: String) {
+        _driveConnect.value = DriveConnectState.Failed(reason)
+        _toast.value = reason
     }
 
     /**
@@ -559,16 +586,39 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
      * return from a failed consent is indistinguishable from a successful one.
      */
     fun settleDriveConnect() {
-        if (!_connectingDrive.value) return
+        if (_driveConnect.value !is DriveConnectState.Connecting) return
         viewModelScope.launch {
             val state = repo.driveState()
             _driveState.value = state
-            _connectingDrive.value = false
-            _toast.value = when {
-                state == null -> "Could not reach the backend"
-                state.connected -> "Drive connected as ${state.email}"
-                else -> "Drive was not connected"
+            when {
+                state == null -> fail("Could not reach the backend")
+                state.connected -> {
+                    _driveConnect.value = DriveConnectState.Connected(state.email.orEmpty())
+                    _toast.value = "Drive connected as ${state.email}"
+                }
+                // Google sent them back without granting anything. Most often
+                // a declined consent, or an account that is not on the test
+                // user list while the OAuth app is unverified.
+                else -> fail("Drive was not connected. The consent screen was closed or refused.")
             }
+        }
+    }
+
+    /**
+     * Asks the server whether Drive is already connected, without starting a
+     * connection.
+     *
+     * Called when the Drive step opens, so someone who connected earlier and
+     * came back through a reset is not asked to do it again.
+     */
+    fun refreshDriveConnect() {
+        if (_driveConnect.value is DriveConnectState.Connecting) return
+        viewModelScope.launch {
+            val state = repo.driveState() ?: return@launch
+            _driveState.value = state
+            _driveConnect.value =
+                if (state.connected) DriveConnectState.Connected(state.email.orEmpty())
+                else DriveConnectState.Idle
         }
     }
 
@@ -605,6 +655,7 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
                 if (ok) "Disconnected. Files already in your Drive are untouched."
                 else "Could not reach the backend"
             _driveState.value = repo.driveState()
+            _driveConnect.value = DriveConnectState.Idle
         }
     }
 
@@ -621,6 +672,7 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
             _onboardingStep.value = OnboardingStep.Welcome
             _needsOnboarding.value = true
             _driveState.value = null
+            _driveConnect.value = DriveConnectState.Idle
             _toast.value = "Reset. Your files and Drive are untouched."
         }
     }

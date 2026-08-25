@@ -146,7 +146,7 @@ private fun Onboarding(vm: ReynaViewModel, activity: ComponentActivity) {
     val permissions by vm.permissions.collectAsState()
     val scanning by vm.scanning.collectAsState()
     val scanProgress by vm.scanProgress.collectAsState()
-    val connectingDrive by vm.connectingDrive.collectAsState()
+    val driveConnect by vm.driveConnect.collectAsState()
     val files by vm.files.collectAsState()
 
     BackHandler(enabled = step != OnboardingStep.Welcome) { vm.onboardingBack() }
@@ -162,7 +162,7 @@ private fun Onboarding(vm: ReynaViewModel, activity: ComponentActivity) {
         onGrant = { Permissions.request(activity, it) },
         onContinue = vm::onboardingNext,
         onSkip = vm::onboardingSkip,
-        connectingDrive = connectingDrive,
+        driveConnect = driveConnect,
         onConnectDrive = vm::connectDrive,
     )
 }
