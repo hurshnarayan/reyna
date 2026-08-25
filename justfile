@@ -188,7 +188,9 @@ backend-bg:
     #!/usr/bin/env bash
     set -euo pipefail
     go build -o /tmp/reyna-server ./cmd/server
-    lsof -ti :8080 | xargs -r kill 2>/dev/null || true
+    # -sTCP:LISTEN or this kills every process merely *connected* to the
+    # port, which includes the emulator running the app, and did.
+    lsof -ti :8080 -sTCP:LISTEN | xargs -r kill 2>/dev/null || true
     sleep 1
     printf '#!/bin/sh\ncd %s\nset -a\n. ./.env\nset +a\nexec /tmp/reyna-server\n' "$PWD" > /tmp/run-reyna.sh
     chmod +x /tmp/run-reyna.sh

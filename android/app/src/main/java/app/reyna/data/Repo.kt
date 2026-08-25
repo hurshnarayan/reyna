@@ -421,7 +421,23 @@ class Repo private constructor(private val context: Context) {
      * Search was invisible to chat: chat searches the server, and the server
      * had never received it.
      */
-    suspend fun syncPending(limit: Int = 20): Int = uploadAll(dao.pendingUpload(limit))
+    suspend fun syncPending(limit: Int = 60): Int = uploadAll(readableOnly(dao.pendingUpload(limit * 8)).take(limit))
+
+    /**
+     * Drops everything the server could not read anyway, and retires it so it
+     * stops being offered.
+     *
+     * Done here rather than in the SQL because the queue is defined by an
+     * extension, and putting that list in a Room query would freeze it into
+     * the schema.
+     */
+    private suspend fun readableOnly(pending: List<FileEntity>): List<FileEntity> {
+        val keep = ArrayList<FileEntity>(pending.size)
+        for (f in pending) {
+            if (isReadable(f.name)) keep.add(f) else retire(f.id)
+        }
+        return keep
+    }
 
     /**
      * Sends the pending files whose names look like the question, before
@@ -437,11 +453,11 @@ class Repo private constructor(private val context: Context) {
      * cannot judge the contents; it can only notice that a file nobody has read
      * yet is called something like what was asked.
      */
-    suspend fun syncMatchingFirst(question: String, limit: Int = 3): Int {
+    suspend fun syncMatchingFirst(question: String, limit: Int = 5): Int {
         val tokens = queryTokens(question)
         if (tokens.isEmpty()) return 0
-        val ranked = dao.pendingUpload(500)
-            .map { f -> f to tokens.count { f.name.lowercase().contains(it) } }
+        val ranked = readableOnly(dao.pendingUpload(4000))
+            .map { f -> f to score(f.name, tokens) }
             .filter { it.second > 0 }
             .sortedByDescending { it.second }
             .take(limit)
@@ -586,7 +602,7 @@ class Repo private constructor(private val context: Context) {
         // the server found nothing and the phone is still holding files it has
         // not sent, say so instead of letting the user conclude it is gone.
         if (citations.isEmpty() && citedIds.isEmpty() && answer != null) {
-            val queued = dao.pendingUpload(500).size
+            val queued = dao.pendingUpload(4000).count { isReadable(it.name) }
             if (queued > 0) {
                 reply += if (queued == 1) {
                     " One file on this phone has not been sent for reading yet, so it was not searched."
@@ -624,7 +640,27 @@ class Repo private constructor(private val context: Context) {
         )
         return question.lowercase()
             .split(Regex("[^a-zA-Z0-9]+"))
-            .filter { it.isNotBlank() && it.length > 1 && it !in stopWords }
+            // A bare digit is kept. "module 4" and "module 2" differ by
+            // exactly one character, and dropping it as too short is why a
+            // question about module 4 went looking for every module.
+            .filter { it.isNotBlank() && it !in stopWords && (it.length > 1 || it[0].isDigit()) }
+    }
+
+    /**
+     * How well a filename answers a question.
+     *
+     * A number is worth more than a word. Filenames in a library like this one
+     * repeat their vocabulary constantly and differ only in the index, so
+     * "module" separates almost nothing and "4" separates almost everything.
+     */
+    private fun score(name: String, tokens: List<String>): Int {
+        val lower = name.lowercase()
+        var total = 0
+        for (t in tokens) {
+            if (!lower.contains(t)) continue
+            total += if (t[0].isDigit()) 5 else 1
+        }
+        return total
     }
 
     private fun decodeCitations(json: String): List<ReynaApi.Citation> {
@@ -816,6 +852,27 @@ class Repo private constructor(private val context: Context) {
         private val DEFAULT_BACKEND: String = app.reyna.BuildConfig.BACKEND_URL
 
         private val IMAGE_EXT = setOf("jpg", "jpeg", "png", "webp")
+
+        /**
+         * The file types Reyna can actually read.
+         *
+         * Anything that yields text without OCR. Photographs, video and audio
+         * are deliberately absent: they cost a model call each, return nothing
+         * a question can be answered from, and there are thousands of them on
+         * a normal phone. Sending them was the reason a five thousand file
+         * library never finished uploading and the one PDF somebody asked
+         * about sat behind eight hundred holiday snaps.
+         */
+        private val READABLE_EXT = setOf(
+            "pdf",
+            "doc", "docx", "odt", "rtf",
+            "ppt", "pptx", "odp",
+            "xls", "xlsx", "ods", "csv",
+            "txt", "md", "log", "json", "xml", "html", "htm", "epub",
+        )
+
+        fun isReadable(name: String): Boolean =
+            name.substringAfterLast('.', "").lowercase() in READABLE_EXT
 
         @Volatile private var instance: Repo? = null
 
