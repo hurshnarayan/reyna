@@ -137,6 +137,13 @@ fun ChatScreen(
     onPushToDrive: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     sending: Boolean = false,
+    /** What Reyna is doing right now. Empty falls back to a generic line. */
+    stage: String = "",
+    /** Set when Reyna cannot tell which document was meant and is asking. */
+    choice: ReynaViewModel.PendingChoice? = null,
+    onChooseCandidate: (List<Long>) -> Unit = {},
+    onPreviewCandidate: (Long, String) -> Unit = { _, _ -> },
+    onDismissChoice: () -> Unit = {},
 ) {
     val c = reynaColors
     val listState = rememberLazyListState()
@@ -190,7 +197,16 @@ fun ChatScreen(
             }
             // A visible "working on it" turn. Twenty seconds of nothing reads
             // as a broken app, and this is also what the Stop button refers to.
-            if (sending) item { ThinkingRow() }
+            if (sending) item { ThinkingRow(stage) }
+        }
+
+        if (choice != null) {
+            ChoiceSheet(
+                choice = choice,
+                onChoose = onChooseCandidate,
+                onPreview = onPreviewCandidate,
+                onDismiss = onDismissChoice,
+            )
         }
 
         if (sheetSources.isNotEmpty()) {
@@ -305,7 +321,7 @@ private fun IconButton(
  * lands.
  */
 @Composable
-private fun ThinkingRow() {
+private fun ThinkingRow(stage: String) {
     val c = reynaColors
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
         Bubble(fromUser = false) {
@@ -316,7 +332,17 @@ private fun ThinkingRow() {
                     color = c.onSurfaceMuted,
                 )
                 Spacer(Modifier.width(9.dp))
-                Text("Looking through your files", fontSize = 14.sp, color = c.onSurfaceMuted)
+                // The server says which document it is reading, and reading is
+                // where nearly all the time goes. One fixed label for the whole
+                // wait made a question that was progressing normally look
+                // exactly like one that had hung.
+                Text(
+                    stage.ifBlank { "Looking through your files" },
+                    fontSize = 14.sp,
+                    color = c.onSurfaceMuted,
+                    maxLines = 2,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                )
             }
         }
     }
@@ -700,6 +726,125 @@ private fun highlightQuote(context: String, quote: String, accent: Color): Annot
         if (!matched) {
             // The quote spans lines or is not line aligned. Better to show the
             // passage unmarked than to highlight the wrong thing.
+        }
+    }
+}
+
+/**
+ * The choice Reyna offers when it cannot tell which document was meant.
+ *
+ * A library holding eleven files called "Module 1" cannot answer "what is
+ * module 1 about" from any one of them. Picking the top of a ranking and
+ * answering as though that had been the question is how a question about
+ * ordinary differential equations came back explaining the four ways to look
+ * at artificial intelligence: both files were called module 1, and one of them
+ * had to be first.
+ *
+ * Every row opens. Choosing between documents by filename alone is the same
+ * guess Reyna just declined to make, so the file itself is one tap away and
+ * the sheet stays open behind the preview.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun ChoiceSheet(
+    choice: ReynaViewModel.PendingChoice,
+    onChoose: (List<Long>) -> Unit,
+    onPreview: (Long, String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val c = reynaColors
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = c.background,
+        dragHandle = { BottomSheetDefaults.DragHandle(color = c.onSurfaceFaint) },
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Dimens.page)
+                .padding(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                "Which one did you mean?",
+                fontSize = 17.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = c.onSurface,
+            )
+            Text(
+                choice.prompt,
+                fontSize = 13.sp,
+                color = c.onSurfaceMuted,
+            )
+            choice.candidates.forEach { cand ->
+                CandidateCard(cand, onChoose = { onChoose(listOf(cand.fileId)) }, onPreview = { onPreview(cand.fileId, cand.fileName) })
+            }
+            // Answering from all of them is a real answer to "what is module 1
+            // about" when the person genuinely meant the set, and it is the
+            // only way out of the sheet that is not either a choice or a
+            // dismissal.
+            if (choice.candidates.size > 1) {
+                Text(
+                    "Use all ${choice.candidates.size}",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = c.accent,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { onChoose(choice.candidates.map { it.fileId }) }
+                        .padding(vertical = 10.dp, horizontal = 4.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CandidateCard(
+    cand: app.reyna.net.ReynaApi.Candidate,
+    onChoose: () -> Unit,
+    onPreview: () -> Unit,
+) {
+    val c = reynaColors
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .border(1.dp, c.border, RoundedCornerShape(14.dp))
+            .clickable { onChoose() }
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(cand.fileName, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = c.onSurface)
+
+        val where = listOfNotNull(
+            cand.folder?.takeIf { it.isNotBlank() },
+            cand.sharedAt?.takeIf { it.isNotBlank() },
+        ).joinToString(" · ")
+        if (where.isNotBlank()) {
+            Text(where, fontSize = 12.sp, color = c.onSurfaceMuted)
+        }
+
+        // What the document actually opens with, which is the thing that tells
+        // two identically named modules apart. When Reyna has not managed to
+        // read it, say so rather than showing an empty line: a file it has
+        // never opened cannot answer anything, and the user is entitled to
+        // know that before spending a tap on it.
+        if (cand.readable && !cand.summary.isNullOrBlank()) {
+            Text(
+                cand.summary,
+                fontSize = 13.sp,
+                color = c.onSurfaceMuted,
+                maxLines = 2,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+        } else {
+            Text("Not read yet. Opening this will read it first.", fontSize = 12.sp, color = c.onSurfaceFaint)
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SheetAction("Use this") { onChoose() }
+            SheetAction("Open") { onPreview() }
         }
     }
 }

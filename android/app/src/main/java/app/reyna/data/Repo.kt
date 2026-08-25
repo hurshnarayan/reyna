@@ -533,6 +533,10 @@ class Repo private constructor(private val context: Context) {
      */
     suspend fun ask(
         question: String,
+        /** Files the user picked from a previous "which one did you mean". */
+        fileIds: List<Long> = emptyList(),
+        /** Called with what Reyna is doing, as it changes. */
+        onStage: (String) -> Unit = {},
         onCall: (okhttp3.Call) -> Unit = {},
     ): ReynaApi.Answer? = withContext(Dispatchers.IO) {
         // Collect recent conversation turns before inserting current query
@@ -545,15 +549,26 @@ class Repo private constructor(private val context: Context) {
             )
         }
 
-        dao.insertMessage(MessageEntity(text = question, fromUser = true, at = System.currentTimeMillis()))
+        if (fileIds.isEmpty()) {
+            dao.insertMessage(MessageEntity(text = question, fromUser = true, at = System.currentTimeMillis()))
+        }
 
-        // Send what the server does not have yet, the likely answer first.
+        // Send the few files this question is about, and nothing else.
+        //
+        // This used to run syncPending() as well, which walks up to four
+        // thousand queued files and uploads every one of them before the
+        // question was even sent. That is what "Looking through your files"
+        // was actually doing for minutes at a time, and why the count of
+        // documents waiting for Drive visibly climbed while the user watched a
+        // spinner: they were watching an upload, not a search. The backlog is
+        // real work and still gets done, but it is not the user's question and
+        // must not be in front of it.
+        onStage("Sending the files you asked about")
         runCatching { syncMatchingFirst(question) }
-        runCatching { syncPending() }
 
-        val answer = api().ask(question, history, onCall).getOrNull()
+        val answer = api().ask(question, history, fileIds, onStage, onCall).getOrNull()
         var reply = answer?.reply
-            ?: "I could not reach the backend. Your files are still safe on this phone."
+            ?: "I could not reach the backend, so I have not searched anything yet. Your files are safe on this phone. Check the server is running and try again."
 
         // Match the cited filenames back to local rows so the answer can show
         // real chips. Matched by name because the backend numbers files by its
@@ -564,35 +579,33 @@ class Repo private constructor(private val context: Context) {
         }
         var citations = answer?.citations.orEmpty()
 
-        // Offline fallback: if backend could not be reached, search local files cleanly
+        // When the backend cannot be reached, say that, and nothing more.
+        //
+        // What used to happen here was worse than an error. The phone matched
+        // the question against its own filenames, wrote "I found A, B, C on
+        // your phone", and attached those files as sources with the text "File
+        // on your phone: A" standing in for a quotation. Nothing had been read
+        // and nothing had been searched, but it was laid out exactly like an
+        // answer, so a failed request was indistinguishable from a real reply
+        // that happened to be wrong. Naming files whose names contain some of
+        // the words in a question is not an answer, and dressing it as one
+        // spends the trust the app is built on.
+        //
+        // Listing candidates is still useful, but only labelled for what it
+        // is: a filename match made on the phone, with nothing read.
         if (answer == null && local.isNotEmpty()) {
             val tokens = queryTokens(question)
             if (tokens.isNotEmpty()) {
-                val matched = local.filter { f ->
-                    val nameLower = f.name.lowercase()
-                    tokens.any { tok -> nameLower.contains(tok) }
-                }.sortedByDescending { f ->
-                    val nameLower = f.name.lowercase()
-                    tokens.count { tok -> nameLower.contains(tok) }
-                }.take(3)
+                val matched = local
+                    .map { it to Words.score(it.name, tokens) }
+                    .filter { it.second > 0 }
+                    .sortedByDescending { it.second }
+                    .take(3)
+                    .map { it.first }
 
                 if (matched.isNotEmpty()) {
-                    citedIds = matched.map { it.id }
-                    citations = matched.map { f ->
-                        ReynaApi.Citation(
-                            fileId = f.id,
-                            fileName = f.name,
-                            sender = f.senderName,
-                            sharedAt = "",
-                            folder = f.folder,
-                            quote = f.name,
-                            context = "File on your phone: ${f.name}",
-                            confidence = f.confidence,
-                            page = 1,
-                        )
-                    }
                     val names = matched.joinToString(", ") { it.name }
-                    reply = "I found $names on your phone."
+                    reply += "\n\nBy name alone, these look related, though nothing has been read: $names"
                 }
             }
         }
@@ -601,7 +614,8 @@ class Repo private constructor(private val context: Context) {
         // give, because it is indistinguishable from the file being lost. If
         // the server found nothing and the phone is still holding files it has
         // not sent, say so instead of letting the user conclude it is gone.
-        if (citations.isEmpty() && citedIds.isEmpty() && answer != null) {
+        val askingWhich = answer?.status == ReynaApi.STATUS_NEEDS_CHOICE
+        if (citations.isEmpty() && citedIds.isEmpty() && answer != null && !askingWhich) {
             val queued = dao.pendingUpload(4000).count { isReadable(it.name) }
             if (queued > 0) {
                 reply += if (queued == 1) {
@@ -653,15 +667,7 @@ class Repo private constructor(private val context: Context) {
      * repeat their vocabulary constantly and differ only in the index, so
      * "module" separates almost nothing and "4" separates almost everything.
      */
-    private fun score(name: String, tokens: List<String>): Int {
-        val lower = name.lowercase()
-        var total = 0
-        for (t in tokens) {
-            if (!lower.contains(t)) continue
-            total += if (t[0].isDigit()) 5 else 1
-        }
-        return total
-    }
+    private fun score(name: String, tokens: List<String>): Int = Words.score(name, tokens)
 
     private fun decodeCitations(json: String): List<ReynaApi.Citation> {
         if (json.isBlank()) return emptyList()

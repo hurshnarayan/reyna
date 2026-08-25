@@ -2,6 +2,7 @@ package nlp
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"regexp"
@@ -740,7 +741,19 @@ Respond ONLY with JSON, no other text:
 // ExtractContent sends the actual file data to the LLM for deep content extraction.
 // PDFs are base64-encoded and sent as document blocks to Claude/Gemini.
 // For providers that don't support doc blocks (OpenAI/Grok), falls back to filename analysis.
-func (c *Classifier) ExtractContent(fileName, mimeType string, fileSize int64, fileData []byte) (content string, summary string) {
+// ErrNotAttempted means the document was never actually read.
+//
+// It exists to separate "this file was opened and holds no text" from "the
+// reading could not be tried". The two used to be indistinguishable: any
+// failure returned empty content, and the caller recorded that as a document
+// with nothing in it and stopped ever offering the file again. On a free
+// allowance of twenty model calls a day, a single quota refusal was therefore
+// enough to retire a document permanently, and it did: "2CSE Module 1 ODE of
+// first order.pdf" was marked unreadable and could never answer a question
+// about module 1 ODE again.
+var ErrNotAttempted = errors.New("document was not read")
+
+func (c *Classifier) ExtractContent(fileName, mimeType string, fileSize int64, fileData []byte) (content string, summary string, err error) {
 	// Read it here when the format allows it.
 	//
 	// Free, instant, exact, and it does not touch a daily allowance measured
@@ -748,12 +761,12 @@ func (c *Classifier) ExtractContent(fileName, mimeType string, fileSize int64, f
 	// the standard library turns a PDF into text.
 	if docs.CanExtract(fileName) {
 		if text, err := docs.Text(fileName, fileData); err == nil && strings.TrimSpace(text) != "" {
-			return text, c.summarise(fileName, text)
+			return text, c.summarise(fileName, text), nil
 		}
 	}
 
 	if !c.IsEnabled() {
-		return "", ""
+		return "", "", ErrNotAttempted
 	}
 
 	// Only PDFs and images reach the model. Everything else either was read
@@ -764,7 +777,10 @@ func (c *Classifier) ExtractContent(fileName, mimeType string, fileSize int64, f
 	canSend := len(fileData) > 0 && len(fileData) <= geminiInlineMaxBytes &&
 		(strings.Contains(mimeType, "pdf") || strings.Contains(mimeType, "image"))
 	if !canSend {
-		return "", ""
+		// Nothing was tried, so nothing was learned. A file too large to send
+		// today may be readable by another route later, and a file whose bytes
+		// never arrived is not a file without text.
+		return "", "", ErrNotAttempted
 	}
 
 	prompt := fmt.Sprintf(`Read this document and return what it actually says.
@@ -785,7 +801,7 @@ Respond ONLY with JSON, no other text:
 	result, err := c.llm.CompleteWithDoc(prompt, fileData, mimeType, 8000)
 	if err != nil {
 		log.Printf("[EXTRACT] %s: %v", fileName, err)
-		return "", ""
+		return "", "", ErrNotAttempted
 	}
 
 	var resp struct {
@@ -793,10 +809,85 @@ Respond ONLY with JSON, no other text:
 		Summary string `json:"summary"`
 	}
 	if err := json.Unmarshal([]byte(llm.CleanJSON(result)), &resp); err != nil {
-		log.Printf("[EXTRACT] %s: parse error: %v", fileName, err)
-		return "", ""
+		// A transcription that ran past the token ceiling is cut off mid-string
+		// and will never parse, and throwing it away loses a complete and
+		// correct reading of everything up to the cut. This is not a rare edge:
+		// a dense PDF of worked mathematics transcribes to far more text than
+		// the reply budget holds, and "2CSE Module 1 ODE of first order.pdf"
+		// returned fourteen thousand good characters that were discarded as a
+		// parse error, then recorded as a document containing nothing.
+		if salvaged := salvageJSONString(llm.CleanJSON(result), "content"); salvaged != "" {
+			log.Printf("[EXTRACT] %s: reply was cut short, kept %d chars of %d", fileName, len(salvaged), len(result))
+			return salvaged, c.summarise(fileName, salvaged), nil
+		}
+		log.Printf("[EXTRACT] %s: parse error: %v (reply was %d chars)", fileName, err, len(result))
+		// The model answered, but not in the shape asked for. That is a bad
+		// reply rather than a document with nothing in it, so the file stays
+		// eligible to be read again.
+		return "", "", ErrNotAttempted
 	}
-	return resp.Content, resp.Summary
+	return resp.Content, resp.Summary, nil
+}
+
+// salvageJSONString pulls one string field out of JSON that does not parse.
+//
+// Only useful for the one failure it is written for: a reply truncated at the
+// token ceiling, so the field's opening quote is present and its closing quote
+// never arrived. It walks the string honouring escapes, which is what keeps a
+// transcription containing quotation marks or backslashes from being cut at
+// the wrong place, and returns everything up to wherever the text stopped.
+func salvageJSONString(raw, field string) string {
+	key := `"` + field + `"`
+	i := strings.Index(raw, key)
+	if i < 0 {
+		return ""
+	}
+	rest := raw[i+len(key):]
+
+	// Step over the colon and any spacing to the opening quote.
+	j := 0
+	for j < len(rest) && (rest[j] == ' ' || rest[j] == '\t' || rest[j] == '\n' || rest[j] == ':') {
+		j++
+	}
+	if j >= len(rest) || rest[j] != '"' {
+		return ""
+	}
+	rest = rest[j+1:]
+
+	var b strings.Builder
+	for k := 0; k < len(rest); k++ {
+		ch := rest[k]
+		if ch == '\\' {
+			if k+1 >= len(rest) {
+				break // truncated mid-escape
+			}
+			k++
+			switch rest[k] {
+			case 'n':
+				b.WriteByte('\n')
+			case 't':
+				b.WriteByte('\t')
+			case 'r':
+				b.WriteByte('\r')
+			case 'u':
+				if k+4 < len(rest) {
+					var r rune
+					if _, err := fmt.Sscanf(rest[k+1:k+5], "%04x", &r); err == nil {
+						b.WriteRune(r)
+						k += 4
+					}
+				}
+			default:
+				b.WriteByte(rest[k])
+			}
+			continue
+		}
+		if ch == '"' {
+			break // the field closed properly after all
+		}
+		b.WriteByte(ch)
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // summarise writes the one line shown beside a file, from text already in hand.

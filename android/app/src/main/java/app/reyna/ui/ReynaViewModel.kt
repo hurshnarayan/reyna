@@ -9,6 +9,7 @@ import app.reyna.capture.CaptureService
 import app.reyna.capture.ReconcileWorker
 import app.reyna.data.FileEntity
 import app.reyna.data.Repo
+import app.reyna.net.ReynaApi
 import app.reyna.permissions.Permissions
 import app.reyna.search.SearchableFile
 import kotlinx.coroutines.Dispatchers
@@ -106,6 +107,35 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
     /** True while an answer is in flight, so the composer can offer Stop. */
     private val _sending = MutableStateFlow(false)
     val sending: StateFlow<Boolean> = _sending.asStateFlow()
+
+    /**
+     * What Reyna is doing right now, in words, while it does it.
+     *
+     * The bubble used to read "Looking through your files" for the whole wait,
+     * which could be most of a minute and said nothing about whether anything
+     * was happening. Most of that time is one specific document being read,
+     * and saying which one turns a hang into progress.
+     */
+    private val _stage = MutableStateFlow("")
+    val stage: StateFlow<String> = _stage.asStateFlow()
+
+    /**
+     * The documents Reyna is asking the user to choose between, if any.
+     *
+     * Held in memory rather than on the message, because adding a column to
+     * the message table would trigger Room's destructive migration and wipe
+     * the phone's index of every captured file. A choice that is lost when the
+     * app is killed simply means asking again; the index is not replaceable.
+     */
+    private val _pendingChoice = MutableStateFlow<PendingChoice?>(null)
+    val pendingChoice: StateFlow<PendingChoice?> = _pendingChoice.asStateFlow()
+
+    /** A question waiting on the user to say which document they meant. */
+    data class PendingChoice(
+        val question: String,
+        val prompt: String,
+        val candidates: List<ReynaApi.Candidate>,
+    )
 
     // The in-flight request, held so it can actually be torn down. Cancelling
     // the coroutine alone would leave the socket open and the server working.
@@ -259,20 +289,56 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
         // One question at a time. A second send while the first is in flight
         // would interleave two answers into the same conversation.
         if (_sending.value) return
+        _pendingChoice.value = null
+        run(question, emptyList())
+    }
 
+    /**
+     * Answers the outstanding question against the document the user picked.
+     *
+     * The question is not written into the conversation again: it was already
+     * asked, and the choice is part of answering it rather than a new turn.
+     */
+    fun chooseCandidate(fileIds: List<Long>) {
+        val pending = _pendingChoice.value ?: return
+        if (_sending.value || fileIds.isEmpty()) return
+        _pendingChoice.value = null
+        run(pending.question, fileIds)
+    }
+
+    /** Drops the choice without answering. The question stays in the conversation. */
+    fun dismissChoice() {
+        _pendingChoice.value = null
+    }
+
+    private fun run(question: String, fileIds: List<Long>) {
         askJob = viewModelScope.launch {
             _sending.value = true
+            _stage.value = ""
             try {
                 if (repo.deviceToken.isBlank()) {
                     // Still records the turn and answers honestly, rather than
                     // dropping the question on the floor.
-                    repo.ask(question)
+                    repo.ask(question, fileIds)
                     _toast.value = "Set a device token in Settings to reach the backend"
                     return@launch
                 }
-                repo.ask(question) { call -> askCall = call }
+                val answer = repo.ask(
+                    question = question,
+                    fileIds = fileIds,
+                    onStage = { _stage.value = it },
+                ) { call -> askCall = call }
+
+                if (answer?.status == ReynaApi.STATUS_NEEDS_CHOICE && answer.candidates.isNotEmpty()) {
+                    _pendingChoice.value = PendingChoice(
+                        question = question,
+                        prompt = answer.reply,
+                        candidates = answer.candidates,
+                    )
+                }
             } finally {
                 askCall = null
+                _stage.value = ""
                 _sending.value = false
             }
         }
@@ -291,6 +357,7 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
         askCall?.cancel()
         askJob?.cancel()
         askCall = null
+        _stage.value = ""
         _sending.value = false
         viewModelScope.launch { repo.say("Stopped.") }
     }

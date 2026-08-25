@@ -264,14 +264,56 @@ type NLPRetrievalRequest struct {
 	GroupWAID string               `json:"group_wa_id"` // optional: scope to a group
 	UserPhone string               `json:"user_phone"`
 	History   []ChatMessageContext `json:"history,omitempty"` // recent chat history for context
+
+	// FileIDs answers a previous NLPStatusNeedsChoice reply.
+	//
+	// When present the search is skipped entirely and the question is answered
+	// against exactly these files. The user has already said which documents
+	// they meant, and re-running a ranking that was too uncertain to decide is
+	// only an opportunity to overrule them.
+	FileIDs []int64 `json:"file_ids,omitempty"`
 }
 
+// Status values for NLPRetrievalResponse.
+const (
+	// NLPStatusAnswered means Reply is an answer to the question.
+	NLPStatusAnswered = "answered"
+
+	// NLPStatusNeedsChoice means several documents matched about equally well
+	// and Reyna is asking which one was meant, rather than picking one and
+	// presenting the guess as fact. Candidates holds what to offer.
+	NLPStatusNeedsChoice = "needs_choice"
+)
+
 type NLPRetrievalResponse struct {
+	Status       string         `json:"status"`
 	Files        []File         `json:"files"`
 	DriveMatches []DriveMatch   `json:"drive_matches,omitempty"`
 	Query        NLPParsedQuery `json:"parsed_query"`
 	Reply        string         `json:"reply"`
 	Citations    []Citation     `json:"citations,omitempty"`
+
+	// Candidates is populated only when Status is NLPStatusNeedsChoice.
+	Candidates []Candidate `json:"candidates,omitempty"`
+}
+
+// Candidate is one document offered when Reyna cannot tell which was meant.
+//
+// It carries enough for the user to choose without guessing: what it is
+// called, where it sits, when it arrived, and whether Reyna has actually read
+// it. Readable is the honest part — a file Reyna has never managed to open
+// cannot answer anything, and offering it as a choice without saying so wastes
+// the user's tap and then produces nothing.
+type Candidate struct {
+	FileID   int64  `json:"file_id"`
+	FileName string `json:"file_name"`
+	Folder   string `json:"folder,omitempty"`
+	Sender   string `json:"sender,omitempty"`
+	SharedAt string `json:"shared_at,omitempty"`
+	Summary  string `json:"summary,omitempty"`
+	Readable bool   `json:"readable"`
+
+	Confidence float64 `json:"attribution_confidence"`
 }
 
 // Citation is the passage an answer was drawn from.

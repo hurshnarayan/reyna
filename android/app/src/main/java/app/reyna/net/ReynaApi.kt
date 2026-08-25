@@ -54,6 +54,35 @@ class ReynaApi(
         val files: List<CitedFile>,
         /** The passages the answer rests on, already verified server side. */
         val citations: List<Citation> = emptyList(),
+        /**
+         * What kind of reply this is. [STATUS_ANSWERED] or [STATUS_NEEDS_CHOICE].
+         *
+         * A question with several equally good answers has no single answer,
+         * and picking one and presenting it as fact is how a question about
+         * differential equations came back explaining artificial intelligence.
+         * When the status is [STATUS_NEEDS_CHOICE], [candidates] holds the
+         * documents to offer and [reply] is the question to ask.
+         */
+        val status: String = STATUS_ANSWERED,
+        val candidates: List<Candidate> = emptyList(),
+    )
+
+    /**
+     * One document offered when Reyna cannot tell which was meant.
+     *
+     * [readable] says whether Reyna has actually managed to read it. A file it
+     * has never opened cannot answer anything, and offering it without saying
+     * so spends the user's tap and returns nothing.
+     */
+    data class Candidate(
+        val fileId: Long,
+        val fileName: String,
+        val folder: String?,
+        val sender: String?,
+        val sharedAt: String?,
+        val summary: String?,
+        val readable: Boolean,
+        val confidence: Double,
     )
 
     /**
@@ -163,11 +192,35 @@ class ReynaApi(
     fun ask(
         question: String,
         history: List<ChatContext> = emptyList(),
+        /**
+         * Files the user picked from a previous "which one did you mean".
+         *
+         * When present the backend skips its search entirely and answers
+         * against exactly these. Re-running a ranking that was already too
+         * uncertain to decide is only a chance to overrule the person who
+         * decided for it.
+         */
+        fileIds: List<Long> = emptyList(),
+        /**
+         * Called with each progress line as it arrives.
+         *
+         * Reading a document nobody has opened yet is a model call and can take
+         * most of a minute. Without this the app showed one fixed label for all
+         * of it, so a question making normal progress and a question that had
+         * hung looked identical.
+         */
+        onStage: (String) -> Unit = {},
         onCall: (okhttp3.Call) -> Unit = {}
     ): Result<Answer> = runCatching {
         val payloadObj = JSONObject()
             .put("query", question)
             .put("user_phone", DEVICE_IDENTITY)
+
+        if (fileIds.isNotEmpty()) {
+            val idArr = org.json.JSONArray()
+            fileIds.forEach { idArr.put(it) }
+            payloadObj.put("file_ids", idArr)
+        }
 
         if (history.isNotEmpty()) {
             val histArr = org.json.JSONArray()
@@ -186,17 +239,48 @@ class ReynaApi(
         }
 
         val payload = payloadObj.toString().toRequestBody(JSON)
-        val req = Request.Builder().url(url("/api/nlp/retrieve")).auth().post(payload).build()
+        val req = Request.Builder()
+            .url(url("/api/nlp/retrieve"))
+            .auth()
+            .header("Accept", NDJSON)
+            .post(payload)
+            .build()
         val call = client.newCall(req)
         onCall(call)
         call.execute().use { resp ->
-            val text = resp.body?.string().orEmpty()
-            if (!resp.isSuccessful) error("ask ${resp.code}: ${text.take(200)}")
-            val json = JSONObject(text)
+            if (!resp.isSuccessful) {
+                val text = resp.body?.string().orEmpty()
+                error("ask ${resp.code}: ${text.take(200)}")
+            }
+            val body = resp.body ?: error("ask ${resp.code}: empty body")
+
+            // Every line but the last is progress; the last is the answer.
+            //
+            // Read line by line rather than string(), or the whole point is
+            // lost: string() blocks until the server closes the stream, which
+            // is precisely when the answer arrives and the progress no longer
+            // matters. A server that does not stream sends exactly one line,
+            // which this reads the same way.
+            var last: JSONObject? = null
+            val source = body.source()
+            while (true) {
+                val line = source.readUtf8Line() ?: break
+                if (line.isBlank()) continue
+                val obj = runCatching { JSONObject(line) }.getOrNull() ?: continue
+                if (obj.optString("kind") == "stage") {
+                    val detail = obj.optString("detail").ifBlank { obj.optString("stage") }
+                    if (detail.isNotBlank()) onStage(detail)
+                    continue
+                }
+                last = obj
+            }
+            val json = last ?: error("ask: no answer in reply")
             Answer(
                 reply = json.optString("reply"),
                 files = json.optJSONArray("files").toCitedFiles(),
                 citations = json.optJSONArray("citations").toCitations(),
+                status = json.optString("status").ifBlank { STATUS_ANSWERED },
+                candidates = json.optJSONArray("candidates").toCandidates(),
             )
         }
     }.onFailure { Log.w(TAG, "ask failed: ${it.message}") }
@@ -428,8 +512,36 @@ class ReynaApi(
         }
     }
 
+    private fun JSONArray?.toCandidates(): List<Candidate> {
+        if (this == null) return emptyList()
+        return (0 until length()).mapNotNull { i ->
+            val o = optJSONObject(i) ?: return@mapNotNull null
+            val name = o.optString("file_name")
+            if (name.isBlank()) return@mapNotNull null
+            Candidate(
+                fileId = o.optLong("file_id", 0),
+                fileName = name,
+                folder = o.optString("folder").ifBlank { null },
+                sender = o.optString("sender").ifBlank { null },
+                sharedAt = o.optString("shared_at").ifBlank { null },
+                summary = o.optString("summary").ifBlank { null },
+                readable = o.optBoolean("readable", false),
+                confidence = o.optDouble("attribution_confidence", 0.0),
+            )
+        }
+    }
+
     companion object {
         private const val TAG = "ReynaApi"
+
+        /** Reply is an answer to the question. */
+        const val STATUS_ANSWERED = "answered"
+
+        /** Reply is a question back: several documents matched equally well. */
+        const val STATUS_NEEDS_CHOICE = "needs_choice"
+
+        /** Newline-delimited JSON: one progress line each, then the answer. */
+        private const val NDJSON = "application/x-ndjson"
 
         /**
          * Who the phone says it is.

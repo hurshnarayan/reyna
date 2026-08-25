@@ -20,6 +20,7 @@ import (
 	"github.com/hurshnarayan/reyna/internal/integrations/gdrive"
 	"github.com/hurshnarayan/reyna/internal/model"
 	"github.com/hurshnarayan/reyna/internal/nlp"
+	"github.com/hurshnarayan/reyna/internal/relevance"
 	"github.com/hurshnarayan/reyna/internal/repository"
 	"github.com/hurshnarayan/reyna/internal/reyna"
 )
@@ -704,7 +705,7 @@ func (s *Server) handleDeviceUpload(w http.ResponseWriter, r *http.Request) {
 			s.store.UpdateFileContent(fileID, extractedContent, contentSummary)
 			log.Printf("[EXTRACT] Combined: %s → %s", fName, contentSummary)
 		} else {
-			content, summary := s.classifier.ExtractContent(fName, mime, fSize, data)
+			content, summary, _ := s.classifier.ExtractContent(fName, mime, fSize, data)
 			if content != "" {
 				s.store.UpdateFileContent(fileID, content, summary)
 				log.Printf("[EXTRACT] Async: %s → %s", fName, summary)
@@ -1536,6 +1537,21 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 
 	lastQuestion.Store(time.Now().Unix())
 
+	// Say what is happening while it happens, when the client asks for it.
+	//
+	// A question can take half a minute: the search is instant, but reading a
+	// document nobody has opened yet is a model call over a phone connection.
+	// For all of that the app showed one fixed line, "Looking through your
+	// files", which says nothing about whether it is nearly done, stuck, or
+	// about to fail, and half a minute of it reads as a hang.
+	//
+	// Progress is streamed as newline-delimited JSON when the client sends
+	// Accept: application/x-ndjson. Clients that do not get exactly what they
+	// got before, so the web app is unaffected.
+	stage := newStageWriter(w, r)
+	defer stage.Close()
+	stage.Send("searching", "Searching your files")
+
 	// Parse the natural language query into WHO/WHAT/WHEN/WHY with conversation history
 	who, what, when, why := s.classifier.ParseNLPQueryWithHistory(req.Query, req.History)
 	// Reyna is the assistant/app name, not a sender person
@@ -1608,42 +1624,83 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("[NLP-RETRIEVE] groupIDs=%v", groupIDs)
 
-	files, _ := s.store.SearchFilesNLP(groupIDs, who, what, sinceTime, 20)
-	if files == nil {
-		files = []model.File{}
-	}
-	// Fallback 1: If time window was set and returned nothing, retry without time window
-	if len(files) == 0 && sinceTime != nil {
-		if fallback, _ := s.store.SearchFilesNLP(groupIDs, who, what, nil, 20); len(fallback) > 0 {
-			log.Printf("[NLP-RETRIEVE] no hits with time window; falling back without time filter")
-			files = fallback
+	// A question that answers a previous "which one did you mean" skips the
+	// search entirely. The user has already said which documents they meant.
+	var scored []repository.ScoredFile
+	if len(req.FileIDs) > 0 {
+		picked, err := s.store.GetFilesByIDs(req.FileIDs)
+		if err == nil {
+			for _, f := range picked {
+				scored = append(scored, repository.ScoredFile{File: f, Coverage: 1, Score: 1000})
+			}
 		}
+		log.Printf("[NLP-RETRIEVE] answering against %d user-chosen file(s)", len(scored))
+	} else {
+		scored, _ = s.store.SearchFilesNLPScored(groupIDs, who, what, sinceTime, 20)
 	}
-	// Fallback 2: If WHO and WHAT together found nothing, retry on WHO alone
-	if len(files) == 0 && who != "" && (what != "" || sinceTime != nil) {
-		if fallback, _ := s.store.SearchFilesNLP(groupIDs, who, "", nil, 20); len(fallback) > 0 {
-			log.Printf("[NLP-RETRIEVE] no hits for who+what; falling back to sender only")
-			files = fallback
+	files := scoredFiles(scored)
+	if len(req.FileIDs) == 0 {
+		// Fallback 1: If time window was set and returned nothing, retry without time window
+		if len(scored) == 0 && sinceTime != nil {
+			if fb, _ := s.store.SearchFilesNLPScored(groupIDs, who, what, nil, 20); len(fb) > 0 {
+				log.Printf("[NLP-RETRIEVE] no hits with time window; falling back without time filter")
+				scored = fb
+			}
 		}
-	}
-	// Fallback 3: If still nothing and WHO was specified, retry on WHAT alone without time filter
-	if len(files) == 0 && who != "" && what != "" {
-		if fallback, _ := s.store.SearchFilesNLP(groupIDs, "", what, nil, 20); len(fallback) > 0 {
-			log.Printf("[NLP-RETRIEVE] no hits for sender %q; falling back to topic only", who)
-			files = fallback
+		// Fallback 2: If WHO and WHAT together found nothing, retry on WHO alone
+		if len(scored) == 0 && who != "" && (what != "" || sinceTime != nil) {
+			if fb, _ := s.store.SearchFilesNLPScored(groupIDs, who, "", nil, 20); len(fb) > 0 {
+				log.Printf("[NLP-RETRIEVE] no hits for who+what; falling back to sender only")
+				scored = fb
+			}
 		}
+		// Fallback 3: If still nothing and WHO was specified, retry on WHAT alone without time filter
+		if len(scored) == 0 && who != "" && what != "" {
+			if fb, _ := s.store.SearchFilesNLPScored(groupIDs, "", what, nil, 20); len(fb) > 0 {
+				log.Printf("[NLP-RETRIEVE] no hits for sender %q; falling back to topic only", who)
+				scored = fb
+			}
+		}
+		// Fallback 4: If WHO was specified and WHAT was empty (or both failed), retry searching WHO as WHAT
+		if len(scored) == 0 && who != "" {
+			if fb, _ := s.store.SearchFilesNLPScored(groupIDs, "", who, nil, 20); len(fb) > 0 {
+				log.Printf("[NLP-RETRIEVE] no hits for sender %q; trying sender as topic", who)
+				scored = fb
+			}
+		}
+		files = scoredFiles(scored)
 	}
-	// Fallback 4: If WHO was specified and WHAT was empty (or both failed), retry searching WHO as WHAT
-	if len(files) == 0 && who != "" {
-		if fallback, _ := s.store.SearchFilesNLP(groupIDs, "", who, nil, 20); len(fallback) > 0 {
-			log.Printf("[NLP-RETRIEVE] no hits for sender %q; trying sender as topic", who)
-			files = fallback
+
+	// ── Ask, when there is genuinely no way to tell which document was meant ──
+	//
+	// A library with eleven files called "Module 1" cannot answer "what is
+	// module 1 about" from any one of them. The old code picked the top of the
+	// ranking and answered as if that had been the question, which is how a
+	// question about ordinary differential equations came back explaining the
+	// four ways to look at artificial intelligence: both files were called
+	// module 1, and one of them had to be first.
+	//
+	// So when the leaders are indistinguishable, say so and offer the choice.
+	// This happens before anything is read, so an ambiguous question costs no
+	// model calls at all — which matters when the day holds about sixty.
+	if len(req.FileIDs) == 0 {
+		if cands := s.ambiguousCandidates(scored); len(cands) > 0 {
+			log.Printf("[NLP-RETRIEVE] ambiguous: offering %d candidates", len(cands))
+			stage.Final(model.NLPRetrievalResponse{
+				Status:     model.NLPStatusNeedsChoice,
+				Files:      files,
+				Query:      model.NLPParsedQuery{Who: who, What: what, When: when, Why: why, Raw: req.Query},
+				Reply:      ambiguityPrompt(what, len(cands)),
+				Candidates: cands,
+			})
+			return
 		}
 	}
 
 	// Also walk the user's existing Drive folder tree for matches that were
 	// never captured by the bot. This is the fix for "Reyna only sees its own
 	// staging table" — older notes already organised in Drive are now searchable.
+	stage.Send("searching", "Checking your Drive")
 	driveMatches := s.collectDriveContext(groupIDs, what, 25)
 	// If WHO was specified, drop Drive matches that can't be attributed.
 	if who != "" {
@@ -1664,7 +1721,7 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 	// This is also the only sane way to spend a small allowance: on the three
 	// documents a person actually asked about rather than the next three in a
 	// queue of a thousand.
-	readNow := s.ensureContent(files, onDemandReads, time.Now().Add(onDemandBudget))
+	readNow := s.ensureContent(files, onDemandReads, time.Now().Add(onDemandBudget), stage)
 	if readNow > 0 {
 		log.Printf("[NLP-RETRIEVE] read %d file(s) on demand", readNow)
 	}
@@ -1681,6 +1738,7 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 	// on doubled a seventy second query for nothing.
 	if len(files) == 0 || (hasContentCues(req.Query) && readNow == 0 && !topFilesRead(s, files)) {
 		log.Printf("[NLP-RETRIEVE] triggering deep content retrieval")
+		stage.Send("searching", "Looking inside your documents")
 		deepHits := s.deepContentRetrieve(groupIDs, req.Query, who, what, sinceTime, 5)
 		if len(deepHits) > 0 {
 			// Merge: deep hits take priority, then add metadata hits not already present
@@ -1747,6 +1805,7 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 	if len(files) > maxCitedFiles {
 		files = files[:maxCitedFiles]
 	}
+	stage.Send("writing", "Writing the answer")
 	sourced := s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, dbView, driveView, req.History)
 	citations := s.verifyCitations(sourced.Quotes, files)
 	if len(citations) == 0 && len(files) > 0 {
@@ -1756,46 +1815,172 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 			strings.Contains(lowerReply, "no files") ||
 			strings.Contains(lowerReply, "no documents") ||
 			strings.Contains(lowerReply, "unable to find")
+		// Only a file with real text behind it can stand as evidence.
+		//
+		// This used to cite files[0] whatever was stored against it, and what
+		// was stored was sometimes UnreadableSentinel — so a panel headed
+		// "Where this came from" showed the word "[unreadable]" as the passage
+		// the answer rested on. That is worse than an empty panel: it presents
+		// the absence of a reading as the reading. A file with no text is not
+		// evidence for anything and is no longer offered as any.
 		if !isNegative {
-			top := files[0]
-			sender := ""
-			if top.SenderKnown() {
-				sender = top.SharedByName
+			var top *model.File
+			var content string
+			have := s.store.GetFileExtractedContent(fileIDs(files))
+			for i := range files {
+				if c := have[files[i].ID]; c != "" && c != repository.UnreadableSentinel {
+					top, content = &files[i], c
+					break
+				}
 			}
-			content := s.store.GetFileExtractedContent([]int64{top.ID})[top.ID]
-			quote := top.FileName
-			context := "Document: " + top.FileName
-			if top.Subject != "" {
-				context += " (" + top.Subject + ")"
-			}
-			if content != "" {
-				quote = content
+			if top != nil {
+				sender := ""
+				if top.SenderKnown() {
+					sender = top.SharedByName
+				}
+				quote := content
 				if len(quote) > 150 {
 					quote = quote[:150] + "..."
 				}
-				context = content
+				citations = []model.Citation{{
+					FileID:     top.ID,
+					FileName:   top.FileName,
+					Sender:     sender,
+					SharedAt:   formatSharedAt(top.SharedAt()),
+					Folder:     top.Subject,
+					Quote:      quote,
+					Context:    content,
+					Page:       1,
+					Confidence: top.AttributionConfidence,
+				}}
 			}
-			citations = []model.Citation{{
-				FileID:     top.ID,
-				FileName:   top.FileName,
-				Sender:     sender,
-				SharedAt:   formatSharedAt(top.SharedAt()),
-				Folder:     top.Subject,
-				Quote:      quote,
-				Context:    context,
-				Page:       1,
-				Confidence: top.AttributionConfidence,
-			}}
 		}
 	}
 
-	json.NewEncoder(w).Encode(model.NLPRetrievalResponse{
+	stage.Final(model.NLPRetrievalResponse{
+		Status:       model.NLPStatusAnswered,
 		Files:        files,
 		DriveMatches: driveMatches,
 		Query:        model.NLPParsedQuery{Who: who, What: what, When: when, Why: why, Raw: req.Query},
 		Reply:        sourced.Answer,
 		Citations:    citations,
 	})
+}
+
+// scoredFiles drops the scores, for the places that only need the files.
+func scoredFiles(scored []repository.ScoredFile) []model.File {
+	out := make([]model.File, 0, len(scored))
+	for _, sf := range scored {
+		out = append(out, sf.File)
+	}
+	return out
+}
+
+// fileIDs is the ids of these files, in order.
+func fileIDs(files []model.File) []int64 {
+	out := make([]int64, 0, len(files))
+	for _, f := range files {
+		out = append(out, f.ID)
+	}
+	return out
+}
+
+// ambiguityMargin is how close the runner-up has to be before Reyna stops
+// guessing and asks.
+//
+// Expressed as a fraction of the leader's score. Ranking already separates
+// "Module 1" from "Module4_part1" by a wide margin, so a genuine winner clears
+// this easily and the user is never interrupted for a question that had one
+// obvious answer. What it catches is the case the ranking honestly cannot
+// decide: several documents, all called module 1, about entirely different
+// subjects.
+const ambiguityMargin = 0.85
+
+// maxCandidates bounds the choice offered. A list long enough to scroll is not
+// a choice, it is the search screen with an extra step.
+const maxCandidates = 6
+
+// ambiguousCandidates returns the documents to offer when no one of them can
+// be said to be the answer, or nil when the top match is clear.
+func (s *Server) ambiguousCandidates(scored []repository.ScoredFile) []model.Candidate {
+	if len(scored) < 2 {
+		return nil
+	}
+	top := scored[0]
+	if top.Score <= 0 {
+		return nil
+	}
+	// Only rivals that matched the question just as completely count. A file
+	// that covers less of what was asked is not a rival, it is a worse match,
+	// and the ranking is entitled to prefer the better one without asking.
+	var rivals []repository.ScoredFile
+	for _, sf := range scored {
+		if sf.Coverage < top.Coverage {
+			continue
+		}
+		if sf.Score < top.Score*ambiguityMargin {
+			continue
+		}
+		rivals = append(rivals, sf)
+	}
+	if len(rivals) < 2 {
+		return nil
+	}
+	if len(rivals) > maxCandidates {
+		rivals = rivals[:maxCandidates]
+	}
+
+	have := s.store.GetFileExtractedContent(fileIDs(scoredFiles(rivals)))
+	out := make([]model.Candidate, 0, len(rivals))
+	for _, sf := range rivals {
+		content := have[sf.ID]
+		sender := ""
+		if sf.SenderKnown() {
+			sender = sf.SharedByName
+		}
+		summary := ""
+		readable := content != "" && content != repository.UnreadableSentinel
+		if readable {
+			summary = firstLine(content, 90)
+		}
+		out = append(out, model.Candidate{
+			FileID:     sf.ID,
+			FileName:   sf.FileName,
+			Folder:     sf.Subject,
+			Sender:     sender,
+			SharedAt:   formatSharedAt(sf.SharedAt()),
+			Summary:    summary,
+			Readable:   readable,
+			Confidence: sf.AttributionConfidence,
+		})
+	}
+	return out
+}
+
+// firstLine is the opening line of a document's text, for the one line shown
+// beside a candidate. Page markers are skipped: they are extraction
+// bookkeeping and say nothing about what the document is.
+func firstLine(content string, max int) string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "[[page") {
+			continue
+		}
+		if len(line) > max {
+			line = strings.TrimSpace(line[:max]) + "..."
+		}
+		return line
+	}
+	return ""
+}
+
+// ambiguityPrompt is what Reyna says while offering the choice.
+func ambiguityPrompt(what string, n int) string {
+	subject := strings.TrimSpace(what)
+	if subject == "" {
+		return fmt.Sprintf("I found %d documents that match. Which one did you mean?", n)
+	}
+	return fmt.Sprintf("I found %d documents matching %q, and they are about different things. Which one did you mean?", n, subject)
 }
 
 // verifyCitations keeps only quotes that really appear in the file they name.
@@ -2007,23 +2192,16 @@ func (s *Server) buildNLPReply(files []model.File, driveMatches []model.DriveMat
 // v3: DRIVE FOLDER WALKER (used by NLP retrieval + Q&A)
 // ══════════════════════════════════════════
 
+// tokenMatchesWord reports whether token appears in text as a whole word.
+//
+// This used to demand a word boundary only for tokens of one or two
+// characters and fall back to a plain substring test for everything longer,
+// on the reasoning that a long token is unlikely to appear inside another
+// word by accident. It does. "ode" sits inside "diodes", which is how a
+// question about ordinary differential equations was answered from a
+// semiconductor lecture and cited it as the source.
 func tokenMatchesWord(text, token string) bool {
-	if token == "" {
-		return false
-	}
-	if len(token) > 2 {
-		return strings.Contains(text, token)
-	}
-	// Short token (1-2 chars, e.g. "c", "os", "ai", "db"): require word boundary
-	fields := strings.FieldsFunc(text, func(r rune) bool {
-		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
-	})
-	for _, f := range fields {
-		if f == token {
-			return true
-		}
-	}
-	return false
+	return relevance.MatchText(text, token)
 }
 
 // folderMatchesWhat returns true if a Drive folder name plausibly matches the
@@ -2329,10 +2507,25 @@ func (s *Server) readAndStore(f model.File) string {
 	if err != nil || len(data) == 0 {
 		return ""
 	}
-	content, summary := s.classifier.ExtractContent(f.FileName, f.MimeType, f.FileSize, data)
+	content, summary, err := s.classifier.ExtractContent(f.FileName, f.MimeType, f.FileSize, data)
+
+	// A reading that never happened must not be recorded as a document with
+	// nothing in it.
+	//
+	// The sentinel is permanent by design: it exists so a file that genuinely
+	// holds no text stops consuming a model call on every question forever.
+	// That is right for a scanned photograph of a page, and catastrophic for a
+	// file that simply hit the daily quota, because the quota is twenty calls
+	// and the file is retired for good. "2CSE Module 1 ODE of first order.pdf"
+	// was lost exactly this way and could never answer a question about
+	// module 1 ODE again.
+	if err != nil {
+		log.Printf("[READ] %s not attempted: %v", f.FileName, err)
+		return ""
+	}
 	if strings.TrimSpace(content) == "" {
-		// Recorded rather than left blank, so the same file is not offered for
-		// reading again on every question for the rest of its life.
+		// Opened, and there really is nothing here. Recorded, so the same file
+		// is not offered for reading again on every question.
 		s.store.UpdateFileContent(f.ID, repository.UnreadableSentinel, "")
 		log.Printf("[READ] %s produced no text", f.FileName)
 		return repository.UnreadableSentinel
@@ -2367,7 +2560,7 @@ func topFilesRead(s *Server, files []model.File) bool {
 
 // ensureContent reads any of these files that have never been read, best
 // match first, and stops at either limit. Returns how many it read.
-func (s *Server) ensureContent(files []model.File, max int, deadline time.Time) int {
+func (s *Server) ensureContent(files []model.File, max int, deadline time.Time, stage *stageWriter) int {
 	if max <= 0 || len(files) == 0 {
 		return 0
 	}
@@ -2385,6 +2578,10 @@ func (s *Server) ensureContent(files []model.File, max int, deadline time.Time) 
 		if have[f.ID] != "" || !ReadableForExtraction(f.MimeType, f.FileName) {
 			continue
 		}
+		// Naming the file is the point. "Reading Module 1 ODE.pdf" tells the
+		// user the search found the right document and the wait is the
+		// reading; a bare "working" tells them nothing they did not know.
+		stage.Send("reading", "Reading "+f.FileName)
 		if s.readAndStore(f) != "" {
 			read++
 		}
@@ -2582,7 +2779,7 @@ func (s *Server) downloadDriveMatchesForQA(groupIDs []int64, matches []model.Dri
 			continue
 		}
 		log.Printf("[QA] downloaded %s (%d bytes) from Drive folder %s", m.FileName, len(data), m.FolderName)
-		content, _ := s.classifier.ExtractContent(m.FileName, "application/pdf", int64(len(data)), data)
+		content, _, _ := s.classifier.ExtractContent(m.FileName, "application/pdf", int64(len(data)), data)
 		if content != "" {
 			out[m.FolderName+"/"+m.FileName] = content
 			count++
@@ -2703,7 +2900,7 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 			// Top hit: always re-extract the full PDF live
 			if data, derr := s.drive.GetLocalFileData(f.ID); derr == nil && len(data) > 0 {
 				log.Printf("[QA] full-document extract for top hit: %s (%d bytes)", f.FileName, len(data))
-				extracted, summary := s.classifier.ExtractContent(f.FileName, f.MimeType, f.FileSize, data)
+				extracted, summary, _ := s.classifier.ExtractContent(f.FileName, f.MimeType, f.FileSize, data)
 				if extracted != "" {
 					content = extracted
 					_ = s.store.UpdateFileContent(f.ID, extracted, summary)
@@ -2720,7 +2917,7 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 		if content == "" {
 			if data, derr := s.drive.GetLocalFileData(f.ID); derr == nil && len(data) > 0 {
 				log.Printf("[QA] lazy-extracting %s (%d bytes)", f.FileName, len(data))
-				extracted, summary := s.classifier.ExtractContent(f.FileName, f.MimeType, f.FileSize, data)
+				extracted, summary, _ := s.classifier.ExtractContent(f.FileName, f.MimeType, f.FileSize, data)
 				if extracted != "" {
 					_ = s.store.UpdateFileContent(f.ID, extracted, summary)
 					content = extracted

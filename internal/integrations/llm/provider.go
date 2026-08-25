@@ -419,6 +419,16 @@ func (g *geminiProvider) CompleteWithDoc(prompt string, fileData []byte, mimeTyp
 			cfg := map[string]interface{}{
 				"maxOutputTokens": maxTokens,
 				"temperature":     0.3,
+				// Reasoning tokens come out of the same budget as the answer.
+				//
+				// On the Gemini 3 models this call runs against, a document
+				// transcription would spend the entire output allowance
+				// thinking and return a candidate with no text in it at all.
+				// The caller saw "unexpected end of JSON input" and treated the
+				// document as unreadable, which is how a perfectly ordinary PDF
+				// came to be retired. Transcribing a page is not a task that
+				// needs deliberation, so none is bought.
+				"thinkingConfig": map[string]interface{}{"thinkingBudget": 0},
 			}
 			if strings.Contains(prompt, "JSON") || strings.Contains(prompt, "json") {
 				cfg["responseMimeType"] = "application/json"
@@ -440,7 +450,8 @@ func (g *geminiProvider) CompleteWithDoc(prompt string, fileData []byte, mimeTyp
 
 	var r struct {
 		Candidates []struct {
-			Content struct {
+			FinishReason string `json:"finishReason"`
+			Content      struct {
 				Parts []struct {
 					Text string `json:"text"`
 				} `json:"parts"`
@@ -450,10 +461,29 @@ func (g *geminiProvider) CompleteWithDoc(prompt string, fileData []byte, mimeTyp
 	if err := json.Unmarshal(respBody, &r); err != nil {
 		return "", err
 	}
-	if len(r.Candidates) == 0 || len(r.Candidates[0].Content.Parts) == 0 {
+	if len(r.Candidates) == 0 {
 		return "", fmt.Errorf("empty response from Gemini")
 	}
-	return r.Candidates[0].Content.Parts[0].Text, nil
+	// Say why it was empty rather than returning "" for the caller to
+	// misdiagnose. An answer cut off at the token ceiling, a safety block and
+	// a document with no text in it are three different problems, and the one
+	// thing they must not all look like is the last of those.
+	c := r.Candidates[0]
+	var text string
+	for _, part := range c.Content.Parts {
+		text += part.Text
+	}
+	if strings.TrimSpace(text) == "" {
+		reason := c.FinishReason
+		if reason == "" {
+			reason = "no reason given"
+		}
+		return "", fmt.Errorf("gemini returned no text (finishReason %s)", reason)
+	}
+	if c.FinishReason == "MAX_TOKENS" {
+		log.Printf("[LLM] Gemini doc reply hit the token ceiling; keeping the %d chars it returned", len(text))
+	}
+	return text, nil
 }
 
 // ── Grok (xAI) — OpenAI-compatible API ──

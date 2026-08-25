@@ -80,3 +80,36 @@ func TestKeywordParseQueryReynaScript(t *testing.T) {
 		}
 	}
 }
+
+// A transcription cut off at the token ceiling still holds a complete reading
+// of everything before the cut. Discarding it as a parse error is what made a
+// perfectly ordinary PDF look like a document containing nothing.
+func TestSalvageJSONStringRecoversTruncatedContent(t *testing.T) {
+	truncated := `{"content": "[[page 1]]\nFirst order ODE\nVariable separable form`
+	got := salvageJSONString(truncated, "content")
+	want := "[[page 1]]\nFirst order ODE\nVariable separable form"
+	if got != want {
+		t.Fatalf("salvage = %q, want %q", got, want)
+	}
+}
+
+func TestSalvageJSONStringHonoursEscapes(t *testing.T) {
+	got := salvageJSONString(`{"content": "he said \"yes\" and a path C:\\tmp`, "content")
+	want := `he said "yes" and a path C:\tmp`
+	if got != want {
+		t.Fatalf("salvage = %q, want %q", got, want)
+	}
+}
+
+func TestSalvageJSONStringStopsAtProperClose(t *testing.T) {
+	got := salvageJSONString(`{"content": "all of it", "summary": "x"}`, "content")
+	if got != "all of it" {
+		t.Fatalf("salvage = %q, want %q", got, "all of it")
+	}
+}
+
+func TestSalvageJSONStringMissingField(t *testing.T) {
+	if got := salvageJSONString(`{"summary": "x"}`, "content"); got != "" {
+		t.Fatalf("salvage = %q, want empty", got)
+	}
+}

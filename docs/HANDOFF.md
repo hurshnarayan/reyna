@@ -81,6 +81,62 @@ Consequences that are already designed in, and should not be undone:
 
 ## Recently fixed, worth not regressing
 
+- **Retrieval matched letters, not words.** Every filename test was a
+  substring test, on both sides. "ode" is inside "diodes", so a question about
+  ordinary differential equations was answered from a semiconductor lecture and
+  cited it. "1" is inside "part1", so a question about module 1 returned
+  Module4_part1_Arrays. Matching now happens on whole words in
+  `internal/relevance` and `android/.../data/Words.kt`, which split a filename
+  at every non-alphanumeric character and at every letter/digit boundary. The
+  two must stay in agreement: the phone uses its copy to decide which unsent
+  files to push ahead of a question. Adjacent query words score far higher than
+  scattered ones, which is what tells "Module 1" from "Module4_part1".
+- **Content search stopped after the first 4000 characters.** Retrieval does
+  look inside documents, not only at filenames, and it always did: the SQL
+  matches `extracted_content`. But the Go ranker that replaced the SQL ranking
+  initially scored only the opening of each file, so a lecture naming
+  Bernoulli's equation at character 7891 was fetched as a candidate and then
+  dropped, making it findable by nothing except its filename, which did not
+  mention it either. `relevance.ContainsWord` now scans the whole document in
+  place rather than building a word list, because a question can pull a few
+  hundred candidates and some are thirty thousand characters. A name match
+  still scores 25 against a body match's 4, so the title stays the strongest
+  signal; the body decides whether a file is a candidate at all.
+- **The search was an OR with no relevance floor.** One matching token
+  qualified a file, so "module 1 ode" returned everything containing "module"
+  and the top four were cited. The SQL is now only a recall net that
+  deliberately over-fetches; `rankByRelevance` makes the real decision, and the
+  cut is relative to the best match rather than an absolute threshold.
+- **`TokenizeWhat` dropped bare digits** as too short, so "module 1" searched
+  for "module". The phone side had been fixed for this and the server had not.
+- **A failed reading was recorded as a document containing nothing.**
+  `ExtractContent` returned empty on any error, including quota, and the caller
+  wrote `UnreadableSentinel`, which is permanent by design. On twenty calls a
+  day one refusal retired a file for good, and it did: "2CSE Module 1 ODE of
+  first order.pdf" could never answer a question about module 1 ODE again.
+  Extraction now returns `ErrNotAttempted` for a reading that never happened,
+  and only a document that was genuinely opened and found empty gets the
+  sentinel. A one-time migration released the files already lost this way.
+- **Extraction threw away transcriptions that ran past the token ceiling.**
+  A dense PDF of worked mathematics transcribes to more text than the reply
+  budget holds, so the JSON came back cut off mid-string, failed to parse, and
+  the document was recorded as unreadable. `salvageJSONString` keeps everything
+  up to the cut. This is what actually made the ODE file readable again.
+- **Citations could show `[unreadable]` as the passage an answer rested on.**
+  The fallback cited the top file whatever was stored against it. A file with
+  no text is not evidence and is no longer offered as any.
+- **The app invented answers when the backend was unreachable.** It matched the
+  question against its own filenames, wrote "I found A, B, C on your phone",
+  and attached those files as sources with "File on your phone: A" standing in
+  for a quotation. Nothing had been read or searched, but it was laid out
+  exactly like an answer. It now says plainly that it could not reach the
+  backend, and any filename matches are labelled as such.
+- **`ask()` uploaded the whole backlog before sending the question.** It ran
+  `syncPending()`, which walks up to four thousand queued files. That is what
+  "Looking through your files" was doing for minutes, and why the count of
+  documents waiting for Drive climbed while the user watched a spinner. Only
+  files matching the question are sent ahead of it now. The backlog still goes
+  via `CaptureService` and `ReconcileWorker`.
 - **One refused file blocked the whole upload queue.** The loop stopped on any
   failure and drained oldest first, so a file over the 50 MB server limit was
   retried first forever and 82 files behind it never went. A 4xx is now a
@@ -101,8 +157,40 @@ Consequences that are already designed in, and should not be undone:
 - `just backend-bg` killed every process *connected* to :8080, including the
   emulator. Now `-sTCP:LISTEN`.
 
+## New behaviour worth knowing about
+
+- **Reyna asks which document you meant** instead of guessing, when several
+  match the question equally well. A library with six files called "Module 1"
+  cannot answer "what is module 1 about" from any one of them. The backend
+  decides: `ambiguousCandidates` in `handlers.go` returns
+  `status: "needs_choice"` with the candidates, and this happens before
+  anything is read, so an ambiguous question costs no model calls. A single
+  clear match still answers straight away with no extra tap. The choice comes
+  back as `file_ids` on the next request, which skips the search entirely.
+- **The sheet opens each candidate.** Choosing between documents by filename
+  alone is the same guess Reyna just declined to make, so the file is one tap
+  away and the sheet stays open behind the preview.
+- **The pending choice is held in memory, not on the message row.** Room is
+  configured with `fallbackToDestructiveMigration`, so adding a column would
+  wipe the phone's index of every captured file. A choice lost when the app is
+  killed only means asking again; the index is not replaceable. If the choice
+  ever needs to survive a restart, write a real `Migration(2, 3)` first.
+- **Progress is streamed.** `/api/nlp/retrieve` speaks newline-delimited JSON
+  when the client sends `Accept: application/x-ndjson`: a line per stage, then
+  the answer, always last. Clients that do not ask get the single JSON object
+  they always got, so the web app is unaffected. The stage naming the document
+  being read is the useful one, because that is where nearly all the time goes.
+- **Gemini 3 thinking tokens come out of the output budget.** `CompleteWithDoc`
+  now sets `thinkingBudget: 0` and reports `finishReason`, so an empty
+  candidate is diagnosable rather than looking like an empty document.
+
 ## Still open
 
+- **None of the app changes have been run on a device.** The backend was tested
+  end to end against the real database and the Kotlin compiles and unit tests
+  pass, but the choice sheet, the preview tap and the staged progress text have
+  not been seen on a phone. `adb` was not on the PATH in that session and there
+  was no SDK copy at the usual location.
 - Multiple conversations, like an LLM app. Not started.
 - Drive folder policy: one root folder, never invent folders. Not started.
 - The SIH hackathon deck. Not started.

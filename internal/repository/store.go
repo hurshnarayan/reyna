@@ -4,11 +4,13 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/hurshnarayan/reyna/internal/model"
+	"github.com/hurshnarayan/reyna/internal/relevance"
 )
 
 type Store struct {
@@ -144,8 +146,57 @@ func (s *Store) migrate() error {
 	if err := s.migrateAttribution(); err != nil {
 		return err
 	}
+	if err := s.releaseFalselyUnreadable(); err != nil {
+		return err
+	}
 
 	return nil
+}
+
+// releaseFalselyUnreadable gives back the files that a failed reading retired.
+//
+// UnreadableSentinel is permanent on purpose, so a document that genuinely
+// holds no text stops costing a model call on every question. Until now it was
+// also written whenever the reading itself failed, and on a free allowance of
+// twenty calls a day the commonest failure by far is the allowance running
+// out. Those files were retired for good without ever having been opened.
+//
+// The mark cannot be told apart after the fact, so every retired file of a
+// type that could yield text is offered one more chance. A file that really
+// has nothing in it is read once more and marked again, which costs a single
+// call; a file that was only unlucky comes back. Formats read locally by
+// internal/docs cost nothing at all to retry.
+//
+// This runs once. A marker row records that it has, so restarting the server
+// does not put the genuinely empty files back into the queue every time.
+func (s *Store) releaseFalselyUnreadable() error {
+	s.db.Exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`)
+
+	var done string
+	s.db.QueryRow(`SELECT value FROM meta WHERE key='released_false_unreadable'`).Scan(&done)
+	if done != "" {
+		return nil
+	}
+
+	res, err := s.db.Exec(`
+		UPDATE files SET extracted_content='', content_summary=''
+		WHERE extracted_content = ?
+		  AND (
+		    LOWER(file_name) LIKE '%.pdf'  OR LOWER(file_name) LIKE '%.doc'  OR LOWER(file_name) LIKE '%.docx' OR
+		    LOWER(file_name) LIKE '%.ppt'  OR LOWER(file_name) LIKE '%.pptx' OR LOWER(file_name) LIKE '%.odp'  OR
+		    LOWER(file_name) LIKE '%.xls'  OR LOWER(file_name) LIKE '%.xlsx' OR LOWER(file_name) LIKE '%.ods'  OR
+		    LOWER(file_name) LIKE '%.odt'  OR LOWER(file_name) LIKE '%.rtf'  OR LOWER(file_name) LIKE '%.csv'  OR
+		    LOWER(file_name) LIKE '%.txt'  OR LOWER(file_name) LIKE '%.md'   OR LOWER(file_name) LIKE '%.epub'
+		  )`, UnreadableSentinel)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n > 0 {
+		log.Printf("[MIGRATE] released %d file(s) wrongly marked unreadable", n)
+	}
+	_, err = s.db.Exec(`INSERT OR REPLACE INTO meta (key, value) VALUES ('released_false_unreadable','1')`)
+	return err
 }
 
 // migrateAttribution adds the schema that lets a file's sender and share time
@@ -1415,6 +1466,23 @@ func (s *Store) GetFileContent(fileID int64) (string, string) {
 
 // SearchFilesNLP searches files by sender, content, filename, subject, and time window
 func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *time.Time, limit int) ([]model.File, error) {
+	ranked, err := s.SearchFilesNLPScored(groupIDs, who, what, sinceTime, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.File, 0, len(ranked))
+	for _, r := range ranked {
+		out = append(out, r.File)
+	}
+	return out, nil
+}
+
+// SearchFilesNLPScored is SearchFilesNLP with the ranking kept.
+//
+// The scores travel with the files because the caller has to decide whether
+// one match was clear enough to answer from, or whether two were close enough
+// that the honest move is to ask which was meant.
+func (s *Store) SearchFilesNLPScored(groupIDs []int64, who, what string, sinceTime *time.Time, limit int) ([]ScoredFile, error) {
 	if len(groupIDs) == 0 {
 		return nil, nil
 	}
@@ -1556,7 +1624,20 @@ func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *ti
 	if rankExpr != "0" {
 		args = append(args, rankArgs...)
 	}
-	args = append(args, interface{}(limit))
+	// Over-fetch, because the real filter runs after this in Go.
+	//
+	// The SQL rank cannot tell "module 1" from "Module4_part1", so cutting at
+	// `limit` here throws away the file the person asked for before anything
+	// has looked at it properly. Fetch a wide band and let rankByRelevance
+	// choose, bounded so a two word question cannot pull the whole library.
+	fetchLimit := limit * 8
+	if fetchLimit > 300 {
+		fetchLimit = 300
+	}
+	if fetchLimit < limit {
+		fetchLimit = limit
+	}
+	args = append(args, interface{}(fetchLimit))
 
 	// SQLite parses bare numeric expressions in ORDER BY as column ordinals, so
 	// `ORDER BY (0) DESC` fails with "1st ORDER BY term out of range". Only emit
@@ -1591,7 +1672,124 @@ func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *ti
 		return nil, err
 	}
 	defer rows.Close()
-	return scanFiles(rows)
+	candidates, err := scanFiles(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	// The SQL above is a recall net, not the answer.
+	//
+	// Every one of its tests is LIKE '%token%', which has no notion of a word:
+	// it matches "ode" inside "diodes" and "1" inside "part1", and because the
+	// token tests are joined with OR, a file needed only the word "module" to
+	// qualify for a question about module 1 ODE. So the query casts wide and
+	// deliberately over-fetches, and the decision about what is actually
+	// relevant is made here, on whole words, where it can be tested.
+	ranked := rankByRelevance(candidates, s.snippets(candidates), tokens)
+	if len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+	return ranked, nil
+}
+
+// ScoredFile is a file together with how well it answered the query.
+//
+// The scores travel with the file because the caller has to decide whether
+// the match was clear enough to answer from, or close enough to a rival that
+// the honest move is to ask which one was meant.
+type ScoredFile struct {
+	model.File
+	Score    float64
+	Coverage float64
+	Adjacent int
+}
+
+// snippets fetches each candidate's stored text, for relevance scoring.
+//
+// The whole of it, not the opening. A term the question is about can sit
+// anywhere in a document, and an earlier revision that read only the first few
+// thousand characters made a lecture naming Bernoulli's equation on its
+// fifteenth slide unfindable by anything but its filename, which did not
+// mention it either.
+//
+// Capped per file rather than per query, at a size no real document reaches,
+// so one pathological row cannot pull the whole table into memory.
+func (s *Store) snippets(files []model.File) map[int64]string {
+	out := make(map[int64]string, len(files))
+	if len(files) == 0 {
+		return out
+	}
+	ids := make([]int64, 0, len(files))
+	for _, f := range files {
+		ids = append(ids, f.ID)
+	}
+	placeholders, args := buildInClause(ids)
+	rows, err := s.db.Query(
+		`SELECT id, substr(COALESCE(extracted_content,''),1,200000) FROM files WHERE id IN (`+placeholders+`)`,
+		args...,
+	)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var snip string
+		if rows.Scan(&id, &snip) == nil {
+			out[id] = snip
+		}
+	}
+	return out
+}
+
+// rankByRelevance keeps the files that actually answer the query and orders
+// them best first.
+//
+// The cut is relative to the best match rather than an absolute threshold.
+// When some file accounts for every word of the question, files accounting
+// for fewer are not near misses, they are other documents, and listing them
+// under an answer is what made a correct answer look like a guess. When
+// nothing accounts for the whole question, the best available is still the
+// best there is and must survive, or a library that plainly contains
+// something answers that it has never seen it.
+func rankByRelevance(files []model.File, snippets map[int64]string, tokens []string) []ScoredFile {
+	if len(files) == 0 {
+		return nil
+	}
+	if len(tokens) == 0 {
+		out := make([]ScoredFile, 0, len(files))
+		for _, f := range files {
+			out = append(out, ScoredFile{File: f})
+		}
+		return out
+	}
+
+	scored := make([]ScoredFile, 0, len(files))
+	best := 0.0
+	for _, f := range files {
+		r := relevance.Scored(f.FileName, f.Subject+" "+f.Tags, snippets[f.ID], tokens)
+		if r.Matched == 0 {
+			continue
+		}
+		if r.Coverage > best {
+			best = r.Coverage
+		}
+		scored = append(scored, ScoredFile{File: f, Score: r.Score, Coverage: r.Coverage, Adjacent: r.Adjacent})
+	}
+
+	floor := relevance.Floor(best)
+	kept := scored[:0]
+	for _, sf := range scored {
+		if sf.Coverage >= floor {
+			kept = append(kept, sf)
+		}
+	}
+
+	// Stable, so files that scored the same keep the SQL order, which already
+	// put confident sender matches and recent files first.
+	sort.SliceStable(kept, func(i, j int) bool { return kept[i].Score > kept[j].Score })
+	log.Printf("[RANK] candidates=%d kept=%d best_coverage=%.2f floor=%.2f", len(files), len(kept), best, floor)
+	return kept
 }
 
 // SearchFilesContent searches files by extracted content (for Q&A).
@@ -1701,10 +1899,26 @@ func TokenizeWhat(what string) []string {
 		"it": true, "cs": true, "ee": true, "ec": true, "me": true, "cv": true,
 		"py": true, "js": true, "ui": true, "ux": true, "ip": true,
 	}
+	// A bare number is always kept, however short.
+	//
+	// "module 1" and "module 4" differ by exactly one character, and that
+	// character is the entire question. Dropping it as too short left the
+	// query as just "module", every module in the library matched equally,
+	// and a question about module 1 was answered from module 4. The phone
+	// side of this had already been fixed; this side had not.
+	isNumber := func(tok string) bool {
+		for _, r := range tok {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+		return tok != ""
+	}
+
 	var out []string
 	seen := map[string]bool{}
 	for _, tok := range strings.Fields(cleaned) {
-		if (len(tok) < 3 && !shortAllowed[tok]) || stop[tok] || seen[tok] {
+		if (len(tok) < 3 && !shortAllowed[tok] && !isNumber(tok)) || stop[tok] || seen[tok] {
 			continue
 		}
 		seen[tok] = true
@@ -1794,4 +2008,40 @@ func (s *Store) FilesMissingContent(limit int) ([]model.File, error) {
 	}
 	defer rows.Close()
 	return scanFiles(rows)
+}
+
+// GetFilesByIDs returns these files, in the order the ids were given.
+//
+// Order matters because the ids come from a user choosing documents from a
+// list, and the first one they picked is the one they meant first.
+func (s *Store) GetFilesByIDs(ids []int64) ([]model.File, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders, args := buildInClause(ids)
+	rows, err := s.db.Query(
+		`SELECT f.id, f.group_id, f.user_id, f.shared_by_phone, f.shared_by_name, f.file_name, f.file_size,
+		  f.mime_type, f.drive_file_id, f.drive_folder_id, f.subject, f.tags, f.version, f.parent_file_id,
+		  f.wa_message_id, f.status, f.created_at, f.posted_at,
+		  COALESCE(f.attribution_method,''), COALESCE(f.attribution_confidence,0)
+		 FROM files f WHERE f.id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	found, err := scanFiles(rows)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[int64]model.File, len(found))
+	for _, f := range found {
+		byID[f.ID] = f
+	}
+	out := make([]model.File, 0, len(ids))
+	for _, id := range ids {
+		if f, ok := byID[id]; ok {
+			out = append(out, f)
+		}
+	}
+	return out, nil
 }

@@ -179,6 +179,8 @@ private fun MainShell(vm: ReynaViewModel) {
     val messages by vm.messages.collectAsState()
     val files by vm.files.collectAsState()
     val sending by vm.sending.collectAsState()
+    val stage by vm.stage.collectAsState()
+    val choice by vm.pendingChoice.collectAsState()
     val driveState by vm.driveState.collectAsState()
     val pushing by vm.pushing.collectAsState()
 
@@ -283,6 +285,25 @@ private fun MainShell(vm: ReynaViewModel) {
                             onPushToDrive = vm::pushToDrive,
                             onOpenSettings = { settingsOpen = true },
                             sending = sending,
+                            stage = stage,
+                            choice = choice,
+                            onChooseCandidate = vm::chooseCandidate,
+                            onPreviewCandidate = { fileId, fileName ->
+                                // The sheet stays open behind the preview.
+                                // Choosing between documents by filename alone
+                                // is the same guess Reyna just declined to
+                                // make, so opening one has to be a look at it,
+                                // not a commitment to it.
+                                val local = vm.localFileFor(fileId, fileName)
+                                when {
+                                    local == null ->
+                                        vm.note("That file is not on this phone.")
+                                    local.name.endsWith(".pdf", ignoreCase = true) ->
+                                        viewing = ViewingPdf(local, "", 1)
+                                    else -> vm.openInOtherApp(local)
+                                }
+                            },
+                            onDismissChoice = vm::dismissChoice,
                         )
                         Tab.Search -> FilesScreen(
                             files = vm.searchableFiles(),
