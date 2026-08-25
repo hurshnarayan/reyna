@@ -240,9 +240,14 @@ On the onboarding screen the mark assembles itself: a drop falls, lands, ripples
 and the three drops splash up out of the point of impact. That motion is the
 mark's own construction rather than something laid over it, since all three
 drops are rotations about a pivot below the mark and their tails already point
-at it. In chat the drops jiggle out of step with each other while an answer is
-being put together, which replaced a spinner and keeps one piece of visual
-language on the screen rather than two.
+at it. In chat the mark stands at the end of the conversation permanently, under the
+last answer, the way a signature sits at the foot of a letter. At rest it is
+quiet; while a question is being answered it darkens and its drops jiggle out
+of step with each other, with the stage text beside it. One object in two
+states, not two objects: an indicator that appeared on send and disappeared on
+arrival meant the thing that had been working vanished at the moment it
+finished, and the next question built a new one from nothing. It replaced the
+spinner, so the screen carries one piece of visual language rather than two.
 
 Two traps worth knowing. A Compose `Canvas` clips to its bounds, so the falling
 drop cannot start above the frame; it starts just inside the top edge and fades

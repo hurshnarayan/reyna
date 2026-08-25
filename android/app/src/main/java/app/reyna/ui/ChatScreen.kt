@@ -1,5 +1,10 @@
 package app.reyna.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -64,6 +69,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextOverflow
 import app.reyna.attribution.Attribution
 import app.reyna.ui.components.ConfidenceDot
+import app.reyna.ui.components.ReynaLogo
 import app.reyna.ui.components.ReynaMarkThinking
 import app.reyna.ui.components.Bubble
 import app.reyna.ui.components.BubbleText
@@ -163,8 +169,13 @@ fun ChatScreen(
     LaunchedEffect(choice) { if (choice != null) sheetOpen = true }
 
     // A conversation opens at the newest message, not the oldest.
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
+    //
+    // The mark sits after the last message, so scrolling to the last message
+    // leaves it just below the fold. Scrolling to the mark keeps the end of
+    // the conversation actually visible, which is where the stage text appears
+    // while a question is being answered.
+    LaunchedEffect(messages.size, sending) {
+        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size)
     }
 
     Column(Modifier.fillMaxSize().background(c.background)) {
@@ -219,9 +230,15 @@ fun ChatScreen(
                     onReopenChoice = { sheetOpen = true },
                 )
             }
-            // A visible "working on it" turn. Twenty seconds of nothing reads
-            // as a broken app, and this is also what the Stop button refers to.
-            if (sending) item { ThinkingRow(stage) }
+            // The mark stays, and it is the same mark either way.
+            //
+            // It used to be created when a question went out and destroyed
+            // when the answer landed, so the thing that had been working
+            // vanished at the moment it finished. Left standing under the last
+            // answer it becomes the end of the conversation, and asking again
+            // wakes the object already on the screen rather than replacing it
+            // with a different one.
+            if (messages.isNotEmpty()) item { MarkRow(sending = sending, stage = stage) }
         }
 
         if (choice != null && sheetOpen) {
@@ -344,28 +361,63 @@ private fun IconButton(
  * place the answer will, so the conversation does not jump when the reply
  * lands.
  */
+/**
+ * Reyna itself, at the end of the conversation.
+ *
+ * At rest it is a quiet mark under the last answer, the way a signature sits
+ * at the foot of a letter: it says who has been speaking and marks where the
+ * conversation currently ends. While a question is being answered the same
+ * mark darkens and its drops begin to move, and the stage text appears beside
+ * it.
+ *
+ * One object in two states rather than two objects. A separate indicator that
+ * appeared on send and disappeared on arrival meant the thing that had been
+ * working vanished at the exact moment it finished, and the next question
+ * created a new one from nothing. This wakes up and settles instead.
+ *
+ * No bubble, because the answer above it has none either.
+ */
 @Composable
-private fun ThinkingRow(stage: String) {
+private fun MarkRow(sending: Boolean, stage: String) {
     val c = reynaColors
-    // No bubble, because the answer that replaces this will not have one
-    // either. A bubble here and prose afterwards makes the reply appear to
-    // jump out of a box when it lands.
+
+    // Colour carries the change of state on its own, so the mark does not have
+    // to jump or resize to show that it has started working.
+    val tint by animateColorAsState(
+        targetValue = if (sending) c.onSurface else c.onSurfaceFaint,
+        animationSpec = tween(durationMillis = 420),
+        label = "mark-tint",
+    )
+
     Row(
-        Modifier.fillMaxWidth().padding(top = 6.dp),
+        Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ReynaMarkThinking(color = c.onSurface, modifier = Modifier.size(19.dp))
-        Spacer(Modifier.width(10.dp))
+        if (sending) {
+            ReynaMarkThinking(color = tint, modifier = Modifier.size(19.dp))
+        } else {
+            ReynaLogo(color = tint, modifier = Modifier.size(19.dp), contentDescription = null)
+        }
+
         // The server says which document it is reading, and reading is where
         // nearly all the time goes. One fixed label for the whole wait made a
         // question progressing normally look exactly like one that had hung.
-        Text(
-            stage.ifBlank { "Looking through your files" },
-            fontSize = 14.sp,
-            color = c.onSurfaceMuted,
-            maxLines = 2,
-            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-        )
+        AnimatedVisibility(
+            visible = sending,
+            enter = fadeIn(tween(220)),
+            exit = fadeOut(tween(160)),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    stage.ifBlank { "Looking through your files" },
+                    fontSize = 14.sp,
+                    color = c.onSurfaceMuted,
+                    maxLines = 2,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                )
+            }
+        }
     }
 }
 
