@@ -405,16 +405,68 @@ class Repo private constructor(private val context: Context) {
     // ── Backend ──
 
     /** Uploads anything not yet accepted. Safe to call repeatedly. */
-    suspend fun syncPending(limit: Int = 20): Int = withContext(Dispatchers.IO) {
+    /**
+     * Sends captured files the server has not seen yet, in the order given.
+     *
+     * Two kinds of failure, two opposite responses. A file the server *refused*
+     * is skipped and retired, because a 4xx is a verdict on that file and
+     * sending it again changes nothing. A file that failed to *reach* the
+     * server ends the pass, because the network is down and every file behind
+     * it will fail the same way.
+     *
+     * The distinction matters more than it looks. The queue is oldest first, so
+     * a single permanently refused file sits at the head and is retried first
+     * on every pass, and everything behind it is never sent at all. That is how
+     * eighty two files ended up stuck, and why a document plainly visible in
+     * Search was invisible to chat: chat searches the server, and the server
+     * had never received it.
+     */
+    suspend fun syncPending(limit: Int = 20): Int = uploadAll(dao.pendingUpload(limit))
+
+    /**
+     * Sends the pending files whose names look like the question, before
+     * anything else.
+     *
+     * Chat can only answer from what the server holds, and the queue is drained
+     * oldest first, so the file someone is asking about right now is usually
+     * the last one to be sent. This puts it first. It is a few seconds spent to
+     * turn "I could not find that" into an answer, which is the difference
+     * between the app being wrong and the app being slow.
+     *
+     * Matching is on the filename only. The phone has no extracted text, so it
+     * cannot judge the contents; it can only notice that a file nobody has read
+     * yet is called something like what was asked.
+     */
+    suspend fun syncMatchingFirst(question: String, limit: Int = 3): Int {
+        val tokens = queryTokens(question)
+        if (tokens.isEmpty()) return 0
+        val ranked = dao.pendingUpload(500)
+            .map { f -> f to tokens.count { f.name.lowercase().contains(it) } }
+            .filter { it.second > 0 }
+            .sortedByDescending { it.second }
+            .take(limit)
+            .map { it.first }
+        return uploadAll(ranked)
+    }
+
+    private suspend fun uploadAll(pending: List<FileEntity>): Int = withContext(Dispatchers.IO) {
         if (deviceToken.isBlank()) return@withContext 0
         val api = api()
         var sent = 0
-        for (f in dao.pendingUpload(limit)) {
+        for (f in pending) {
             val file = File(f.path)
-            // WhatsApp reclaims media, so a row can outlive its file. Marked
-            // uploaded to stop retrying something that will never succeed.
+            // WhatsApp reclaims media, so a row can outlive its file. Retired
+            // to stop retrying something that will never succeed.
             if (!file.isFile) {
-                dao.markUploaded(f.id, 0, null)
+                retire(f.id)
+                continue
+            }
+            // Refused here rather than by the server. Pushing fifty megabytes
+            // up a phone connection only to be told no costs the user data and
+            // minutes, every pass, forever.
+            if (file.length() > MAX_UPLOAD_BYTES) {
+                Log.w(TAG, "skipping ${f.name}: ${file.length()} bytes is over the server limit")
+                retire(f.id)
                 continue
             }
             val result = api.upload(
@@ -431,10 +483,30 @@ class Repo private constructor(private val context: Context) {
                 dao.markUploaded(f.id, it.remoteId, it.folder)
                 sent++
             }
-            if (result.isFailure) break // Server is down; try again later.
+            val failure = result.exceptionOrNull() ?: continue
+            if (failure is ReynaApi.Rejected) {
+                // The server looked at this file and said no. Retire it and
+                // carry on, so it stops blocking everything behind it.
+                Log.w(TAG, "server refused ${f.name}: ${failure.message}")
+                retire(f.id)
+                continue
+            }
+            // Could not reach the server at all. Nothing else will get through
+            // either, so stop here and let the next pass try again.
+            Log.w(TAG, "upload stopped at ${f.name}: ${failure.message}")
+            break
         }
         sent
     }
+
+    /**
+     * Stops trying to send a file, without pretending it reached the server.
+     *
+     * The row keeps remoteId 0, which everywhere else already reads as "not on
+     * the server", so a retired file is never cited and never counted as
+     * synced. It only stops being asked about.
+     */
+    private suspend fun retire(id: Long) = dao.markUploaded(id, 0, null)
 
     /**
      * Asks a question and records both turns.
@@ -459,7 +531,8 @@ class Repo private constructor(private val context: Context) {
 
         dao.insertMessage(MessageEntity(text = question, fromUser = true, at = System.currentTimeMillis()))
 
-        // Sync pending captures first so the backend knows about all local files
+        // Send what the server does not have yet, the likely answer first.
+        runCatching { syncMatchingFirst(question) }
         runCatching { syncPending() }
 
         val answer = api().ask(question, history, onCall).getOrNull()
@@ -477,15 +550,7 @@ class Repo private constructor(private val context: Context) {
 
         // Offline fallback: if backend could not be reached, search local files cleanly
         if (answer == null && local.isNotEmpty()) {
-            val qLower = question.lowercase()
-            val stopWords = setOf(
-                "find", "any", "the", "for", "with", "from", "that", "this", "file", "files",
-                "pdf", "pdfs", "doc", "docs", "notes", "note", "can", "you", "me", "show",
-                "tell", "what", "where", "which", "is", "are", "have", "please", "received", "get"
-            )
-            val tokens = qLower.split(Regex("[^a-zA-Z0-9]+")).filter {
-                it.isNotBlank() && !stopWords.contains(it)
-            }
+            val tokens = queryTokens(question)
             if (tokens.isNotEmpty()) {
                 val matched = local.filter { f ->
                     val nameLower = f.name.lowercase()
@@ -516,6 +581,21 @@ class Repo private constructor(private val context: Context) {
             }
         }
 
+        // A false "I have never seen that" is the worst answer this app can
+        // give, because it is indistinguishable from the file being lost. If
+        // the server found nothing and the phone is still holding files it has
+        // not sent, say so instead of letting the user conclude it is gone.
+        if (citations.isEmpty() && citedIds.isEmpty() && answer != null) {
+            val queued = dao.pendingUpload(500).size
+            if (queued > 0) {
+                reply += if (queued == 1) {
+                    " One file on this phone has not been sent for reading yet, so it was not searched."
+                } else {
+                    " $queued files on this phone have not been sent for reading yet, so they were not searched."
+                }
+            }
+        }
+
         dao.insertMessage(
             MessageEntity(
                 text = reply,
@@ -526,6 +606,25 @@ class Repo private constructor(private val context: Context) {
             )
         )
         answer
+    }
+
+    /**
+     * The words in a question worth matching a filename against.
+     *
+     * The stop list is deliberately about *asking*, not about English. "the"
+     * and "is" are dropped because they are everywhere; "find", "show" and
+     * "received" are dropped because they describe the request rather than the
+     * thing requested, and left in they match half the library.
+     */
+    private fun queryTokens(question: String): List<String> {
+        val stopWords = setOf(
+            "find", "any", "the", "for", "with", "from", "that", "this", "file", "files",
+            "pdf", "pdfs", "doc", "docs", "notes", "note", "can", "you", "me", "show",
+            "tell", "what", "where", "which", "is", "are", "have", "please", "received", "get",
+        )
+        return question.lowercase()
+            .split(Regex("[^a-zA-Z0-9]+"))
+            .filter { it.isNotBlank() && it.length > 1 && it !in stopWords }
     }
 
     private fun decodeCitations(json: String): List<ReynaApi.Citation> {
@@ -694,6 +793,13 @@ class Repo private constructor(private val context: Context) {
 
     companion object {
         private const val TAG = "ReynaRepo"
+
+        /**
+         * The server refuses a body over this, in handleDeviceUpload.
+         * Kept in step by hand: the two are far apart and there is no
+         * shared place to put it.
+         */
+        private const val MAX_UPLOAD_BYTES = 50L * 1024 * 1024
         private const val KEY_BACKEND = "backend_url"
         private const val KEY_TOKEN = "device_token"
         private const val KEY_CAPTURING = "capturing"
