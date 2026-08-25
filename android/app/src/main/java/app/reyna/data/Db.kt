@@ -10,6 +10,8 @@ import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.room.RoomDatabase
 import kotlinx.coroutines.flow.Flow
 
@@ -112,6 +114,13 @@ data class MessageEntity(
      * rewriting history under an old answer would make the evidence useless.
      */
     val citations: String = "",
+
+    /**
+     * Marks a reply that is about Reyna's own state rather than about the
+     * user's documents, so it can be shown as a notice instead of an answer.
+     * Empty for ordinary messages.
+     */
+    val notice: String = "",
 )
 
 @Dao
@@ -236,7 +245,7 @@ interface ReynaDao {
 
 @Database(
     entities = [FileEntity::class, EventEntity::class, LinkEntity::class, MessageEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class ReynaDb : RoomDatabase() {
@@ -245,12 +254,34 @@ abstract class ReynaDb : RoomDatabase() {
     companion object {
         @Volatile private var instance: ReynaDb? = null
 
+        /**
+         * Adds the notice column to messages.
+         *
+         * Written out rather than left to the destructive fallback, which
+         * drops every table. This database is the phone's index of every
+         * captured file and the attribution behind each one, rebuilt only by a
+         * full rescan and, for anything learned from a notification, not
+         * rebuildable at all. Losing a conversation to a schema change would be
+         * a nuisance; losing that is the app.
+         */
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN notice TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun get(context: Context): ReynaDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 context.applicationContext,
                 ReynaDb::class.java,
                 "reyna.db",
-            ).fallbackToDestructiveMigration().build().also { instance = it }
+            )
+                .addMigrations(MIGRATION_2_3)
+                // Still the last resort for a mismatch nothing above covers,
+                // but every schema change from here needs its own migration
+                // above or it silently wipes the library.
+                .fallbackToDestructiveMigration()
+                .build().also { instance = it }
         }
     }
 }

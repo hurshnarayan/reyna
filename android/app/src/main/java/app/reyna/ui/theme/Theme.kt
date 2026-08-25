@@ -59,6 +59,18 @@ data class ReynaColors(
     val confident: Color,
     val partial: Color,
     val unknown: Color,
+
+    /**
+     * Notices: something is temporarily wrong and will pass.
+     *
+     * Kept out of the confidence triad above, which says how much is known
+     * about who shared a file and must not start meaning anything else.
+     * Amber rather than red on purpose: running out of the day's reading
+     * allowance is a wait, not a failure, and nothing has been lost.
+     */
+    val notice: Color,
+    /** The wash a notice sits on. Tinted, never a saturated fill. */
+    val noticeSurface: Color,
 ) {
     fun forConfidence(confidence: Double): Color = when {
         confidence >= 0.70 -> confident
@@ -93,6 +105,8 @@ private val LightColors = ReynaColors(
     confident = Color(0xFF3F8F5B),
     partial = Color(0xFFB07A22),
     unknown = Color(0xFF9A9A93),
+    notice = Color(0xFF9A6511),
+    noticeSurface = Color(0xFFFDF4E3),
 )
 
 private val DarkColors = ReynaColors(
@@ -111,6 +125,8 @@ private val DarkColors = ReynaColors(
     confident = Color(0xFF5FB07B),
     partial = Color(0xFFD9A24A),
     unknown = Color(0xFF8A8A85),
+    notice = Color(0xFFE0AE5C),
+    noticeSurface = Color(0xFF2A2317),
 )
 
 val LocalReynaColors = staticCompositionLocalOf { LightColors }

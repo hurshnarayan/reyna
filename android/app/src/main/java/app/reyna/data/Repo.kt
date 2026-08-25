@@ -649,6 +649,7 @@ class Repo private constructor(private val context: Context) {
                 at = System.currentTimeMillis(),
                 fileIds = citedIds.joinToString(","),
                 citations = encodeCitations(citations),
+                notice = answer?.notice.orEmpty(),
             )
         )
         answer

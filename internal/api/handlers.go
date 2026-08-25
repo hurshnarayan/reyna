@@ -1747,6 +1747,7 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 			Files:     files,
 			Query:     model.NLPParsedQuery{Who: who, What: what, When: when, Why: why, Raw: req.Query},
 			Reply:     outOfAllowanceReply(until, len(files)),
+			Notice:    model.NoticeOutOfAllowance,
 			Citations: nil,
 		})
 		return
@@ -1939,13 +1940,13 @@ func outOfAllowanceReply(until time.Time, matched int) string {
 			when = "around " + local.Format("3:04 pm") + " tomorrow"
 		}
 	}
-	msg := "I have used up today's reading allowance, so I cannot answer questions until it resets " + when + "."
-	if matched > 0 {
-		msg += " Your documents are all still here, and the ones that matched are under the sources button."
-	} else {
-		msg += " Your documents are all still here, and the Search tab still finds them by name."
-	}
-	return msg
+	// Nothing is cited on this path, because nothing was read, so the reply
+	// must not point at a sources button that will not be there. Saying the
+	// documents are safe and still findable is the part that is true and the
+	// part the user actually wants to know.
+	_ = matched
+	return "I have used up today's reading allowance, so I cannot answer questions until it resets " +
+		when + ". Your documents are all still here, and Search still finds them by name."
 }
 
 // scoredFiles drops the scores, for the places that only need the files.

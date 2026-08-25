@@ -172,6 +172,7 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
                         fromUser = m.fromUser,
                         time = timeOf(m.at),
                         at = m.at,
+                        notice = m.notice,
                         // Chips are rebuilt from the local rows rather than
                         // stored with the message, so an answer always shows
                         // the current attribution rather than what was true

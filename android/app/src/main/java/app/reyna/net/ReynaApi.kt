@@ -65,6 +65,12 @@ class ReynaApi(
          */
         val status: String = STATUS_ANSWERED,
         val candidates: List<Candidate> = emptyList(),
+        /**
+         * Set when the reply is about Reyna's own state rather than about the
+         * user's documents, so it can be shown as a notice instead of an
+         * answer. Empty for ordinary replies.
+         */
+        val notice: String = "",
     )
 
     /**
@@ -281,6 +287,7 @@ class ReynaApi(
                 citations = json.optJSONArray("citations").toCitations(),
                 status = json.optString("status").ifBlank { STATUS_ANSWERED },
                 candidates = json.optJSONArray("candidates").toCandidates(),
+                notice = json.optString("notice"),
             )
         }
     }.onFailure { Log.w(TAG, "ask failed: ${it.message}") }
@@ -539,6 +546,9 @@ class ReynaApi(
 
         /** Reply is a question back: several documents matched equally well. */
         const val STATUS_NEEDS_CHOICE = "needs_choice"
+
+        /** The day's model calls are spent. A wait, not a failure. */
+        const val NOTICE_OUT_OF_ALLOWANCE = "out_of_allowance"
 
         /** Newline-delimited JSON: one progress line each, then the answer. */
         private const val NDJSON = "application/x-ndjson"

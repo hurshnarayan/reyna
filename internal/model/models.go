@@ -295,7 +295,19 @@ type NLPRetrievalResponse struct {
 
 	// Candidates is populated only when Status is NLPStatusNeedsChoice.
 	Candidates []Candidate `json:"candidates,omitempty"`
+
+	// Notice marks a reply that is about Reyna's own state rather than about
+	// the user's documents, so the app can present it as a notice instead of
+	// as an answer. Empty for ordinary replies.
+	Notice string `json:"notice,omitempty"`
 }
+
+// Notice kinds. A reply carrying one of these is not an answer.
+const (
+	// NoticeOutOfAllowance: the day's model calls are spent. A wait, not a
+	// failure; nothing has been lost and it clears on its own.
+	NoticeOutOfAllowance = "out_of_allowance"
+)
 
 // Candidate is one document offered when Reyna cannot tell which was meant.
 //

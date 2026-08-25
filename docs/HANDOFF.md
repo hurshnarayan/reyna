@@ -112,6 +112,20 @@ Consequences that are already designed in, and should not be undone:
   two must stay in agreement: the phone uses its copy to decide which unsent
   files to push ahead of a question. Adjacent query words score far higher than
   scattered ones, which is what tells "Module 1" from "Module4_part1".
+- **A reply can now be a notice rather than an answer.** The response carries a
+  `notice` field, the message row stores it, and the chat renders those as an
+  amber card with an icon instead of prose. Out of allowance is the only kind
+  so far. Amber and not red on purpose: nothing has failed, nothing is lost,
+  and it clears on its own; red would send the user hunting for a fix that does
+  not exist. The colour is its own `notice` token rather than borrowed from the
+  confidence triad, which the theme documents as meaning one thing only.
+- **Room now has a real migration.** Adding the `notice` column meant a schema
+  change, and the builder was configured with `fallbackToDestructiveMigration`
+  alone, which would have dropped the phone's index of every captured file and
+  the attribution behind each one. `MIGRATION_2_3` in `Db.kt` adds the column in
+  place; verified by installing over the previous build with real data, which
+  kept all 160 files and the existing conversation. Every schema change from
+  here needs its own migration or it silently wipes the library.
 - **Running out of allowance now says so immediately, and says only that.**
   `Classifier.OutOfAllowanceUntil` is checked before the Drive walk, the
   document reads and the model call, because every one of those exists to

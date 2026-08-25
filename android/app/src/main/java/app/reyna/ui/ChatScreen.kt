@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CloudUpload
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.DropdownMenu
@@ -124,6 +125,11 @@ data class ChatMessage(
     val time: String,
     /** When this turn was written, which is where a retry rewinds to. */
     val at: Long = 0,
+    /**
+     * Set when this is Reyna reporting its own state rather than answering.
+     * Rendered as a notice, not as prose.
+     */
+    val notice: String = "",
     val files: List<FoundFile> = emptyList(),
     /** Evidence, shown behind a button rather than under the answer. */
     val sources: List<Source> = emptyList(),
@@ -441,7 +447,58 @@ private fun MessageRow(
         }
         return
     }
+    if (msg.notice.isNotEmpty()) {
+        NoticeCard(msg)
+        return
+    }
     AnswerBlock(msg, onShowSources, onCopy, onRetry, canRetry, hasChoice, onReopenChoice)
+}
+
+/**
+ * Reyna reporting its own state, rather than answering.
+ *
+ * Running out of the day's reading allowance is the case this exists for. As
+ * prose it read as an answer that had gone wrong, sitting in the same place
+ * and the same type as a real reply, so the eye had to finish the sentence
+ * before learning nothing had been searched. Given its own shape it is legible
+ * before it is read.
+ *
+ * Amber, not red, and no exclamation. Nothing has failed and nothing is lost:
+ * the documents are all still there and the allowance comes back on its own.
+ * Red would say something is broken and send the user looking for a fix that
+ * does not exist.
+ */
+@Composable
+private fun NoticeCard(msg: ChatMessage) {
+    val c = reynaColors
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 2.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(c.noticeSurface)
+            .border(1.dp, c.notice.copy(alpha = 0.28f), RoundedCornerShape(14.dp))
+            .padding(horizontal = 14.dp, vertical = 13.dp),
+    ) {
+        Row(verticalAlignment = Alignment.Top) {
+            Icon(
+                Icons.Rounded.Schedule,
+                contentDescription = null,
+                tint = c.notice,
+                // Nudged to sit on the first line's baseline rather than
+                // centred on a block of text three lines tall.
+                modifier = Modifier.size(17.dp).padding(top = 2.dp),
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                msg.text,
+                fontSize = 14.sp,
+                lineHeight = 21.sp,
+                color = c.notice,
+            )
+        }
+
+    }
 }
 
 /**
