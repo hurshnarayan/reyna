@@ -3,6 +3,7 @@ package llm
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -293,11 +294,88 @@ func geminiModels() []string {
 // Only quota moves it along. Any other failure is returned as is, because
 // retrying a malformed request against three models turns one clear error into
 // three confusing ones.
+// ErrOutOfQuota means every configured model has spent its daily allowance.
+//
+// Returned instead of attempting a call, so a caller can fall back at once
+// rather than discovering it request by request.
+var ErrOutOfQuota = errors.New("all Gemini models are out of quota for today")
+
+// quotaWall remembers which models are spent, and until when.
+//
+// Without it an exhausted allowance is rediscovered on every single call. Each
+// discovery costs a slot in the rate gate, which permits fifteen a minute, and
+// one question makes several calls across several models. So once the day's
+// quota was gone a question spent over two minutes queueing for permission to
+// receive 429s it already knew were coming, and only then showed the fallback
+// reply. The wall is per model because the limit is per model, and it is what
+// makes running out of allowance feel like an answer rather than a hang.
+var quotaWall = struct {
+	mu    sync.Mutex
+	until map[string]time.Time
+}{until: map[string]time.Time{}}
+
+func modelBlocked(model string) bool {
+	quotaWall.mu.Lock()
+	defer quotaWall.mu.Unlock()
+	t, ok := quotaWall.until[model]
+	if !ok {
+		return false
+	}
+	if time.Now().After(t) {
+		delete(quotaWall.until, model)
+		return false
+	}
+	return true
+}
+
+// blockModel records that this model is spent, reading the response to tell a
+// daily allowance from a per-minute burst.
+//
+// A per-minute limit clears on its own in well under a minute and must not
+// retire a model for the rest of the day. A daily one will not clear until
+// Google's reset, which is midnight Pacific rather than local midnight; that
+// distinction is why "it will reset tomorrow" was true and "it should have
+// reset by now" was not.
+func blockModel(model string, body []byte) {
+	until := time.Now().Add(70 * time.Second)
+	daily := bytes.Contains(body, []byte("PerDay"))
+	if daily {
+		until = nextPacificMidnight()
+	}
+	quotaWall.mu.Lock()
+	quotaWall.until[model] = until
+	quotaWall.mu.Unlock()
+	if daily {
+		log.Printf("[LLM] %s has spent its daily allowance, skipping until %s",
+			model, until.Format(time.RFC1123))
+	} else {
+		log.Printf("[LLM] %s is rate limited, skipping for a minute", model)
+	}
+}
+
+// nextPacificMidnight is when Google's free tier daily counters roll over.
+func nextPacificMidnight() time.Time {
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		// Without the zone database, wait an hour and find out by asking.
+		return time.Now().Add(time.Hour)
+	}
+	now := time.Now().In(loc)
+	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, 1)
+}
+
 func geminiPost(apiKey string, jsonBody []byte) ([]byte, int, error) {
 	var lastBody []byte
 	var lastStatus int
 	var lastErr error
+	tried := 0
 	for _, model := range geminiModels() {
+		// Skipped before the rate gate, not after. Waiting for permission to
+		// make a call that is certain to fail is the whole cost being avoided.
+		if modelBlocked(model) {
+			continue
+		}
+		tried++
 		url := fmt.Sprintf(
 			"https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s",
 			model, apiKey,
@@ -310,7 +388,10 @@ func geminiPost(apiKey string, jsonBody []byte) ([]byte, int, error) {
 		if status != 429 {
 			return body, status, err
 		}
-		log.Printf("[LLM] %s out of quota, trying next model", model)
+		blockModel(model, body)
+	}
+	if tried == 0 {
+		return nil, 429, ErrOutOfQuota
 	}
 	return lastBody, lastStatus, lastErr
 }

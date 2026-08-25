@@ -112,6 +112,19 @@ Consequences that are already designed in, and should not be undone:
   two must stay in agreement: the phone uses its copy to decide which unsent
   files to push ahead of a question. Adjacent query words score far higher than
   scattered ones, which is what tells "Module 1" from "Module4_part1".
+- **Running out of allowance took two minutes to say so.** A 429 already
+  failed fast per model, but every attempt still consumed a slot in the rate
+  gate, which permits fifteen a minute, and one question makes several calls
+  across three models. So once the day's quota was gone a question spent over
+  two minutes queueing for permission to receive refusals it already knew were
+  coming. `quotaWall` in `provider.go` now records which models are spent and
+  skips them before the gate. Same query: 120s to 20s. It tells a per-minute
+  burst from a daily allowance by looking for `PerDay` in the response, because
+  retiring a model for a whole day over a one-minute burst would be worse than
+  the bug.
+- **Google's free tier resets at midnight Pacific, not local midnight.** That is
+  roughly 12:30 IST. "It resets tomorrow" is true; "it should have reset by now"
+  at IST midnight is not.
 - **Every on-device file claimed a certain sender called "device".** Everything
   captured on the phone uploads under the identity `device`, a user record was
   upserted for it, and the sender lookup found a name that was not a phone
@@ -299,6 +312,11 @@ put it back on a disc. The old lightning bolt is gone.
   time. Rating buttons were left out on purpose, because nothing records a
   rating and a control that silently discards what you tell it is worse than no
   control; read aloud was left out because it needs text to speech wired up.
+- **The Drive folder walk costs 20 seconds on every single question.**
+  `collectDriveContext` walks the user's Drive tree over the network each time,
+  and that is now the entire remaining latency of a query that reads nothing:
+  the search itself is under a second. Nothing caches it. This is the next
+  thing worth fixing and is untouched.
 - The candidate preview tap (**Open** on a row in the choice sheet) has not been
   exercised. Everything else in the chat has: the choice sheet, picking a
   document, the streamed progress, the bubble-less answers and the action row
