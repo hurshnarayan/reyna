@@ -95,6 +95,80 @@ point-at url:
 # Start a tunnel and wire the server, the OAuth redirect and the app to it.
 tunnel-up:
     #!/usr/bin/env bash
+    # A stable address, so none of the four places ever have to change again.
+    #
+    # The free trycloudflare tunnel this replaced took a new hostname on every
+    # restart, which it does several times a day. Each one invalidated the URL
+    # baked into the APK and the OAuth redirect URI registered with Google, so
+    # a tunnel restart meant a rebuild, a reinstall and a manual edit in the
+    # Cloud Console. ngrok's free tier includes one reserved domain that never
+    # changes, which removes the whole cycle: register the redirect once, build
+    # the APK once, and a restart is just a restart.
+    #
+    # NGROK_DOMAIN in .env is the reserved domain, without the scheme.
+    set -euo pipefail
+    command -v ngrok >/dev/null || { echo "ngrok missing: brew install ngrok"; exit 1; }
+    set -a; . ./.env; set +a
+    if [ -z "${NGROK_DOMAIN:-}" ]; then
+      echo "NGROK_DOMAIN is not set in .env."
+      echo
+      echo "One time, then never again:"
+      echo "  1. Sign up free at https://dashboard.ngrok.com/signup"
+      echo "  2. ngrok config add-authtoken <your token>"
+      echo "  3. Claim your free domain at https://dashboard.ngrok.com/domains"
+      echo "  4. Put it in .env, without https://"
+      echo "       NGROK_DOMAIN=your-name.ngrok-free.app"
+      exit 1
+    fi
+    ngrok config check >/dev/null 2>&1 || { echo "ngrok has no authtoken yet: ngrok config add-authtoken <your token>"; exit 1; }
+
+    url="https://${NGROK_DOMAIN}"
+    pkill -f 'ngrok http' 2>/dev/null || true
+    sleep 1
+    # Started through a launcher script, the same way backend-bg does it,
+    # because that pattern is known to outlive the recipe that starts it.
+    #
+    # macOS has no setsid, so there is no detaching it into a new session; what
+    # works is nohup with stdin closed and every stream redirected, so nothing
+    # ties the process to this terminal.
+    printf '#!/bin/sh\nexec ngrok http 8080 --url %s --log /tmp/reyna-tunnel.log\n' "$url" > /tmp/run-reyna-tunnel.sh
+    chmod +x /tmp/run-reyna-tunnel.sh
+    # Double fork, so the tunnel is orphaned and reparented rather than left
+    # in this recipe's process group.
+    #
+    # just tears its recipe down by the process group, which killed a plain
+    # backgrounded child the instant the command returned: the tunnel reported
+    # success and was already gone by the next request, which then got ngrok's
+    # "endpoint is offline" page. macOS has no setsid, so the way out is to
+    # background inside a child shell that then exits.
+    nohup sh -c '/tmp/run-reyna-tunnel.sh >/dev/null 2>&1 &' >/dev/null 2>&1 </dev/null
+
+    for i in $(seq 1 30); do
+      if curl -sf -m 3 "$url/api/health" >/dev/null 2>&1; then break; fi
+      sleep 1
+    done
+    curl -sf -m 5 "$url/api/health" >/dev/null || { echo "tunnel did not come up, see /tmp/reyna-tunnel.log"; exit 1; }
+    echo "$url" > /tmp/reyna-tunnel-url.txt
+
+    python3 -c "import sys; url=sys.argv[1]; p='.env'; ls=[('GOOGLE_REDIRECT_URL='+url+'/api/auth/google/callback') if l.startswith('GOOGLE_REDIRECT_URL=') else l.rstrip('\n') for l in open(p)]; open(p,'w').write('\n'.join(ls)+'\n')" "$url"
+
+    just backend-stop >/dev/null 2>&1 || true
+    just backend-bg >/dev/null
+    just point-at "$url" >/dev/null
+    echo
+    echo "Tunnel:  $url   (stable, will not change)"
+    echo
+    echo "If this is the first time, register this ONCE in Google Cloud Console"
+    echo "under the OAuth client, and never again:"
+    echo "  $url/api/auth/google/callback"
+    echo
+
+# The old throwaway tunnel, kept for when ngrok is not set up.
+#
+# Takes a new hostname every restart, which invalidates the APK and the OAuth
+# redirect each time. Use tunnel-up instead unless you have a reason not to.
+tunnel-up-quick:
+    #!/usr/bin/env bash
     # One command because a tunnel address touches four places: the app build,
     # the OAuth redirect the server hands Google, the running server, and the
     # APK. Updating three of four by hand is how you end up debugging a Drive
@@ -200,7 +274,14 @@ backend-bg:
 
 # Stop the detached backend.
 backend-stop:
-    @lsof -ti :8080 | xargs -r kill 2>/dev/null || true; echo "stopped"
+    # -sTCP:LISTEN, or this kills every process merely *connected* to the port.
+    #
+    # That is the server, but it is also the tunnel forwarding to it and the
+    # emulator talking to it. backend-bg was fixed for this and this recipe was
+    # not, so bringing a tunnel up killed it one second later: tunnel-up starts
+    # ngrok, confirms it works, then restarts the backend, and the restart shot
+    # the tunnel. The reported address was already dead by the time it printed.
+    @lsof -ti :8080 -sTCP:LISTEN | xargs -r kill 2>/dev/null || true; echo "stopped"
 
 # Follow the detached backend's log.
 backend-log:

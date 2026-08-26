@@ -74,11 +74,38 @@ just build           # debug APK
 just logs            # device logcat
 ```
 
-`just tunnel-up` prints an OAuth redirect URI. It must be registered in Google
-Cloud Console under the OAuth client or Drive will not connect from a phone.
-A free cloudflared tunnel gets a **new hostname on every restart**, which
-breaks both the URL baked into the APK and the registered redirect URI.
-`just tunnel-keep` supervises it.
+## The address
+
+`just tunnel-up` now uses **ngrok with a reserved domain**, which does not
+change:
+
+```
+https://superformally-reckonable-etha.ngrok-free.dev
+```
+
+`NGROK_DOMAIN` in `.env` holds it; the authtoken lives in ngrok's own config,
+outside the repo. Because the hostname is permanent, the OAuth redirect URI is
+registered in Google Cloud Console **once** and the URL baked into the APK
+never goes stale, so a tunnel restart is just a restart.
+
+This replaced a free cloudflared quick tunnel that took a new hostname on every
+restart, several times a day. Each one invalidated the APK and the redirect URI
+and cost a rebuild, a reinstall and a manual edit in the Cloud Console. That
+happened four times in one day before it was worth fixing.
+
+`just tunnel-up-quick` is the old cloudflared recipe, kept for when ngrok is
+not set up. It has the same drawback it always had.
+
+Two traps this uncovered, both worth not repeating:
+
+- **`just backend-stop` killed the tunnel.** `lsof -ti :8080` matches every
+  process *connected* to the port, not just the one listening on it, so
+  restarting the backend shot the tunnel forwarding to it. `tunnel-up` starts
+  the tunnel, confirms it works, then restarts the backend, so the address it
+  printed was already dead. `backend-bg` had been fixed for this with
+  `-sTCP:LISTEN` and `backend-stop` had not.
+- **macOS has no `setsid`.** Detaching a long-running process needs `nohup` and
+  a launcher script, the way `backend-bg` does it.
 
 For emulator work, `just point-at-emulator` then `just build`. Put it back with
 `just point-at <tunnel url>` before building a release.
@@ -349,9 +376,8 @@ put it back on a disc. The old lightning bolt is gone.
 - Photos are no longer filed to Drive, which follows from "documents only". If
   photos should still be filed but not read, that needs a separate path.
 - 761 images already on the server are inert but still in the database.
-- The APK's backend URL and the OAuth redirect break on every tunnel restart.
-  Publishing the address somewhere stable for the app to discover would fix it;
-  proposed and not built.
+- ~~The APK's backend URL and the OAuth redirect break on every tunnel
+  restart.~~ Fixed by moving off the throwaway tunnel. See "The address" below.
 
 ## Secrets
 
