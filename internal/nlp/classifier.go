@@ -1074,9 +1074,10 @@ func (c *Classifier) keywordParseQuery(query string) (who, what, when, why strin
 					who = candidate
 					// Rest after the name is the WHAT context
 					remaining := strings.Join(parts[1:], " ")
-					for _, noise := range []string{"share", "shared", "upload", "uploaded", "send", "sent", "about", "any", "the", "me"} {
-						remaining = strings.Replace(remaining, noise, "", -1)
-					}
+					remaining = stripPhrases(remaining, []string{
+						"share", "shared", "upload", "uploaded", "send", "sent",
+						"about", "any", "the", "me",
+					})
 					remaining = strings.Trim(strings.TrimSpace(remaining), "?.,! ")
 					if remaining != "" {
 						what = remaining
@@ -1101,16 +1102,13 @@ func (c *Classifier) keywordParseQuery(query string) (who, what, when, why strin
 
 	// WHAT — if not already set, clean up remaining text
 	if what == "" && lower != "" {
-		what = lower
-		for _, w := range []string{
+		what = stripPhrases(lower, []string{
 			"can you find me", "can you show me", "can you get me", "can you find", "can you",
 			"find me", "show me", "get me", "search for", "find", "search",
 			"has anyone shared", "do we have", "share", "shared", "upload", "uploaded",
 			"sent", "send", "received", "receive", "about", "any", "the", "some",
 			"latest", "recently", "recent", "me",
-		} {
-			what = strings.Replace(what, w, "", -1)
-		}
+		})
 		what = strings.Trim(strings.TrimSpace(what), "?.,! ")
 	}
 

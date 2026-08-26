@@ -1595,6 +1595,28 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("[NLP-RETRIEVE] query=%q history_turns=%d → who=%q what=%q when=%q why=%q", req.Query, len(req.History), who, what, when, why)
 
+	// ── Small talk gets a reply, not a search ──
+	//
+	// "thanks" was parsed as a topic and searched for, and six unrelated
+	// documents came back as "I found 6 documents matching thanks, and they
+	// are about different things. Which one did you mean?". Saying thank you
+	// should not produce a disambiguation prompt, and it should certainly not
+	// spend a model call or a Drive walk on one.
+	//
+	// Checked before the search, not after. The first attempt at this sat
+	// below the ambiguity branch, which returns, so it never ran at all and
+	// "thanks" still came back asking which of six documents was meant.
+	if len(req.FileIDs) == 0 && nlp.IsSmallTalk(req.Query) {
+		log.Printf("[NLP-RETRIEVE] small talk, answering without searching")
+		stage.Final(model.NLPRetrievalResponse{
+			Status: model.NLPStatusAnswered,
+			Files:  []model.File{},
+			Query:  model.NLPParsedQuery{Who: who, What: what, When: when, Why: why, Raw: req.Query},
+			Reply:  smallTalkReply(req.Query),
+		})
+		return
+	}
+
 	// Resolve time window
 	var sinceTime *time.Time
 	now := time.Now()
@@ -1923,6 +1945,28 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// smallTalkReply answers a greeting without pretending to have searched.
+//
+// Fixed strings rather than a model call. There are about sixty calls a day
+// and none of them should go on saying hello, and a greeting is the one thing
+// in this app with no risk of being got wrong.
+func smallTalkReply(query string) string {
+	q := strings.ToLower(query)
+	switch {
+	case strings.Contains(q, "thank") || strings.Contains(q, "thx") ||
+		strings.Contains(q, "ty") || strings.Contains(q, "cheers"):
+		return "Any time."
+	case strings.Contains(q, "bye") || strings.Contains(q, "cya") ||
+		strings.Contains(q, "night"):
+		return "See you."
+	case strings.Contains(q, "ok") || strings.Contains(q, "cool") ||
+		strings.Contains(q, "nice") || strings.Contains(q, "great"):
+		return "Whenever you need something, just ask."
+	default:
+		return "Hello. Ask me about anything that has come through your chats."
+	}
+}
+
 // outOfAllowanceReply is what Reyna says when it has no model calls left.
 //
 // Plain, short, and about the situation rather than about the files. An
@@ -1978,6 +2022,10 @@ func fileIDs(files []model.File) []int64 {
 // subjects.
 const ambiguityMargin = 0.85
 
+// minCoverageToAsk is how much of the question the best match must account for
+// before a choice is worth offering at all.
+const minCoverageToAsk = 0.6
+
 // maxCandidates bounds the choice offered. A list long enough to scroll is not
 // a choice, it is the search screen with an extra step.
 const maxCandidates = 6
@@ -1990,6 +2038,18 @@ func (s *Server) ambiguousCandidates(scored []repository.ScoredFile) []model.Can
 	}
 	top := scored[0]
 	if top.Score <= 0 {
+		return nil
+	}
+	// Only ask when the leader is actually a good answer.
+	//
+	// A choice between several documents is worth making when they all answer
+	// the question and only one was meant. When the best of them accounts for
+	// a third of what was asked, they are not equally good answers, they are
+	// equally bad ones, and offering them as a choice asks the user to pick
+	// between six documents that are all wrong. "I meant to just greet you"
+	// produced exactly that: coverage 0.33, six candidates, none of them
+	// remotely relevant.
+	if top.Coverage < minCoverageToAsk {
 		return nil
 	}
 	// Only rivals that matched the question just as completely count. A file

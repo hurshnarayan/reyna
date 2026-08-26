@@ -184,6 +184,26 @@ Consequences that are already designed in, and should not be undone:
   method. The device identity is now never a sender, an upload with no stated
   attribution is no longer promoted to Baileys, and `unnameTheDevice` cleared
   the 1220 rows already affected.
+- **The query parser ate the middle of ordinary words.** Two loops used
+  `strings.Replace(text, word, "", -1)`, which matches anywhere, so removing
+  "me" turned "meant" into "ant" and removing "the" turned "theory" into "ory".
+  Every question about theory notes had been searching for a word that does not
+  exist, invisibly, because the mangled string still looks plausible.
+  `stripPhrases` in `internal/nlp/strip.go` matches whole words only, longest
+  phrase first so "can you find me" is consumed before "find" can break it up.
+- **Saying "thanks" triggered a document search.** It was parsed as a topic and
+  came back as "I found 6 documents matching thanks, and they are about
+  different things. Which one did you mean?". `nlp.IsSmallTalk` now answers
+  greetings without searching, spending no model call and no Drive walk. The
+  check must sit **before** the search: the first attempt put it after, where
+  the ambiguity branch had already returned, so it never ran.
+- **A choice was offered between documents that were all wrong.** The
+  disambiguation fired whenever several candidates were close to each other,
+  regardless of whether any of them were any good. "I meant to just greet you"
+  matched six documents at 0.33 coverage and asked which one was meant.
+  `minCoverageToAsk` means a choice is only offered when the leader actually
+  accounts for most of the question; below that they are not equally good
+  answers, they are equally bad ones.
 - **A passing mention ranked level with a title.** Coverage counted a word in
   the filename and the same word buried in body text equally, and coverage is
   what the relevance floor cuts on, so any document mentioning all the words
