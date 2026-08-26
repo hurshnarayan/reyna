@@ -584,7 +584,7 @@ class Repo private constructor(private val context: Context) {
 
         val answer = api().ask(question, history, fileIds, onStage, onCall).getOrNull()
         var reply = answer?.reply
-            ?: "I could not reach the backend, so I have not searched anything yet. Your files are safe on this phone. Check the server is running and try again."
+            ?: "I could not reach the server, so nothing has been searched. Your files are safe on this phone. Try again in a moment."
 
         // Match the cited filenames back to local rows so the answer can show
         // real chips. Matched by name because the backend numbers files by its
@@ -595,43 +595,29 @@ class Repo private constructor(private val context: Context) {
         }
         var citations = answer?.citations.orEmpty()
 
-        // When the backend cannot be reached, say that, and nothing more.
+        // When the server cannot be reached, say that, and nothing more.
         //
-        // What used to happen here was worse than an error. The phone matched
-        // the question against its own filenames, wrote "I found A, B, C on
-        // your phone", and attached those files as sources with the text "File
-        // on your phone: A" standing in for a quotation. Nothing had been read
-        // and nothing had been searched, but it was laid out exactly like an
-        // answer, so a failed request was indistinguishable from a real reply
-        // that happened to be wrong. Naming files whose names contain some of
-        // the words in a question is not an answer, and dressing it as one
-        // spends the trust the app is built on.
-        //
-        // Listing candidates is still useful, but only labelled for what it
-        // is: a filename match made on the phone, with nothing read.
-        if (answer == null && local.isNotEmpty()) {
-            val tokens = queryTokens(question)
-            if (tokens.isNotEmpty()) {
-                val matched = local
-                    .map { it to Words.score(it.name, tokens) }
-                    .filter { it.second > 0 }
-                    .sortedByDescending { it.second }
-                    .take(3)
-                    .map { it.first }
-
-                if (matched.isNotEmpty()) {
-                    val names = matched.joinToString(", ") { it.name }
-                    reply += "\n\nBy name alone, these look related, though nothing has been read: $names"
-                }
-            }
-        }
+        // Two earlier versions of this went wrong the same way. The first
+        // matched the question against local filenames and wrote "I found A,
+        // B, C on your phone" as though it were an answer. The second kept the
+        // list but labelled it honestly, which was still a list of filenames
+        // stapled to an error, still ordered by a score the user cannot see,
+        // and still able to print the same name twice when the phone holds two
+        // rows for one document. Neither told anyone anything they could act
+        // on. An unreachable server is one fact and gets one sentence.
 
         // A false "I have never seen that" is the worst answer this app can
         // give, because it is indistinguishable from the file being lost. If
         // the server found nothing and the phone is still holding files it has
         // not sent, say so instead of letting the user conclude it is gone.
         val askingWhich = answer?.status == ReynaApi.STATUS_NEEDS_CHOICE
-        if (citations.isEmpty() && citedIds.isEmpty() && answer != null && !askingWhich) {
+        // The backlog note exists to stop a false "I have never seen that",
+        // which can only be false if something was actually being looked for.
+        // Stapled to "hi" it turned a greeting into a report about eight
+        // hundred unsent files.
+        if (citations.isEmpty() && citedIds.isEmpty() && answer != null &&
+            !askingWhich && !SmallTalk.matches(question)
+        ) {
             val queued = dao.pendingUpload(4000).count { isReadable(it.name) }
             if (queued > 0) {
                 reply += if (queued == 1) {
@@ -649,7 +635,11 @@ class Repo private constructor(private val context: Context) {
                 at = System.currentTimeMillis(),
                 fileIds = citedIds.joinToString(","),
                 citations = encodeCitations(citations),
-                notice = answer?.notice.orEmpty(),
+                // A request that never landed is Reyna's own state, not an
+                // answer, so it gets the same treatment as running out of
+                // allowance rather than sitting in the conversation looking
+                // like a reply that went wrong.
+                notice = answer?.notice ?: ReynaApi.NOTICE_UNREACHABLE,
             )
         )
         answer

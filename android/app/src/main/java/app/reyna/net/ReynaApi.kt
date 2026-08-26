@@ -550,6 +550,9 @@ class ReynaApi(
         /** The day's model calls are spent. A wait, not a failure. */
         const val NOTICE_OUT_OF_ALLOWANCE = "out_of_allowance"
 
+        /** The server could not be reached at all. Nothing was searched. */
+        const val NOTICE_UNREACHABLE = "unreachable"
+
         /** Newline-delimited JSON: one progress line each, then the answer. */
         private const val NDJSON = "application/x-ndjson"
 

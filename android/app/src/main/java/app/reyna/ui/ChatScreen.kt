@@ -32,6 +32,7 @@ import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Article
 import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.CloudUpload
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Refresh
@@ -482,7 +483,13 @@ private fun NoticeCard(msg: ChatMessage) {
     ) {
         Row(verticalAlignment = Alignment.Top) {
             Icon(
-                Icons.Rounded.Schedule,
+                // A clock for a wait, a cloud for a server that is not there.
+                // Same amber either way: neither has lost anything.
+                if (msg.notice == app.reyna.net.ReynaApi.NOTICE_UNREACHABLE) {
+                    Icons.Rounded.CloudOff
+                } else {
+                    Icons.Rounded.Schedule
+                },
                 contentDescription = null,
                 tint = c.notice,
                 // Nudged to sit on the first line's baseline rather than
