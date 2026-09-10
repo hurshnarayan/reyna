@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -133,8 +134,7 @@ func (s *Server) routes() {
 			auth.Middleware(s.cfg.JWTSecret)(http.HandlerFunc(h)).ServeHTTP(w, r)
 		})
 	}
-	// deviceRaw is the multipart upload path: same check, but it must not go
-	// through wrap(), which forces a JSON content type.
+	// deviceRaw protects binary device routes without forcing a JSON content type.
 	deviceRaw := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == "OPTIONS" {
@@ -143,7 +143,7 @@ func (s *Server) routes() {
 					origin = "*"
 				}
 				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Access-Control-Allow-Methods", "POST,OPTIONS")
+				w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
 				w.WriteHeader(200)
 				return
@@ -470,6 +470,7 @@ func (s *Server) handleDeviceUpload(w http.ResponseWriter, r *http.Request) {
 	subject := r.FormValue("subject")
 	fileSizeStr := r.FormValue("file_size")
 	fileSize, _ := strconv.ParseInt(fileSizeStr, 10, 64)
+	deviceExtractedText := strings.TrimSpace(r.FormValue("extracted_text"))
 
 	// When the message was actually sent, epoch seconds, from the WhatsApp
 	// envelope. Zero when the client did not supply it, in which case the row
@@ -665,8 +666,8 @@ func (s *Server) handleDeviceUpload(w http.ResponseWriter, r *http.Request) {
 	// Respond instantly — bot can send checkmark NOW
 	json.NewEncoder(w).Encode(map[string]interface{}{"reply": reply, "file_id": saved.ID, "status": "staged"})
 
-	// ── Background: classify + extract ──
-	go func(fileID int64, gID int64, fName, mime string, fSize int64, data []byte, grp *model.Group) {
+	// ── Background: classify + extract + embed ──
+	go func(fileID int64, gID int64, fName, mime string, fSize int64, data []byte, grp *model.Group, devText string) {
 		classifySubject := ""
 
 		// Build candidate folders
@@ -731,18 +732,41 @@ func (s *Server) handleDeviceUpload(w http.ResponseWriter, r *http.Request) {
 			s.store.UpdateFileSubject(fileID, classifySubject)
 		}
 
-		// Content extraction
+		// Content extraction: prefer on-device extracted text if backend didn't extract any
+		if devText != "" && extractedContent == "" {
+			extractedContent = devText
+			if contentSummary == "" {
+				if len(devText) > 150 {
+					contentSummary = devText[:150] + "..."
+				} else {
+					contentSummary = devText
+				}
+			}
+		}
+
 		if extractedContent != "" {
 			s.store.UpdateFileContent(fileID, extractedContent, contentSummary)
 			log.Printf("[EXTRACT] Combined: %s → %s", fName, contentSummary)
 		} else {
 			content, summary, _ := s.classifier.ExtractContent(fName, mime, fSize, data)
 			if content != "" {
+				extractedContent = content
 				s.store.UpdateFileContent(fileID, content, summary)
 				log.Printf("[EXTRACT] Async: %s → %s", fName, summary)
 			}
 		}
-	}(saved.ID, groupID, fileName, mimeType, fileSize, fileBytes, group)
+
+		// Generate and save 768-dim Gemini vector embedding
+		textToEmbed := fmt.Sprintf("%s. %s. %s", fName, classifySubject, extractedContent)
+		if len(textToEmbed) > 2000 {
+			textToEmbed = textToEmbed[:2000]
+		}
+		if vec, err := s.classifier.Embed(textToEmbed); err == nil && len(vec) == 768 {
+			if err := s.store.SaveFileEmbedding(fileID, vec); err == nil {
+				log.Printf("🧠 [VECTOR] Generated & saved 768-dim embedding for file %d (%s)", fileID, fName)
+			}
+		}
+	}(saved.ID, groupID, fileName, mimeType, fileSize, fileBytes, group, deviceExtractedText)
 }
 
 // ── Waitlist ──
@@ -1680,6 +1704,7 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 	// A question that answers a previous "which one did you mean" skips the
 	// search entirely. The user has already said which documents they meant.
 	var scored []repository.ScoredFile
+	searchWhat := destinationSearchWhat(what, req.Query)
 	if len(req.FileIDs) > 0 {
 		picked, err := s.store.GetFilesByIDs(req.FileIDs)
 		if err == nil {
@@ -1689,7 +1714,7 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Printf("[NLP-RETRIEVE] answering against %d user-chosen file(s)", len(scored))
 	} else {
-		scored, _ = s.store.SearchFilesNLPScored(groupIDs, who, what, sinceTime, 20)
+		scored, _ = s.store.SearchFilesNLPScored(groupIDs, who, searchWhat, sinceTime, 20)
 	}
 	files := scoredFiles(scored)
 	if len(req.FileIDs) == 0 {
@@ -1709,7 +1734,7 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 		}
 		// Fallback 3: If still nothing and WHO was specified, retry on WHAT alone without time filter
 		if len(scored) == 0 && who != "" && what != "" {
-			if fb, _ := s.store.SearchFilesNLPScored(groupIDs, "", what, nil, 20); len(fb) > 0 {
+			if fb, _ := s.store.SearchFilesNLPScored(groupIDs, "", searchWhat, nil, 20); len(fb) > 0 {
 				log.Printf("[NLP-RETRIEVE] no hits for sender %q; falling back to topic only", who)
 				scored = fb
 			}
@@ -1722,6 +1747,112 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		files = scoredFiles(scored)
+
+		// ── Dense Vector Semantic Search & Hybrid Reranking (Gemini 768-dim embeddings) ──
+		queryForEmbed := what
+		if queryForEmbed == "" {
+			queryForEmbed = req.Query
+		}
+		if queryForEmbed != "" {
+			if queryVec, err := s.classifier.Embed(queryForEmbed); err == nil && len(queryVec) == 768 {
+				fileEmbeddings, _ := s.store.GetAllEmbeddings(groupIDs)
+				if fileEmbeddings == nil {
+					fileEmbeddings = make(map[int64][]float32)
+				}
+				// Lazily embed top candidates that have extracted text but no embedding yet
+				for _, sf := range scored {
+					if _, has := fileEmbeddings[sf.ID]; !has {
+						if content := s.store.GetFileExtractedContent([]int64{sf.ID})[sf.ID]; content != "" && content != repository.UnreadableSentinel {
+							textToEmbed := fmt.Sprintf("%s. %s. %s", sf.FileName, sf.Subject, content)
+							if len(textToEmbed) > 2000 {
+								textToEmbed = textToEmbed[:2000]
+							}
+							if vec, err := s.classifier.Embed(textToEmbed); err == nil && len(vec) == 768 {
+								_ = s.store.SaveFileEmbedding(sf.ID, vec)
+								fileEmbeddings[sf.ID] = vec
+								log.Printf("🧠 [VECTOR] Indexed embedding for %s (%d)", sf.FileName, sf.ID)
+							}
+						}
+					}
+					if len(fileEmbeddings) >= 5 {
+						break
+					}
+				}
+
+				if len(fileEmbeddings) > 0 {
+					scoredMap := make(map[int64]int)
+					for idx, sf := range scored {
+						scoredMap[sf.ID] = idx
+					}
+					var vectorBonusFiles []int64
+					for fID, fVec := range fileEmbeddings {
+						sim := relevance.CosineSimilarity(queryVec, fVec)
+						if idx, exists := scoredMap[fID]; exists {
+							// Boost existing lexical match with dense semantic similarity
+							scored[idx].Score += sim * 60.0
+							log.Printf("🧠 [VECTOR-HYBRID] file %d (%s) lexical+dense boost (sim=%.3f, new_score=%.1f)", fID, scored[idx].FileName, sim, scored[idx].Score)
+						} else if sim >= 0.65 {
+							// Dense semantic match not captured by pure keyword search
+							vectorBonusFiles = append(vectorBonusFiles, fID)
+						}
+					}
+					if len(vectorBonusFiles) > 0 {
+						if extraFiles, err := s.store.GetFilesByIDs(vectorBonusFiles); err == nil {
+							for _, ef := range extraFiles {
+								sim := relevance.CosineSimilarity(queryVec, fileEmbeddings[ef.ID])
+								scored = append(scored, repository.ScoredFile{
+									File:     ef,
+									Score:    sim * 60.0,
+									Coverage: 0.8,
+								})
+								log.Printf("🧠 [VECTOR-SEMANTIC-RETRIEVE] retrieved file %d (%s) via dense cosine similarity=%.3f", ef.ID, ef.FileName, sim)
+							}
+						}
+					}
+					sort.SliceStable(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
+					files = scoredFiles(scored)
+				}
+			}
+		}
+	}
+
+	// Route direction is relational: a return ticket contains the requested
+	// city too, but as its origin. Bag-of-words ranking cannot tell those apart.
+	// Fresh tickets also often have numeric filenames and an unhelpful folder,
+	// so inspect their already extracted route before asking the user to choose.
+	readNow := 0
+	if len(req.FileIDs) == 0 && requestedDestination(req.Query) != "" {
+		readNow = s.ensureContent(files, onDemandReads, time.Now().Add(onDemandBudget), stage)
+		scored = preferDestinationMatches(req.Query, scored, s.store.GetFileExtractedContent(fileIDs(files)))
+		files = scoredFiles(scored)
+	}
+
+	// ── Dual Intent: Fetch vs Answer (Slide 5) ──
+	// Say "fetch" and it shows top 3 matching files as chips; otherwise answers silently using those files as context.
+	isFetch := why == "fetch" ||
+		strings.HasPrefix(strings.ToLower(strings.TrimSpace(req.Query)), "fetch") ||
+		strings.HasPrefix(strings.ToLower(strings.TrimSpace(req.Query)), "get file") ||
+		strings.HasPrefix(strings.ToLower(strings.TrimSpace(req.Query)), "get files")
+
+	if isFetch {
+		log.Printf("[NLP-RETRIEVE] Intent is FETCH — returning top 3 file chips directly")
+		topFiles := files
+		if len(topFiles) > 3 {
+			topFiles = topFiles[:3]
+		}
+		replyText := "Here are the top files matching your request:"
+		if len(topFiles) == 0 {
+			replyText = "I couldn't find any files matching your fetch request."
+		}
+		stage.Final(model.NLPRetrievalResponse{
+			Status:       model.NLPStatusAnswered,
+			Files:        topFiles,
+			DriveMatches: nil,
+			Query:        model.NLPParsedQuery{Who: who, What: what, When: when, Why: why, Raw: req.Query},
+			Reply:        replyText,
+			Citations:    nil,
+		})
+		return
 	}
 
 	// ── Ask, when there is genuinely no way to tell which document was meant ──
@@ -1776,18 +1907,7 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Also walk the user's existing Drive folder tree for matches that were
-	// never captured by the bot. This is the fix for "Reyna only sees its own
-	// staging table" — older notes already organised in Drive are now searchable.
-	stage.Send("searching", "Checking your Drive")
-	driveMatches := s.collectDriveContext(groupIDs, what, 25)
-	// If WHO was specified, drop Drive matches that can't be attributed.
-	if who != "" {
-		driveMatches = filterDriveMatchesByWho(driveMatches, who)
-	}
-	log.Printf("[NLP-RETRIEVE] db_files=%d drive_matches=%d (after metadata pass)", len(files), len(driveMatches))
-
-	// ── Read anything that matched but has never been read ──
+	// ── Read anything that matched locally but has never been read ──
 	//
 	// A file reaches the server long before anybody reads it: extraction is a
 	// model call, the allowance is small, and the background worker crawls the
@@ -1797,30 +1917,23 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 	// search screen lists a file called "Module 4".
 	//
 	// Read them now, at the moment someone is asking, and keep what is read.
-	// This is also the only sane way to spend a small allowance: on the three
-	// documents a person actually asked about rather than the next three in a
-	// queue of a thousand.
-	readNow := s.ensureContent(files, onDemandReads, time.Now().Add(onDemandBudget), stage)
+	readNow += s.ensureContent(files, onDemandReads, time.Now().Add(onDemandBudget), stage)
 	if readNow > 0 {
 		log.Printf("[NLP-RETRIEVE] read %d file(s) on demand", readNow)
 	}
 
-	// ── Deep content retrieval (Fix 3 from earlier) ──
+	// ── Deep content retrieval ──
 	// If metadata search returned nothing, OR the query has specific content
 	// cues that metadata can't catch ("the diagram with R1 R2", "the page
 	// mentioning Wien bridge"), send candidate PDFs to Gemini and ask which
 	// ones actually match. Cost: ~₹0.05 per candidate, capped at 5.
 	// Skipped when the top matches already have text, including text read a
-	// moment ago. Deep retrieval exists to find documents the metadata search
-	// missed; asking it to re-confirm files that were just read costs a model
-	// call and several seconds each and cannot change the answer. Leaving it
-	// on doubled a seventy second query for nothing.
+	// moment ago.
 	if len(files) == 0 || (hasContentCues(req.Query) && readNow == 0 && !topFilesRead(s, files)) {
 		log.Printf("[NLP-RETRIEVE] triggering deep content retrieval")
 		stage.Send("searching", "Looking inside your documents")
 		deepHits := s.deepContentRetrieve(groupIDs, req.Query, who, what, sinceTime, 5)
 		if len(deepHits) > 0 {
-			// Merge: deep hits take priority, then add metadata hits not already present
 			seen := map[int64]bool{}
 			merged := make([]model.File, 0, len(deepHits)+len(files))
 			for _, f := range deepHits {
@@ -1840,102 +1953,167 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Build a conversational LLM-generated reply (multi-language, intent-aware).
-	// We pre-compute the time strings so the LLM can't hallucinate "2 days ago"
-	// when the file was actually shared 2 minutes ago. All times are in IST.
-	dbView := make([]nlp.RetrievalFile, 0, len(files))
-	for _, f := range files {
-		// Withhold the sender unless attribution is strong enough to state it,
-		// and time the file by when it was posted rather than when we inserted
-		// the row.
-		sender := ""
-		if f.SenderKnown() {
-			sender = f.SharedByName
+	isNegativeAnswer := func(ans string) bool {
+		lower := strings.ToLower(ans)
+		return strings.Contains(lower, "couldn't find") ||
+			strings.Contains(lower, "could not find") ||
+			strings.Contains(lower, "no files") ||
+			strings.Contains(lower, "no documents") ||
+			strings.Contains(lower, "unable to find") ||
+			strings.Contains(lower, "i don't have") ||
+			strings.Contains(lower, "no information")
+	}
+
+	buildDBView := func(fList []model.File) []nlp.RetrievalFile {
+		view := make([]nlp.RetrievalFile, 0, len(fList))
+		for _, f := range fList {
+			sender := ""
+			if f.SenderKnown() {
+				sender = f.SharedByName
+			}
+			view = append(view, nlp.RetrievalFile{
+				ID:       f.ID,
+				Name:     f.FileName,
+				Folder:   f.Subject,
+				Sender:   sender,
+				SharedAt: formatSharedAt(f.SharedAt()),
+				Summary:  s.store.GetFileExtractedContent([]int64{f.ID})[f.ID],
+			})
 		}
-		dbView = append(dbView, nlp.RetrievalFile{
-			ID:       f.ID,
-			Name:     f.FileName,
-			Folder:   f.Subject,
-			Sender:   sender,
-			SharedAt: formatSharedAt(f.SharedAt()),
-			Summary:  s.store.GetFileExtractedContent([]int64{f.ID})[f.ID],
-		})
+		return view
 	}
-	driveView := make([]nlp.RetrievalFile, 0, len(driveMatches))
-	for _, m := range driveMatches {
-		shared := ""
-		if !m.SharedAt.IsZero() {
-			shared = formatSharedAt(m.SharedAt)
-		}
-		driveView = append(driveView, nlp.RetrievalFile{
-			Name:     m.FileName,
-			Folder:   m.FolderName,
-			Sender:   m.SenderName,
-			SharedAt: shared,
-		})
-	}
-	// The chips under an answer are the evidence for it, not the search results.
-	//
-	// Metadata search casts wide on purpose so the reading pass has candidates
-	// to choose from, but showing all of them turns a one line answer into a
-	// wall of unrelated filenames and makes a correct answer look like a guess.
-	// The list is ordered best first, so the top few are the ones the reply
-	// actually drew on.
-	if len(files) > maxCitedFiles {
-		files = files[:maxCitedFiles]
-	}
-	stage.Send("writing", "Writing the answer")
-	sourced := s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, dbView, driveView, req.History)
-	citations := s.verifyCitations(sourced.Quotes, files)
-	if len(citations) == 0 && len(files) > 0 {
-		lowerReply := strings.ToLower(sourced.Answer)
-		isNegative := strings.Contains(lowerReply, "couldn't find") ||
-			strings.Contains(lowerReply, "could not find") ||
-			strings.Contains(lowerReply, "no files") ||
-			strings.Contains(lowerReply, "no documents") ||
-			strings.Contains(lowerReply, "unable to find")
-		// Only a file with real text behind it can stand as evidence.
-		//
-		// This used to cite files[0] whatever was stored against it, and what
-		// was stored was sometimes UnreadableSentinel — so a panel headed
-		// "Where this came from" showed the word "[unreadable]" as the passage
-		// the answer rested on. That is worse than an empty panel: it presents
-		// the absence of a reading as the reading. A file with no text is not
-		// evidence for anything and is no longer offered as any.
-		if !isNegative {
-			var top *model.File
-			var content string
-			have := s.store.GetFileExtractedContent(fileIDs(files))
-			for i := range files {
-				if c := have[files[i].ID]; c != "" && c != repository.UnreadableSentinel {
-					top, content = &files[i], c
-					break
+
+	var driveMatches []model.DriveMatch
+	var sourced nlp.SourcedReply
+	var citations []model.Citation
+
+	// ── 1. Local-First: Answer from local files if available ──
+	if len(files) > 0 {
+		dbView := buildDBView(files)
+		stage.Send("writing", "Writing the answer")
+		sourced = s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, dbView, nil, req.History)
+		citations = s.verifyCitations(sourced.Quotes, files)
+		isNeg := isNegativeAnswer(sourced.Answer)
+
+		if !isNeg {
+			// Local files answered the question! Skip Google Drive entirely.
+			if len(citations) == 0 {
+				var top *model.File
+				var content string
+				have := s.store.GetFileExtractedContent(fileIDs(files))
+				for i := range files {
+					if c := have[files[i].ID]; c != "" && c != repository.UnreadableSentinel {
+						top, content = &files[i], c
+						break
+					}
+				}
+				if top != nil {
+					sender := ""
+					if top.SenderKnown() {
+						sender = top.SharedByName
+					}
+					quote := content
+					if len(quote) > 150 {
+						quote = quote[:150] + "..."
+					}
+					citations = []model.Citation{{
+						FileID:     top.ID,
+						FileName:   top.FileName,
+						Sender:     sender,
+						SharedAt:   formatSharedAt(top.SharedAt()),
+						Folder:     top.Subject,
+						Quote:      quote,
+						Context:    content,
+						Page:       1,
+						Confidence: top.AttributionConfidence,
+					}}
 				}
 			}
-			if top != nil {
-				sender := ""
-				if top.SenderKnown() {
-					sender = top.SharedByName
-				}
-				quote := content
-				if len(quote) > 150 {
-					quote = quote[:150] + "..."
-				}
-				citations = []model.Citation{{
-					FileID:     top.ID,
-					FileName:   top.FileName,
-					Sender:     sender,
-					SharedAt:   formatSharedAt(top.SharedAt()),
-					Folder:     top.Subject,
-					Quote:      quote,
-					Context:    content,
-					Page:       1,
-					Confidence: top.AttributionConfidence,
-				}}
+
+			if len(files) > maxCitedFiles {
+				files = files[:maxCitedFiles]
 			}
+			log.Printf("[NLP-RETRIEVE] answered locally from %d files (citations=%d); skipping Drive", len(files), len(citations))
+			stage.Final(model.NLPRetrievalResponse{
+				Status:       model.NLPStatusAnswered,
+				Files:        files,
+				DriveMatches: nil,
+				Query:        model.NLPParsedQuery{Who: who, What: what, When: when, Why: why, Raw: req.Query},
+				Reply:        sourced.Answer,
+				Citations:    citations,
+			})
+			return
+		}
+		log.Printf("[NLP-RETRIEVE] local files did not yield positive answer; falling back to Drive")
+	}
+
+	// ── 2. Drive Fallback: Check Drive only if not found locally or local answer was negative ──
+	stage.Send("searching", "Checking your Drive")
+	driveMatches = s.collectDriveContext(groupIDs, what, 25)
+	if who != "" {
+		driveMatches = filterDriveMatchesByWho(driveMatches, who)
+	}
+	log.Printf("[NLP-RETRIEVE] drive fallback: db_files=%d drive_matches=%d", len(files), len(driveMatches))
+
+	if len(driveMatches) > 0 {
+		dbView := buildDBView(files)
+		driveView := make([]nlp.RetrievalFile, 0, len(driveMatches))
+		for _, m := range driveMatches {
+			shared := ""
+			if !m.SharedAt.IsZero() {
+				shared = formatSharedAt(m.SharedAt)
+			}
+			driveView = append(driveView, nlp.RetrievalFile{
+				Name:     m.FileName,
+				Folder:   m.FolderName,
+				Sender:   m.SenderName,
+				SharedAt: shared,
+			})
+		}
+		stage.Send("writing", "Writing the answer")
+		sourced = s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, dbView, driveView, req.History)
+		citations = s.verifyCitations(sourced.Quotes, files)
+	} else if len(files) == 0 {
+		stage.Send("writing", "Writing the answer")
+		sourced = s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, nil, nil, req.History)
+	}
+
+	if len(citations) == 0 && len(files) > 0 && !isNegativeAnswer(sourced.Answer) {
+		var top *model.File
+		var content string
+		have := s.store.GetFileExtractedContent(fileIDs(files))
+		for i := range files {
+			if c := have[files[i].ID]; c != "" && c != repository.UnreadableSentinel {
+				top, content = &files[i], c
+				break
+			}
+		}
+		if top != nil {
+			sender := ""
+			if top.SenderKnown() {
+				sender = top.SharedByName
+			}
+			quote := content
+			if len(quote) > 150 {
+				quote = quote[:150] + "..."
+			}
+			citations = []model.Citation{{
+				FileID:     top.ID,
+				FileName:   top.FileName,
+				Sender:     sender,
+				SharedAt:   formatSharedAt(top.SharedAt()),
+				Folder:     top.Subject,
+				Quote:      quote,
+				Context:    content,
+				Page:       1,
+				Confidence: top.AttributionConfidence,
+			}}
 		}
 	}
 
+	if len(files) > maxCitedFiles {
+		files = files[:maxCitedFiles]
+	}
 	stage.Final(model.NLPRetrievalResponse{
 		Status:       model.NLPStatusAnswered,
 		Files:        files,
@@ -1944,6 +2122,113 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 		Reply:        sourced.Answer,
 		Citations:    citations,
 	})
+}
+
+// requestedDestination returns text following a standalone "to". It stays
+// deliberately narrow: "departure to Hyderabad" carries route direction;
+// merely mentioning Hyderabad does not.
+func requestedDestination(query string) string {
+	words := relevance.Words(query)
+	for i, word := range words {
+		if word == "to" && i+1 < len(words) {
+			return strings.Join(words[i+1:], " ")
+		}
+	}
+	return ""
+}
+
+// destinationSearchWhat adds station names that passengers use interchangeably
+// with a city. This widens recall only; preferDestinationMatches still verifies
+// that station as document destination.
+func destinationSearchWhat(what, query string) string {
+	destination := relevance.Words(requestedDestination(query))
+	for _, word := range destination {
+		switch word {
+		case "hyderabad", "hyb":
+			if !strings.Contains(strings.ToLower(what), "secunderabad") {
+				return strings.TrimSpace(what + " secunderabad")
+			}
+		case "secunderabad", "sc":
+			if !strings.Contains(strings.ToLower(what), "hyderabad") {
+				return strings.TrimSpace(what + " hyderabad")
+			}
+		}
+	}
+	return what
+}
+
+// preferDestinationMatches keeps tickets whose destination, not merely their
+// body, matches an explicit destination. This removes reverse-route tickets
+// before ambiguity and answer generation.
+func preferDestinationMatches(query string, scored []repository.ScoredFile, contents map[int64]string) []repository.ScoredFile {
+	wanted := requestedDestination(query)
+	if wanted == "" || len(scored) == 0 {
+		return scored
+	}
+
+	matches := make([]repository.ScoredFile, 0, len(scored))
+	for _, sf := range scored {
+		if sameDestination(wanted, ticketDestination(contents[sf.ID])) {
+			matches = append(matches, sf)
+		}
+	}
+	if len(matches) == 0 {
+		return scored
+	}
+	return matches
+}
+
+func ticketDestination(content string) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		if m := regexp.MustCompile(`(?i)\bto\s*:\s*([^|\n]+)`).FindStringSubmatch(line); len(m) == 2 {
+			return strings.TrimSpace(m[1])
+		}
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "booked from") && regexp.MustCompile(`(?i)\bto\b`).MatchString(line) {
+			for _, route := range lines[i+1:] {
+				route = strings.TrimSpace(route)
+				if route == "" {
+					continue
+				}
+				parts := strings.Split(route, "|")
+				if len(parts) >= 2 {
+					return strings.TrimSpace(parts[len(parts)-1])
+				}
+				break
+			}
+		}
+	}
+	return ""
+}
+
+func sameDestination(wanted, destination string) bool {
+	wantedWords := relevance.Words(wanted)
+	destinationWords := relevance.Words(destination)
+	if len(wantedWords) == 0 || len(destinationWords) == 0 {
+		return false
+	}
+	contains := func(words []string, value string) bool {
+		for _, word := range words {
+			if word == value {
+				return true
+			}
+		}
+		return false
+	}
+	for _, word := range wantedWords {
+		if contains(destinationWords, word) {
+			return true
+		}
+	}
+
+	// Secunderabad is Hyderabad's main intercity rail terminal. Users normally
+	// ask for the city, while IRCTC prints the station municipality or code.
+	hyderabad := func(words []string) bool {
+		return contains(words, "hyderabad") || contains(words, "secunderabad") ||
+			contains(words, "hyb") || contains(words, "sc")
+	}
+	return hyderabad(wantedWords) && hyderabad(destinationWords)
 }
 
 // smallTalkReply answers a greeting without pretending to have searched.
@@ -2693,6 +2978,16 @@ func (s *Server) readAndStore(f model.File) string {
 	}
 	s.store.UpdateFileContent(f.ID, content, summary)
 	log.Printf("[READ] %s -> %d chars", f.FileName, len(content))
+	go func(fID int64, name, subj, text string) {
+		textToEmbed := fmt.Sprintf("%s. %s. %s", name, subj, text)
+		if len(textToEmbed) > 2000 {
+			textToEmbed = textToEmbed[:2000]
+		}
+		if vec, err := s.classifier.Embed(textToEmbed); err == nil && len(vec) == 768 {
+			_ = s.store.SaveFileEmbedding(fID, vec)
+			log.Printf("🧠 [VECTOR] Generated & saved 768-dim embedding on demand for file %d (%s)", fID, name)
+		}
+	}(f.ID, f.FileName, f.Subject, content)
 	return content
 }
 
@@ -3042,12 +3337,13 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 		relevantFiles, _ = s.store.SearchFilesNLP(groupIDs, "", what, nil, 5)
 	}
 
-	// 2. Drive folder walker — files organised in Drive that the bot never captured.
-	driveMatches := s.collectDriveContext(groupIDs, what, 10)
+	if len(relevantFiles) == 0 && who != "" {
+		relevantFiles, _ = s.store.SearchFilesNLP(groupIDs, who, "", nil, 5)
+	}
 
-	// 3. Build QA sources. For the TOP DB hit we always re-extract from the
-	//    saved bytes (full-document mode) so the answer is grounded in the real
-	//    document, not the truncated cached summary. Subsequent hits use cached
+	// 2. Build QA sources from local files. For the TOP DB hit we always re-extract
+	//    from the saved bytes (full-document mode) so the answer is grounded in the
+	//    real document, not the truncated cached summary. Subsequent hits use cached
 	//    summary to keep cost/latency sane.
 	var qaSources []nlp.QASource
 	var sourceNames []string
@@ -3105,57 +3401,6 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 		sourceNames = append(sourceNames, f.FileName)
 	}
 
-	// 4. Drive-only hits: download the top 2 matching PDFs and extract live.
-	if len(qaSources) < 3 {
-		needed := 3 - len(qaSources)
-		if needed > 2 {
-			needed = 2 // hard cap to control cost/latency
-		}
-		driveContent := s.downloadDriveMatchesForQA(groupIDs, driveMatches, needed)
-		for i, m := range driveMatches {
-			if i >= needed {
-				break
-			}
-			content := driveContent[m.FolderName+"/"+m.FileName]
-			if content == "" {
-				continue
-			}
-			qaSources = append(qaSources, nlp.QASource{
-				FileName: m.FolderName + "/" + m.FileName,
-				Content:  content,
-				Subject:  m.FolderName,
-			})
-			sourceNames = append(sourceNames, m.FileName)
-		}
-	}
-
-	if len(qaSources) == 0 {
-		// Last resort: at least mention any drive matches by name
-		if len(driveMatches) > 0 {
-			var hint strings.Builder
-			hint.WriteString("I couldn't read inside any notes for that, but I found these files in your Drive that might be relevant:\n")
-			for i, m := range driveMatches {
-				if i >= 5 {
-					break
-				}
-				hint.WriteString(fmt.Sprintf("• %s — in %s/\n", m.FileName, m.FolderName))
-			}
-			json.NewEncoder(w).Encode(model.NotesQAResponse{
-				Answer:       hint.String(),
-				Sources:      []string{},
-				DriveSources: driveMatches,
-				Question:     req.Question,
-			})
-			return
-		}
-		json.NewEncoder(w).Encode(model.NotesQAResponse{
-			Answer:   "I couldn't find any relevant notes to answer that question. Make sure files have been shared in your groups or organised in your Drive folder.",
-			Sources:  []string{},
-			Question: req.Question,
-		})
-		return
-	}
-
 	var prev *nlp.QAFollowup
 	if req.PreviousQuestion != "" && req.PreviousAnswer != "" {
 		prev = &nlp.QAFollowup{
@@ -3165,13 +3410,96 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Printf("[QA] follow-up turn — prev question=%q", req.PreviousQuestion)
 	}
-	answer := s.classifier.AnswerFromNotesWithContext(req.Question, qaSources, prev)
+
+	// 3. Local-First: Answer from local files if available
+	var localAnswer string
+	if len(qaSources) > 0 {
+		localAnswer = s.classifier.AnswerFromNotesWithContext(req.Question, qaSources, prev)
+		lower := strings.ToLower(localAnswer)
+		isNegative := strings.Contains(lower, "don't have enough content") ||
+			strings.Contains(lower, "truly don't contain") ||
+			strings.Contains(lower, "i don't see that in") ||
+			strings.Contains(lower, "couldn't find") ||
+			strings.Contains(lower, "could not find")
+
+		if !isNegative {
+			log.Printf("[QA] answered from %d local sources; skipping Drive", len(qaSources))
+			json.NewEncoder(w).Encode(model.NotesQAResponse{
+				Answer:       localAnswer,
+				Sources:      sourceNames,
+				DriveSources: nil,
+				Question:     req.Question,
+			})
+			return
+		}
+		log.Printf("[QA] local sources did not contain answer; falling back to Drive")
+	}
+
+	// 4. Drive Fallback: check Drive only if local files were absent or could not answer
+	driveMatches := s.collectDriveContext(groupIDs, what, 10)
+	if len(driveMatches) > 0 {
+		needed := 2
+		driveContent := s.downloadDriveMatchesForQA(groupIDs, driveMatches, needed)
+		var driveQASources []nlp.QASource
+		var driveSourceNames []string
+		for i, m := range driveMatches {
+			if i >= needed {
+				break
+			}
+			content := driveContent[m.FolderName+"/"+m.FileName]
+			if content == "" {
+				continue
+			}
+			driveQASources = append(driveQASources, nlp.QASource{
+				FileName: m.FolderName + "/" + m.FileName,
+				Content:  content,
+				Subject:  m.FolderName,
+			})
+			driveSourceNames = append(driveSourceNames, m.FileName)
+		}
+		if len(driveQASources) > 0 {
+			driveAnswer := s.classifier.AnswerFromNotesWithContext(req.Question, driveQASources, prev)
+			json.NewEncoder(w).Encode(model.NotesQAResponse{
+				Answer:       driveAnswer,
+				Sources:      driveSourceNames,
+				DriveSources: driveMatches,
+				Question:     req.Question,
+			})
+			return
+		}
+
+		// Drive matches exist by name but could not be read: return hint
+		var hint strings.Builder
+		hint.WriteString("I couldn't read inside any notes for that, but I found these files in your Drive that might be relevant:\n")
+		for i, m := range driveMatches {
+			if i >= 5 {
+				break
+			}
+			hint.WriteString(fmt.Sprintf("• %s — in %s/\n", m.FileName, m.FolderName))
+		}
+		json.NewEncoder(w).Encode(model.NotesQAResponse{
+			Answer:       hint.String(),
+			Sources:      []string{},
+			DriveSources: driveMatches,
+			Question:     req.Question,
+		})
+		return
+	}
+
+	if localAnswer != "" {
+		json.NewEncoder(w).Encode(model.NotesQAResponse{
+			Answer:       localAnswer,
+			Sources:      sourceNames,
+			DriveSources: nil,
+			Question:     req.Question,
+		})
+		return
+	}
 
 	json.NewEncoder(w).Encode(model.NotesQAResponse{
-		Answer:       answer,
-		Sources:      sourceNames,
-		DriveSources: driveMatches,
-		Question:     req.Question,
+		Answer:   "I couldn't find any relevant notes to answer that question. Make sure files have been shared in your groups or organised in your Drive folder.",
+		Sources:  []string{},
+		Question: req.Question,
 	})
 }
 

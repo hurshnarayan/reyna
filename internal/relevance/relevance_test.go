@@ -191,3 +191,26 @@ func TestContentOnlyStillSurvivesWhenNothingBetterExists(t *testing.T) {
 		t.Fatal("the best available fell below its own floor")
 	}
 }
+
+func TestCosineSimilarity(t *testing.T) {
+	a := []float32{1.0, 0.0, 0.0}
+	b := []float32{1.0, 0.0, 0.0}
+	if sim := CosineSimilarity(a, b); sim < 0.999 || sim > 1.001 {
+		t.Fatalf("identical vectors sim = %v, want 1.0", sim)
+	}
+
+	orthogonal := []float32{0.0, 1.0, 0.0}
+	if sim := CosineSimilarity(a, orthogonal); sim < -0.001 || sim > 0.001 {
+		t.Fatalf("orthogonal vectors sim = %v, want 0.0", sim)
+	}
+
+	opposite := []float32{-1.0, 0.0, 0.0}
+	if sim := CosineSimilarity(a, opposite); sim < -1.001 || sim > -0.999 {
+		t.Fatalf("opposite vectors sim = %v, want -1.0", sim)
+	}
+
+	empty := []float32{}
+	if sim := CosineSimilarity(a, empty); sim != 0.0 {
+		t.Fatalf("empty vector sim = %v, want 0.0", sim)
+	}
+}

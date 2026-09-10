@@ -62,6 +62,20 @@ func TestKeywordParseQueryReynaScript(t *testing.T) {
 			wantWhen: "yesterday",
 			wantWhy:  "retrieve",
 		},
+		{
+			query:    "can you get me train ticket to hyderabad",
+			wantWho:  "",
+			wantWhat: "train ticket to hyderabad",
+			wantWhen: "",
+			wantWhy:  "fetch",
+		},
+		{
+			query:    "please send me module 4",
+			wantWho:  "",
+			wantWhat: "module 4",
+			wantWhen: "",
+			wantWhy:  "fetch",
+		},
 	}
 
 	for _, tc := range testCases {
@@ -78,6 +92,12 @@ func TestKeywordParseQueryReynaScript(t *testing.T) {
 		if why != tc.wantWhy {
 			t.Errorf("Query %q: why = %q, want %q", tc.query, why, tc.wantWhy)
 		}
+	}
+}
+
+func TestNormalizeRetrievalIntentKeepsQuestionsAsQuestions(t *testing.T) {
+	if got := normalizeRetrievalIntent("what does the train ticket say?", "qa"); got != "qa" {
+		t.Fatalf("intent = %q, want qa", got)
 	}
 }
 

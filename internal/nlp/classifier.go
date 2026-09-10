@@ -968,6 +968,7 @@ func (c *Classifier) ParseNLPQueryWithHistory(query string, history []model.Chat
 			}
 			// Drop generic filler words from WHAT that would over-filter results
 			what = c.cleanGenericWhat(what)
+			why = normalizeRetrievalIntent(query, why)
 			return
 		}
 	}
@@ -983,7 +984,36 @@ func (c *Classifier) ParseNLPQueryWithHistory(query string, history []model.Chat
 		who = ""
 	}
 	what = c.cleanGenericWhat(what)
+	why = normalizeRetrievalIntent(query, why)
 	return
+}
+
+// normalizeRetrievalIntent keeps the delivery contract independent of which
+// parser produced WHY. "Get me" and "send me" ask for the file itself; treating
+// them as search/QA made Reyna describe matches or ask the user to choose even
+// after the requested WhatsApp file had already reached the backend.
+func normalizeRetrievalIntent(query, parsed string) string {
+	if parsed == "fetch" {
+		return parsed
+	}
+
+	q := strings.ToLower(strings.Trim(strings.TrimSpace(query), "?.,! "))
+	for {
+		before := q
+		for _, prefix := range []string{"hey reyna ", "reyna, ", "reyna ", "please ", "can you ", "could you "} {
+			q = strings.TrimSpace(strings.TrimPrefix(q, prefix))
+		}
+		if q == before {
+			break
+		}
+	}
+
+	for _, request := range []string{"fetch", "get me", "send me"} {
+		if q == request || strings.HasPrefix(q, request+" ") {
+			return "fetch"
+		}
+	}
+	return parsed
 }
 
 // cleanGenericWhat removes filler words from WHAT that would incorrectly filter results.
@@ -1090,7 +1120,9 @@ func (c *Classifier) keywordParseQuery(query string) (who, what, when, why strin
 	}
 
 	// WHY patterns
-	if strings.Contains(lower, "find") || strings.Contains(lower, "search") || strings.Contains(lower, "get") {
+	if strings.HasPrefix(lower, "fetch") || strings.Contains(lower, "fetch") {
+		why = "fetch"
+	} else if strings.Contains(lower, "find") || strings.Contains(lower, "search") || strings.Contains(lower, "get") {
 		why = "search"
 	} else if strings.Contains(lower, "do we have") || strings.Contains(lower, "has anyone") || strings.Contains(lower, "is there") {
 		why = "check_existence"
@@ -1103,7 +1135,9 @@ func (c *Classifier) keywordParseQuery(query string) (who, what, when, why strin
 	// WHAT — if not already set, clean up remaining text
 	if what == "" && lower != "" {
 		what = stripPhrases(lower, []string{
+			"please send me", "please get me", "please fetch me",
 			"can you find me", "can you show me", "can you get me", "can you find", "can you",
+			"fetch me", "fetch",
 			"find me", "show me", "get me", "search for", "find", "search",
 			"has anyone shared", "do we have", "share", "shared", "upload", "uploaded",
 			"sent", "send", "received", "receive", "about", "any", "the", "some",
@@ -1116,7 +1150,7 @@ func (c *Classifier) keywordParseQuery(query string) (who, what, when, why strin
 }
 
 func (c *Classifier) llmParseQuery(query string) (who, what, when, why string) {
-	return c.llmParseQueryWithHistory(query, nil)
+	return c.ParseNLPQueryWithHistory(query, nil)
 }
 
 func (c *Classifier) llmParseQueryWithHistory(query string, history []model.ChatMessageContext) (who, what, when, why string) {
@@ -1147,16 +1181,19 @@ Rules:
 - "who": Extract the PERSON'S NAME if the user is asking about files from a specific sender person. Leave empty if no person mentioned.
   IMPORTANT: The assistant/app itself is named "Reyna". "Reyna" is NEVER a sender person. If the user mentions "Reyna" (e.g. "Reyna script", "Reyna document", "hey Reyna find X"), "Reyna" belongs in "what" if it is part of the topic/document name, or ignored if used as a greeting. NEVER set "who" to "Reyna".
 - "what": Extract the SPECIFIC TOPIC, KEYWORD, or SUBJECT being searched.
-  CONTEXT RESOLUTION RULE: If the query uses pronouns or follow-up phrases (e.g. "can you find it?", "what does it say?", "explain module 1 from that", "open it", "summarize it", "who sent it?", "send that to me", "where is that exam?"), RESOLVE the referred topic or file from the Conversation History and output that specific topic/filename in "what". If there is no previous context and the user uses generic words like "notes", "files", "stuff", leave this empty.
+  CONTEXT RESOLUTION RULE: If the query uses pronouns or follow-up phrases (e.g. "can you find it?", "what does it say?", "explain module 1 from that", "open it", "summarize it", "who sent it?", "send that to me", "where is that exam?"), RESOLVE the referred topic or file from the Conversation History and output that specific topic/filename in "what". If there is no previous context and the user uses generic words or file types like "notes", "files", "stuff", "image", "images", "photo", "photos", "pic", "pics", "pdf", "pdfs", "doc", "docs", leave "what" empty.
 - "when": Extract time reference as one of: today, yesterday, last_week, this_week, last_month. ONLY extract when an explicit calendar period is specified. Words like "latest", "recent", "newest", "last" indicate sorting order, NOT a time filter; leave "when" empty for them.
-- "why": One of: retrieve, search, check_existence, activity_check, qa
+- "why": One of: retrieve, search, check_existence, activity_check, qa, fetch. Set "fetch" when the user asks to receive the file itself, including "fetch", "get me", or "send me". Use "qa" when they ask what a document says.
 
 Examples:
 - "can you find me the latest Reyna script received" → {"who":"","what":"Reyna script","when":"","why":"search"}
 - "mohit sent some notes" → {"who":"mohit","what":"","when":"","why":"retrieve"}
+- "what was the latest image Yash sent?" → {"who":"Yash","what":"","when":"","why":"retrieve"}
+- "show me the photo that arrived" → {"who":"","what":"","when":"","why":"retrieve"}
 - "do we have OS notes?" → {"who":"","what":"OS","when":"","why":"check_existence"}
 - "what did priya upload yesterday?" → {"who":"priya","what":"","when":"yesterday","why":"retrieve"}
 - "find compiler lab manual" → {"who":"","what":"compiler lab manual","when":"","why":"search"}
+- "can you get me the train ticket to Hyderabad?" → {"who":"","what":"train ticket to Hyderabad","when":"","why":"fetch"}
 - "rakesh shared quantum mechanics pdf" → {"who":"rakesh","what":"quantum mechanics","when":"","why":"retrieve"}
 
 Respond ONLY with JSON, no other text:
@@ -1665,4 +1702,12 @@ func fallbackRetrievalReply(rawQuery string, files, driveMatches []RetrievalFile
 	// not claim to know which.
 	b.WriteString(" I could not read them to answer properly just now. Trying again may work.")
 	return b.String()
+}
+
+// Embed computes vector embeddings using the configured LLM provider.
+func (c *Classifier) Embed(text string) ([]float32, error) {
+	if c.llm == nil {
+		return nil, nil
+	}
+	return c.llm.Embed(text)
 }
