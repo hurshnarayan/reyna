@@ -1,7 +1,6 @@
 package app.reyna.ui
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -71,8 +70,8 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextOverflow
 import app.reyna.attribution.Attribution
 import app.reyna.ui.components.ConfidenceDot
-import app.reyna.ui.components.ReynaLogo
-import app.reyna.ui.components.ReynaMarkThinking
+import app.reyna.ui.components.ReynaMascot
+import app.reyna.ui.components.ReynaMascotAnimated
 import app.reyna.ui.components.Bubble
 import app.reyna.ui.components.BubbleText
 import app.reyna.ui.components.BubbleTime
@@ -388,22 +387,20 @@ private fun IconButton(
 private fun MarkRow(sending: Boolean, stage: String) {
     val c = reynaColors
 
-    // Colour carries the change of state on its own, so the mark does not have
-    // to jump or resize to show that it has started working.
-    val tint by animateColorAsState(
-        targetValue = if (sending) c.onSurface else c.onSurfaceFaint,
-        animationSpec = tween(durationMillis = 420),
-        label = "mark-tint",
-    )
-
     Row(
         Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (sending) {
-            ReynaMarkThinking(color = tint, modifier = Modifier.size(19.dp))
+            ReynaMascotAnimated(
+                modifier = Modifier.size(36.dp),
+                contentDescription = null,
+            )
         } else {
-            ReynaLogo(color = tint, modifier = Modifier.size(19.dp), contentDescription = null)
+            ReynaMascot(
+                modifier = Modifier.size(36.dp),
+                contentDescription = null,
+            )
         }
 
         // The server says which document it is reading, and reading is where

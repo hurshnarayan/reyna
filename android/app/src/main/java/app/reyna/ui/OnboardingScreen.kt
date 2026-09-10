@@ -47,7 +47,7 @@ import androidx.compose.ui.unit.sp
 import app.reyna.R
 import app.reyna.permissions.Permissions
 import app.reyna.ui.theme.Dimens
-import app.reyna.ui.components.ReynaMarkSplash
+import app.reyna.ui.components.ReynaMascotAnimated
 import app.reyna.ui.theme.reynaColors
 
 /**
@@ -248,15 +248,13 @@ private fun Welcome(modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // The mark assembles itself here, which is the one place in the app
-        // with the room and the attention for it. No disc behind it: the logo
-        // is the three drops, and a filled circle is a container it does not
-        // need.
-        ReynaMarkSplash(
-            color = c.onSurface,
-            modifier = Modifier.size(104.dp),
+        // The same five-frame mascot users meet in chat introduces Reyna here.
+        // Reusing it makes onboarding teach the app's working state immediately.
+        ReynaMascotAnimated(
+            modifier = Modifier.size(148.dp),
+            contentDescription = "Reyna",
         )
-        Spacer(Modifier.height(30.dp))
+        Spacer(Modifier.height(18.dp))
         Text(
             "Your chats already have\nwhat you need",
             fontSize = 27.sp,

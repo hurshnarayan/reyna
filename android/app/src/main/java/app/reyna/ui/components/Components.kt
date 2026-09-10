@@ -39,24 +39,19 @@ import app.reyna.ui.theme.Dimens
 import app.reyna.ui.theme.reynaColors
 
 /**
- * Reyna's avatar: the mark, and nothing behind it.
+ * Reyna's avatar uses the still frame from the same mascot animation as chat.
  *
  * Reyna is the other party in this conversation, so it sits in the toolbar
  * where a messaging app puts the person you are talking to.
  *
- * No disc. The mark used to be reversed out of a black circle, which is a
- * container the logo does not need and which reads as a sticker pasted onto
- * the page rather than part of it. Drawn straight onto the background in the
- * foreground colour, it is dark on a light theme and light on a dark one
- * without anything having to switch.
+ * No second badge or generated placeholder: the supplied transparent artwork
+ * is the identity everywhere the assistant appears.
  */
 @Composable
 fun ReynaAvatar(size: Dp = 34.dp) {
-    val c = reynaColors
     Box(Modifier.size(size), contentAlignment = Alignment.Center) {
-        ReynaLogo(
-            color = c.onSurface,
-            modifier = Modifier.size(size * 0.82f),
+        ReynaMascot(
+            modifier = Modifier.size(size),
             contentDescription = null,
         )
     }
