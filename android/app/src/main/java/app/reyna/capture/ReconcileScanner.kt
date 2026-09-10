@@ -18,6 +18,7 @@ import java.security.MessageDigest
  * path-and-mtime prefilter before any hashing.
  */
 class ReconcileScanner(
+    private val scanRoots: () -> List<File> = WhatsAppPaths::scanRoots,
     /** Whether Reyna has already recorded this exact path and modification time. */
     private val isKnown: (path: String, mtime: Long) -> Boolean,
 ) {
@@ -49,9 +50,10 @@ class ReconcileScanner(
 
     fun scan(onProgress: (Int) -> Unit = {}): List<Found> {
         val out = ArrayList<Found>()
-        for (dir in WhatsAppPaths.watchedDirectories()) {
-            val entries = dir.listFiles() ?: continue
-            for (f in entries) {
+        for (dir in scanRoots()) {
+            for (f in dir.walkTopDown().onFail { file, error ->
+                Log.w(TAG, "cannot scan ${file.name}: ${error.message}")
+            }) {
                 if (!f.isFile || !WhatsAppPaths.isInteresting(f)) continue
                 val mtime = f.lastModified()
                 if (isKnown(f.absolutePath, mtime)) continue
