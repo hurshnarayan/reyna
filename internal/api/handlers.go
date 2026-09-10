@@ -169,6 +169,7 @@ func (s *Server) routes() {
 	// WhatsApp group (command parsing, reaction staging, group allowlist
 	// polling), none of which has an on-device equivalent.
 	s.mux.HandleFunc("/api/device/files", deviceRaw(s.handleDeviceUpload)) // multipart, not JSON
+	s.mux.HandleFunc("/api/device/files/content", deviceRaw(s.handleDeviceFileContent))
 	s.mux.HandleFunc("/api/device/events", device(s.handleDeviceEvents))
 	s.mux.HandleFunc("/api/device/export", device(s.handleDeviceExport))
 	s.mux.HandleFunc("/api/device/pending", device(s.handleDevicePending))

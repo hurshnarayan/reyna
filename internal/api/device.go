@@ -22,6 +22,52 @@ const deviceIdentity = "device"
 // classifyingPlaceholder is the subject a file carries while the model reads it.
 const classifyingPlaceholder = "classifying..."
 
+// handleDeviceFileContent restores bytes the phone previously uploaded. This
+// keeps search previews working after WhatsApp removes or moves its local copy.
+func (s *Server) handleDeviceFileContent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	fileID, err := strconv.ParseInt(r.URL.Query().Get("file_id"), 10, 64)
+	if err != nil || fileID <= 0 {
+		http.Error(w, `{"error":"file_id required"}`, http.StatusBadRequest)
+		return
+	}
+	file, err := s.store.GetFileByID(fileID)
+	if err != nil || file == nil {
+		http.Error(w, `{"error":"file not found"}`, http.StatusNotFound)
+		return
+	}
+
+	data, _ := s.drive.GetLocalFileData(fileID)
+	if len(data) == 0 {
+		data, _ = s.drive.GetFileFromLocalStore(file.UserID, file.Subject, file.FileName)
+	}
+	if len(data) == 0 && file.DriveFileID != "" &&
+		!strings.HasPrefix(file.DriveFileID, "local_") &&
+		!strings.HasPrefix(file.DriveFileID, "meta_") {
+		user, _ := s.store.GetUserByID(file.UserID)
+		if user != nil && user.GoogleRefresh != "" {
+			if token, tokenErr := s.drive.GetValidToken(user.GoogleToken, user.GoogleRefresh, 0); tokenErr == nil {
+				data, _ = s.drive.DownloadFromDrive(token, file.DriveFileID)
+			}
+		}
+	}
+	if len(data) == 0 {
+		http.Error(w, `{"error":"file content unavailable"}`, http.StatusNotFound)
+		return
+	}
+
+	mimeType := file.MimeType
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.Write(data)
+}
+
 // The API the Android app talks to.
 //
 // The app attributes at capture time so it can show a result immediately, and
