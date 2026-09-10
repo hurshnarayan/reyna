@@ -27,12 +27,13 @@ class AttributionTest {
         sender: String = "Mohit",
         attachment: String = "",
         text: String = "",
+        hasAttachment: Boolean? = null,
     ) = Attribution.Event(
         id = id, chatKey = "sem5", chatName = "Sem 5 CS",
         senderKey = "k$id", senderDisplay = sender,
         postedAtMillis = postedAt, text = text,
         attachmentName = attachment,
-        hasAttachment = attachment.isNotEmpty() || text.contains("attach"),
+        hasAttachment = hasAttachment ?: (attachment.isNotEmpty() || text.contains("attach") || text.contains("📷")),
     )
 
     private fun file(name: String, mtime: Long, isSent: Boolean = false) =
@@ -189,5 +190,23 @@ class AttributionTest {
     @Test
     fun `threshold matches the server`() {
         assertEquals(0.70, Attribution.MIN_NAMED, 0.0001)
+    }
+
+    /**
+     * Photo notifications don't carry the disk filename (IMG-YYYYMMDD-WAxxxx.jpg),
+     * but arriving within 5 minutes of the file landing on disk is a confident match.
+     */
+    @Test
+    fun `unnamed media notification within 5 minutes is named confidently`() {
+        val posted = at(2026, 9, 10, 7, 55)
+        val r = Attribution.attribute(
+            file("IMG-20260910-WA0004.jpg", posted + TimeUnit.SECONDS.toMillis(30)),
+            listOf(event(1, posted, sender = "Tripuredh", attachment = "", text = "📷 Photo")),
+            zone = utc,
+        )
+        assertEquals(1L, r.best?.eventId)
+        assertEquals(0.85, r.confidence, 0.001)
+        assertEquals(Attribution.Method.NOTIFICATION, r.method)
+        assertTrue(r.canName)
     }
 }

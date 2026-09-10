@@ -68,7 +68,9 @@ class CaptureService : Service() {
 
         // Anything that arrived while the service was dead.
         scope.launch {
+            repo.resetRetiredFiles()
             repo.reconcile()
+            repo.reattributeWeak()
             repo.syncPending()
         }
     }

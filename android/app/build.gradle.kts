@@ -114,6 +114,8 @@ dependencies {
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.okhttp)
+    implementation(libs.mlkit.text.recognition)
+    implementation(libs.play.services.tasks)
 
     testImplementation(libs.junit)
 }

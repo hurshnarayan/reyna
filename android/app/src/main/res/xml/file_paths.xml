@@ -15,4 +15,5 @@
 <paths>
     <external-path name="external" path="." />
     <files-path name="added" path="added/" />
+    <cache-path name="previews" path="previews/" />
 </paths>

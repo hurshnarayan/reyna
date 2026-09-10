@@ -71,6 +71,8 @@ class ReynaApi(
          * answer. Empty for ordinary replies.
          */
         val notice: String = "",
+        /** Parsed backend intent; fetch replies attach file cards, QA replies use citations. */
+        val intent: String = "",
     )
 
     /**
@@ -111,6 +113,7 @@ class ReynaApi(
     )
 
     data class CitedFile(
+        val id: Long,
         val name: String,
         val folder: String?,
         val sender: String?,
@@ -143,6 +146,7 @@ class ReynaApi(
         postedAtSeconds: Long,
         confidence: Double,
         method: String,
+        extractedText: String? = null,
     ): Result<UploadResult> = runCatching {
         val body = MultipartBody.Builder().setType(MultipartBody.FORM)
             .addFormDataPart("group_wa_id", chatName ?: "device")
@@ -154,6 +158,11 @@ class ReynaApi(
             .addFormDataPart("posted_at", postedAtSeconds.toString())
             .addFormDataPart("attribution_confidence", confidence.toString())
             .addFormDataPart("attribution_method", method)
+            .apply {
+                if (!extractedText.isNullOrBlank()) {
+                    addFormDataPart("extracted_text", extractedText)
+                }
+            }
             .addFormDataPart("file", fileName, file.asRequestBody(mimeType.toMediaType()))
             .build()
 
@@ -185,6 +194,23 @@ class ReynaApi(
             )
         }
     }.onFailure { Log.w(TAG, "upload failed: ${it.message}") }
+
+    /** Downloads archived bytes for a local preview cache miss. */
+    fun downloadFile(fileId: Long, destination: File): Result<File> = runCatching {
+        require(fileId > 0L)
+        val req = Request.Builder()
+            .url(url("/api/device/files/content?file_id=$fileId"))
+            .auth()
+            .get()
+            .build()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) error("download ${resp.code}")
+            val body = resp.body ?: error("download: empty body")
+            destination.outputStream().use { output -> body.byteStream().use { it.copyTo(output) } }
+        }
+        if (destination.length() <= 0L) error("download: empty file")
+        destination
+    }.onFailure { Log.w(TAG, "download failed: ${it.message}") }
 
     data class ChatContext(
         val role: String,
@@ -288,6 +314,7 @@ class ReynaApi(
                 status = json.optString("status").ifBlank { STATUS_ANSWERED },
                 candidates = json.optJSONArray("candidates").toCandidates(),
                 notice = json.optString("notice"),
+                intent = json.optJSONObject("parsed_query")?.optString("why").orEmpty(),
             )
         }
     }.onFailure { Log.w(TAG, "ask failed: ${it.message}") }
@@ -315,6 +342,7 @@ class ReynaApi(
         val postedAtSeconds: Long,
         val text: String,
         val attachmentName: String,
+        val hasAttachment: Boolean = attachmentName.isNotEmpty(),
         val source: String,
     )
 
@@ -337,7 +365,7 @@ class ReynaApi(
                     .put("posted_at", e.postedAtSeconds)
                     .put("text", e.text)
                     .put("attachment_name", e.attachmentName)
-                    .put("has_attachment", e.attachmentName.isNotEmpty())
+                    .put("has_attachment", e.hasAttachment)
                     .put("source", e.source)
             )
         }
@@ -510,6 +538,7 @@ class ReynaApi(
         return (0 until length()).mapNotNull { i ->
             val o = optJSONObject(i) ?: return@mapNotNull null
             CitedFile(
+                id = o.optLong("id", 0),
                 name = o.optString("file_name"),
                 folder = o.optString("subject").ifBlank { null },
                 sender = o.optString("shared_by_name").ifBlank { null },

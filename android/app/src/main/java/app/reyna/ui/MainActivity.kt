@@ -51,6 +51,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.reyna.permissions.Permissions
+import app.reyna.ui.components.FluidTopNotification
+import app.reyna.ui.components.WhoSharedThisDrawer
 import app.reyna.ui.theme.ReynaTheme
 import app.reyna.ui.theme.reynaColors
 
@@ -118,12 +120,39 @@ private fun ReynaApp(vm: ReynaViewModel, activity: ComponentActivity) {
     val c = reynaColors
     val needsOnboarding by vm.needsOnboarding.collectAsState()
     val toast by vm.toast.collectAsState()
-    val snackbar = remember { SnackbarHostState() }
+    var activeNotice by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var noticeColor by remember { mutableStateOf(Color(0xFF10B981)) }
 
     LaunchedEffect(toast) {
-        toast?.let {
-            snackbar.showSnackbar(it)
-            vm.clearToast()
+        toast?.let { text ->
+            val isWarn = text.contains("Set a device token", ignoreCase = true) ||
+                text.contains("No app", ignoreCase = true) ||
+                text.contains("Could not", ignoreCase = true) ||
+                text.contains("no longer", ignoreCase = true) ||
+                text.contains("Nothing to", ignoreCase = true) ||
+                text.contains("Pause", ignoreCase = true)
+            noticeColor = if (isWarn) Color(0xFFFF5A5F) else Color(0xFF10B981)
+
+            val (title, msg) = when {
+                text.contains("Thanks. Reyna will remember.", ignoreCase = true) ->
+                    "Attribution Updated" to "Reyna will remember this sender for future files."
+                text.contains("Set a device token", ignoreCase = true) ->
+                    "Device Token Required" to text
+                text.startsWith("Found ", ignoreCase = true) ->
+                    "Files Discovered" to text
+                text.startsWith("Sent ", ignoreCase = true) ->
+                    "Sync Complete" to text
+                text.contains("Drive connected", ignoreCase = true) ->
+                    "Google Drive Connected" to text
+                text.equals("Copied", ignoreCase = true) ->
+                    "Copied to Clipboard" to "Text copied successfully"
+                text.contains("Watching for new files", ignoreCase = true) ->
+                    "Capture Active" to text
+                text.contains("Capture paused", ignoreCase = true) ->
+                    "Capture Paused" to text
+                else -> "Notice" to text
+            }
+            activeNotice = title to msg
         }
     }
 
@@ -133,9 +162,18 @@ private fun ReynaApp(vm: ReynaViewModel, activity: ComponentActivity) {
         } else {
             MainShell(vm)
         }
-        SnackbarHost(
-            snackbar,
-            Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 80.dp),
+
+        // Fluid top notification drawer (as in sneaker GIF)
+        FluidTopNotification(
+            visible = activeNotice != null,
+            title = activeNotice?.first ?: "",
+            message = activeNotice?.second ?: "",
+            dotColor = noticeColor,
+            autoDismissMs = 3500L,
+            onDismiss = {
+                activeNotice = null
+                vm.clearToast()
+            },
         )
     }
 }
@@ -174,6 +212,7 @@ private fun MainShell(vm: ReynaViewModel) {
     var trackingOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
     var repairFor by remember { mutableStateOf<Long?>(null) }
+    var knownSenders by remember { mutableStateOf<List<String>>(emptyList()) }
     var viewing by remember { mutableStateOf<ViewingPdf?>(null) }
 
     val messages by vm.messages.collectAsState()
@@ -183,6 +222,37 @@ private fun MainShell(vm: ReynaViewModel) {
     val choice by vm.pendingChoice.collectAsState()
     val driveState by vm.driveState.collectAsState()
     val pushing by vm.pushing.collectAsState()
+
+    LaunchedEffect(repairFor) {
+        if (repairFor != null) {
+            knownSenders = vm.knownSenders()
+        }
+    }
+
+    val repairFile = remember(repairFor, files) {
+        if (repairFor == null) null
+        else {
+            val f = files.firstOrNull { it.id == repairFor }
+            f?.let {
+                app.reyna.search.SearchableFile(
+                    id = it.id,
+                    fileName = it.name,
+                    senderName = it.senderName,
+                    chatName = it.chatName,
+                    whenText = vm.relativeTime(it.postedAt),
+                    confidence = it.confidence,
+                    isImage = it.isImage,
+                    path = it.path,
+                    sizeBytes = it.sizeBytes,
+                    mtime = it.mtime,
+                    postedAt = it.postedAt,
+                    isSent = it.isSent,
+                    extractedText = it.extractedText,
+                    remoteId = it.remoteId,
+                )
+            }
+        }
+    }
 
     // Any file type: Reyna keeps documents and photographed notes alike, and a
     // narrow filter would hide exactly the scans people want kept.
@@ -198,8 +268,8 @@ private fun MainShell(vm: ReynaViewModel) {
 
     BackHandler(enabled = trackingOpen || settingsOpen || repairFor != null || viewing != null) {
         when {
-            viewing != null -> viewing = null
             repairFor != null -> repairFor = null
+            viewing != null -> viewing = null
             settingsOpen -> settingsOpen = false
             else -> trackingOpen = false
         }
@@ -218,16 +288,6 @@ private fun MainShell(vm: ReynaViewModel) {
                     file = java.io.File(v.file.path),
                     quote = v.quote,
                     startPage = v.page,
-                )
-            }
-
-            repairFor != null -> Column(Modifier.fillMaxSize()) {
-                SubToolbar("Who shared this?") { repairFor = null }
-                RepairScreen(
-                    vm = vm,
-                    fileId = repairFor!!,
-                    onDone = { repairFor = null },
-                    onImport = { pickExport.launch(arrayOf("text/plain", "application/zip")) },
                 )
             }
 
@@ -263,7 +323,7 @@ private fun MainShell(vm: ReynaViewModel) {
                             onAddFile = { pickFile.launch(arrayOf("*/*")) },
                             onStop = vm::stopAnswering,
                             onClearChat = vm::clearChat,
-                            onOpenFile = vm::openFile,
+                            onOpenFile = vm::openChatFile,
                             onOpenSource = { src ->
                                 // A citation names the backend's file, so the
                                 // local row has to be resolved before anything
@@ -305,11 +365,14 @@ private fun MainShell(vm: ReynaViewModel) {
                                     else -> vm.openInOtherApp(local)
                                 }
                             },
+                            loadPreviewPath = vm::chatPreviewPath,
                         )
                         Tab.Search -> FilesScreen(
                             files = vm.searchableFiles(),
+                            searchContentIds = vm::contentSearchIds,
                             onOpen = { vm.openFile(it.id) },
                             onAskWhoShared = { repairFor = it.id },
+                            loadPreviewPath = vm::previewPath,
                         )
                         Tab.Activity -> TrackingScreen(
                             state = vm.trackingState(),
@@ -320,6 +383,21 @@ private fun MainShell(vm: ReynaViewModel) {
                 TabBar(tab) { tab = it }
             }
         }
+
+        // Sneaker-style Fluid Attribution Repair Drawer ("Who shared this?")
+        WhoSharedThisDrawer(
+            file = repairFile,
+            knownSenders = knownSenders,
+            onAssignSender = { fileId, sender ->
+                vm.setSender(fileId, sender)
+                repairFor = null
+            },
+            onImportExport = {
+                pickExport.launch(arrayOf("text/plain", "application/zip"))
+                repairFor = null
+            },
+            onDismiss = { repairFor = null },
+        )
     }
 }
 

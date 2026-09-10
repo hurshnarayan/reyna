@@ -96,15 +96,11 @@ class NotificationReader : NotificationListenerService() {
         /**
          * Pulls what we need out of a notification, preferring the structured
          * MessagingStyle payload and falling back to the raw extras.
-         *
-         * What MessagingStyle actually contains for a document message is the
-         * highest-value unknown in the capture design and needs a dump from a
-         * real device before this is finalised. The shape here is what the API
-         * documents; the test is whether the filename appears in the message
-         * text, because that decides whether the join can be exact.
          */
         fun extract(sbn: StatusBarNotification): Observed? {
             val n = sbn.notification ?: return null
+            if ((n.flags and Notification.FLAG_GROUP_SUMMARY) != 0) return null
+
             val extras = n.extras ?: return null
 
             val style = try {
@@ -120,17 +116,34 @@ class NotificationReader : NotificationListenerService() {
             if (style != null) {
                 val last = style.messages.lastOrNull()
                 val person = last?.person
+                val rawChat = style.conversationTitle?.toString()
+                    ?: extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
+                val text = last?.text?.toString().orEmpty()
+                val chatName = cleanChatName(rawChat)
+
+                if (chatName.isBlank() || chatName.equals("WhatsApp", ignoreCase = true)) return null
+                if (isSummary(chatName, text)) return null
+
+                val isGroup = style.isGroupConversation
+                val rawSender = person?.name?.toString().orEmpty()
+                val effectiveSender = when {
+                    rawSender.isNotBlank() && !rawSender.equals("WhatsApp", ignoreCase = true) -> rawSender
+                    !isGroup && chatName.isNotBlank() && !chatName.equals("WhatsApp", ignoreCase = true) -> chatName
+                    else -> ""
+                }
+
+                if (effectiveSender.isBlank() && chatName.isBlank()) return null
+
                 return Observed(
-                    chatName = style.conversationTitle?.toString()
-                        ?: extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty(),
-                    isGroup = style.isGroupConversation,
-                    senderName = person?.name?.toString().orEmpty(),
+                    chatName = chatName,
+                    isGroup = isGroup,
+                    senderName = effectiveSender,
                     senderKey = person?.key.orEmpty(),
                     // The message's own timestamp beats the notification's when
                     // present: an update to an existing notification re-posts
                     // with a new postTime but the message is unchanged.
                     postedAtMillis = last?.timestamp ?: sbn.postTime,
-                    text = last?.text?.toString().orEmpty(),
+                    text = text,
                     shortcutId = shortcut,
                     source = Observed.Source.MESSAGING_STYLE,
                 )
@@ -138,17 +151,28 @@ class NotificationReader : NotificationListenerService() {
 
             // Fallback: older WhatsApp builds, and summary notifications that
             // carry no MessagingStyle at all.
-            val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
+            val rawTitle = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
             val body = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
-            if (title.isEmpty() && body.isEmpty()) return null
+            if (rawTitle.isEmpty() && body.isEmpty()) return null
+
+            val title = cleanChatName(rawTitle)
+            if (title.isBlank() || title.equals("WhatsApp", ignoreCase = true)) return null
+            if (isSummary(title, body)) return null
 
             val (sender, message) = splitGroupBody(body)
+            val isGroup = sender.isNotEmpty()
+            val effectiveSender = when {
+                sender.isNotBlank() && !sender.equals("WhatsApp", ignoreCase = true) -> sender
+                !isGroup && title.isNotBlank() && !title.equals("WhatsApp", ignoreCase = true) -> title
+                else -> ""
+            }
+
+            if (effectiveSender.isBlank() && title.isBlank()) return null
+
             return Observed(
                 chatName = title,
-                // In a group the body is "Sender: message"; a 1:1 body has no
-                // such prefix, which is the only signal available here.
-                isGroup = sender.isNotEmpty(),
-                senderName = sender,
+                isGroup = isGroup,
+                senderName = effectiveSender,
                 senderKey = "",
                 postedAtMillis = sbn.postTime,
                 text = message,
@@ -157,13 +181,68 @@ class NotificationReader : NotificationListenerService() {
             )
         }
 
+        /** Removes trailing message counter like " (5 messages)" from group titles. */
+        fun cleanChatName(raw: String): String =
+            raw.replace(Regex("""\s*\(\d+\s+messages?\)$""", RegexOption.IGNORE_CASE), "").trim()
+
+        /**
+         * Detects WhatsApp system notifications, call status, and multi-chat summaries
+         * that do not represent individual messages.
+         */
+        fun isSummary(title: String, text: String): Boolean {
+            val t = title.trim()
+            val b = text.trim()
+            if (t.equals("WhatsApp", ignoreCase = true)) return true
+            if (b.matches(Regex("""^\d+\s+messages?\s+from\s+\d+\s+chats?.*""", RegexOption.IGNORE_CASE))) return true
+            if (b.matches(Regex("""^\d+\s+new\s+messages?.*""", RegexOption.IGNORE_CASE))) return true
+            if (b.equals("Checking for new messages", ignoreCase = true)) return true
+            if (b.startsWith("Ongoing voice call", ignoreCase = true) ||
+                b.startsWith("Incoming voice call", ignoreCase = true) ||
+                b.startsWith("Calling…", ignoreCase = true) ||
+                b.startsWith("Ringing…", ignoreCase = true) ||
+                b.startsWith("Missed voice call", ignoreCase = true) ||
+                b.startsWith("Missed video call", ignoreCase = true) ||
+                b.startsWith("Deleting messages…", ignoreCase = true) ||
+                t.startsWith("Deleting messages…", ignoreCase = true)
+            ) return true
+            return false
+        }
+
+        /**
+         * Parses notification text for attachments (documents or media).
+         * Returns (attachmentName, hasAttachment).
+         */
+        fun detectAttachment(text: String): Pair<String, Boolean> {
+            val trimmed = text.trim()
+            // Document with emoji: e.g. "📄 Additional Mathematics.pdf (1 page)"
+            val docMatch = Regex("""^📄\s*(.+?)(?:\s*\(\d+\s+pages?\))?$""").find(trimmed)
+            if (docMatch != null) {
+                val fileName = docMatch.groupValues[1].trim()
+                return fileName to true
+            }
+            // Document without emoji but ending with doc extension
+            val extMatch = Regex("""^(.+?\.(?:pdf|docx?|pptx?|xlsx?|txt|csv|zip|epub|rtf))(?:\s*\(.*\))?$""", RegexOption.IGNORE_CASE).find(trimmed)
+            if (extMatch != null) {
+                val fileName = extMatch.groupValues[1].trim()
+                return fileName to true
+            }
+            // Photos/Images
+            if (trimmed.contains("📷") ||
+                trimmed.matches(Regex(""".*\b(?:\d+\s+)?(?:photos?|images?)\b.*""", RegexOption.IGNORE_CASE))
+            ) {
+                return "" to true
+            }
+            // Other media indicators
+            if (trimmed.contains("🎥") || trimmed.contains("🎤") ||
+                trimmed.contains("Audio") || trimmed.contains("Video")
+            ) {
+                return "" to true
+            }
+            return "" to false
+        }
+
         /**
          * Splits "Sender: message" from a group notification body.
-         *
-         * Splits on the first ": " only, for the same reason the export parser
-         * does: message bodies are full of colons and a later split invents a
-         * sender out of the message text. Rejects candidates that read as prose
-         * rather than a name.
          */
         internal fun splitGroupBody(body: String): Pair<String, String> {
             val idx = body.indexOf(": ")

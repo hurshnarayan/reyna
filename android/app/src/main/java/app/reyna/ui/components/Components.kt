@@ -3,6 +3,7 @@ package app.reyna.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,11 +23,18 @@ import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -37,26 +45,23 @@ import app.reyna.R
 import app.reyna.attribution.Attribution
 import app.reyna.ui.theme.Dimens
 import app.reyna.ui.theme.reynaColors
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
- * Reyna's avatar: the mark, and nothing behind it.
+ * Reyna's avatar uses the still frame from the same mascot animation as chat.
  *
  * Reyna is the other party in this conversation, so it sits in the toolbar
  * where a messaging app puts the person you are talking to.
  *
- * No disc. The mark used to be reversed out of a black circle, which is a
- * container the logo does not need and which reads as a sticker pasted onto
- * the page rather than part of it. Drawn straight onto the background in the
- * foreground colour, it is dark on a light theme and light on a dark one
- * without anything having to switch.
+ * No second badge or generated placeholder: the supplied transparent artwork
+ * is the identity everywhere the assistant appears.
  */
 @Composable
 fun ReynaAvatar(size: Dp = 34.dp) {
-    val c = reynaColors
     Box(Modifier.size(size), contentAlignment = Alignment.Center) {
-        ReynaLogo(
-            color = c.onSurface,
-            modifier = Modifier.size(size * 0.82f),
+        ReynaMascot(
+            modifier = Modifier.size(size),
             contentDescription = null,
         )
     }
@@ -134,11 +139,17 @@ fun FileChip(
     confidence: Double,
     isImage: Boolean = false,
     inDrive: Boolean = true,
+    subtitle: String? = null,
+    canAskWhoShared: Boolean = true,
     onOpen: () -> Unit = {},
     onAskWhoShared: () -> Unit = {},
+    onHoldStart: () -> Unit = {},
+    onHoldEnd: () -> Unit = {},
 ) {
     val c = reynaColors
     val uncertain = confidence < Attribution.MIN_NAMED
+    val haptic = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
 
     Column(
         Modifier
@@ -146,7 +157,32 @@ fun FileChip(
             .clip(RoundedCornerShape(Dimens.chip))
             .background(c.surface)
             .border(1.dp, c.border, RoundedCornerShape(Dimens.chip))
-            .clickable { onOpen() }
+            .semantics {
+                onClick(label = "Open file") { onOpen(); true }
+                onLongClick(label = "Preview file") { onHoldStart(); true }
+            }
+            .pointerInput(fileName) {
+                var held = false
+                detectTapGestures(
+                    onTap = { if (!held) onOpen() },
+                    onLongPress = {},
+                    onPress = {
+                        held = false
+                        val holdJob = scope.launch {
+                            delay(220)
+                            held = true
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onHoldStart()
+                        }
+                        try {
+                            tryAwaitRelease()
+                        } finally {
+                            holdJob.cancel()
+                            if (held) onHoldEnd()
+                        }
+                    },
+                )
+            }
             .padding(11.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -174,7 +210,7 @@ fun FileChip(
                     ConfidenceDot(confidence)
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        Attribution.describe(confidence, senderName, chatName, whenText),
+                        subtitle ?: Attribution.describe(confidence, senderName, chatName, whenText),
                         fontSize = 12.sp,
                         color = c.onSurfaceMuted,
                         maxLines = 1,
@@ -191,7 +227,7 @@ fun FileChip(
                 }
             }
         }
-        if (uncertain) {
+        if (uncertain && canAskWhoShared) {
             // The repair affordance sits where the user notices the gap, not
             // buried in settings.
             Spacer(Modifier.height(9.dp))

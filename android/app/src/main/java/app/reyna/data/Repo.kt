@@ -9,8 +9,14 @@ import app.reyna.attribution.NotificationReader
 import app.reyna.capture.ReconcileScanner
 import app.reyna.capture.WhatsAppPaths
 import app.reyna.net.ReynaApi
+import androidx.sqlite.db.SimpleSQLiteQuery
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.Reader
@@ -29,11 +35,25 @@ class Repo private constructor(private val context: Context) {
     private val dao = db.dao()
     private val prefs: SharedPreferences =
         context.getSharedPreferences("reyna", Context.MODE_PRIVATE)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val previewDownloadMutex = Mutex()
+
+    init {
+        scope.launch {
+            cleanBogusData()
+        }
+    }
 
     // ── Settings ──
 
     var backendUrl: String
-        get() = prefs.getString(KEY_BACKEND, DEFAULT_BACKEND) ?: DEFAULT_BACKEND
+        get() {
+            val saved = prefs.getString(KEY_BACKEND, null)
+            if (saved.isNullOrBlank() || (saved == "http://10.0.2.2:8080" && DEFAULT_BACKEND != "http://10.0.2.2:8080")) {
+                return DEFAULT_BACKEND
+            }
+            return saved
+        }
         set(v) = prefs.edit().putString(KEY_BACKEND, v).apply()
 
     /**
@@ -44,7 +64,13 @@ class Repo private constructor(private val context: Context) {
      * screen. Anything typed in Settings wins from then on.
      */
     var deviceToken: String
-        get() = prefs.getString(KEY_TOKEN, null) ?: app.reyna.BuildConfig.DEVICE_TOKEN
+        get() {
+            val saved = prefs.getString(KEY_TOKEN, null)
+            if (saved.isNullOrBlank()) {
+                return app.reyna.BuildConfig.DEVICE_TOKEN
+            }
+            return saved
+        }
         set(v) = prefs.edit().putString(KEY_TOKEN, v).apply()
 
     var capturing: Boolean
@@ -67,6 +93,47 @@ class Repo private constructor(private val context: Context) {
     fun observeFiles(): Flow<List<FileEntity>> = dao.observeFiles()
     fun observeFileCount(): Flow<Int> = dao.observeFileCount()
     fun observeMessages(): Flow<List<MessageEntity>> = dao.observeMessages()
+
+    /** Uses the SQLite inverted index to avoid scanning every OCR body per keystroke. */
+    suspend fun searchContentIds(match: String): Set<Long> = withContext(Dispatchers.IO) {
+        if (match.isBlank()) return@withContext emptySet()
+        dao.searchFileIds(
+            SimpleSQLiteQuery(
+                "SELECT docid FROM files_fts WHERE files_fts MATCH ? LIMIT 500",
+                arrayOf(match),
+            )
+        ).toSet()
+    }
+
+    /**
+     * Resolves preview bytes locally. Uploaded files remain previewable after
+     * WhatsApp removes its copy by restoring them into Reyna's cache.
+     */
+    suspend fun previewFile(localPath: String, remoteId: Long, fileName: String): File? =
+        withContext(Dispatchers.IO) {
+            File(localPath).takeIf { it.isFile && it.length() > 0L }?.let { return@withContext it }
+            if (remoteId <= 0L || deviceToken.isBlank()) return@withContext null
+
+            previewDownloadMutex.withLock {
+                val ext = fileName.substringAfterLast('.', "").lowercase()
+                    .takeIf { it.matches(Regex("[a-z0-9]{1,8}")) }
+                val cacheDir = File(context.cacheDir, "previews").apply { mkdirs() }
+                val cached = File(cacheDir, remoteId.toString() + if (ext == null) "" else ".$ext")
+                if (cached.isFile && cached.length() > 0L) return@withLock cached
+
+                val partial = File(cacheDir, "${cached.name}.part")
+                partial.delete()
+                api().downloadFile(remoteId, partial).getOrElse {
+                    partial.delete()
+                    return@withLock null
+                }
+                if (!partial.renameTo(cached)) {
+                    partial.delete()
+                    return@withLock null
+                }
+                cached
+            }
+        }
 
     suspend fun watchedChats(): List<String> = withContext(Dispatchers.IO) { dao.knownChats() }
 
@@ -101,6 +168,10 @@ class Repo private constructor(private val context: Context) {
         if (id <= 0) return@withContext null
 
         attributeFile(id)
+        if (entity.isImage || entity.name.endsWith(".pdf", ignoreCase = true)) {
+            val text = app.reyna.ocr.OnDeviceExtractor.extract(context, found.file, entity.isImage) ?: ""
+            dao.updateExtractedText(id, text)
+        }
         dao.file(id)
     }
 
@@ -175,6 +246,7 @@ class Repo private constructor(private val context: Context) {
 
     /** Runs a full scan and records anything new. Returns how many were added. */
     suspend fun reconcile(onProgress: (Int) -> Unit = {}): Int = withContext(Dispatchers.IO) {
+        cleanBogusData()
         if (!WhatsAppPaths.anyVisible()) return@withContext 0
         // Fetched once rather than queried per file. The scan runs every
         // fifteen minutes over a folder that mostly does not change, so the
@@ -187,13 +259,38 @@ class Repo private constructor(private val context: Context) {
             if (onFileFound(found) != null) added++
         }
         Log.i(TAG, "reconcile added $added")
+        runPendingOcr(5)
         added
+    }
+
+    /** Runs on-device text extraction (ML Kit OCR / PdfRenderer) for files needing it. */
+    suspend fun runPendingOcr(limit: Int = 10): Int = withContext(Dispatchers.IO) {
+        val pending = dao.pendingOcr(limit)
+        var done = 0
+        for (f in pending) {
+            val file = File(f.path)
+            if (!file.exists()) {
+                dao.updateExtractedText(f.id, "")
+                continue
+            }
+            val text = app.reyna.ocr.OnDeviceExtractor.extract(context, file, f.isImage) ?: ""
+            dao.updateExtractedText(f.id, text)
+            done++
+        }
+        if (done > 0) {
+            Log.i(TAG, "runPendingOcr processed $done files")
+        }
+        done
     }
 
     // ── Attribution ──
 
     /** Stores a notification, then re-attributes anything it might explain. */
     suspend fun onNotification(obs: NotificationReader.Observed) = withContext(Dispatchers.IO) {
+        if (NotificationReader.isSummary(obs.chatName, obs.text)) return@withContext
+
+        val (attName, hasAtt) = NotificationReader.detectAttachment(obs.text)
+
         dao.insertEvent(
             EventEntity(
                 chatKey = obs.shortcutId ?: obs.chatName,
@@ -202,12 +299,21 @@ class Repo private constructor(private val context: Context) {
                 senderDisplay = obs.senderName,
                 postedAt = obs.postedAtMillis,
                 text = obs.text,
-                attachmentName = "",
-                hasAttachment = true,
+                attachmentName = attName,
+                hasAttachment = hasAtt,
                 source = if (obs.source == NotificationReader.Observed.Source.MESSAGING_STYLE)
                     "notification" else "notification_fallback",
             )
         )
+
+        // When an attachment notification arrives, scan and upload right away
+        // so the new file is indexed and on the backend without waiting 15 mins.
+        if (hasAtt) {
+            reconcile()
+            runPendingOcr(5)
+            syncPending(10)
+        }
+
         // The join runs in both directions: a file downloaded hours before this
         // notification arrived is still explained by it.
         reattributeWeak()
@@ -225,7 +331,8 @@ class Repo private constructor(private val context: Context) {
                         senderName = obs.senderName,
                         postedAtSeconds = obs.postedAtMillis / 1000,
                         text = obs.text,
-                        attachmentName = "",
+                        attachmentName = attName,
+                        hasAttachment = hasAtt,
                         source = "notification",
                     )
                 ),
@@ -304,6 +411,22 @@ class Repo private constructor(private val context: Context) {
     )
 
     /**
+     * Cleans bogus "WhatsApp" events and resets bogus WhatsApp attributions so
+     * files can honestly re-attribute to their real senders or honest degradation.
+     */
+    suspend fun cleanBogusData(): Boolean = withContext(Dispatchers.IO) {
+        val deleted = dao.deleteBogusEvents()
+        val reset = dao.resetBogusAttributions()
+        if (deleted > 0 || reset > 0) {
+            Log.i(TAG, "cleaned bogus events: $deleted, reset files: $reset")
+            reattributeWeak()
+            true
+        } else {
+            false
+        }
+    }
+
+    /**
      * Re-runs the join over files we cannot yet name.
      *
      * Only the weak ones: a file already attributed at full confidence has
@@ -359,9 +482,10 @@ class Repo private constructor(private val context: Context) {
                 )
             )
         }
+        val newSender = if (result.method == Attribution.Method.SELF_SENT) "You" else winner?.senderDisplay
         dao.setAttribution(
             id = f.id,
-            sender = if (result.method == Attribution.Method.SELF_SENT) "You" else winner?.senderDisplay,
+            sender = newSender,
             chat = winner?.chatName?.ifBlank { null },
             confidence = result.confidence,
             method = result.method,
@@ -369,6 +493,9 @@ class Repo private constructor(private val context: Context) {
             // only when it reached the disk.
             postedAt = winner?.postedAt ?: f.postedAt,
         )
+        if (deviceToken.isNotBlank() && f.remoteId > 0 && !newSender.isNullOrBlank() && result.confidence >= Attribution.MIN_NAMED) {
+            runCatching { api().setSender(f.remoteId, newSender) }
+        }
         return true
     }
 
@@ -455,14 +582,30 @@ class Repo private constructor(private val context: Context) {
      */
     suspend fun syncMatchingFirst(question: String, limit: Int = 5): Int {
         val tokens = queryTokens(question)
-        if (tokens.isEmpty()) return 0
-        val ranked = readableOnly(dao.pendingUpload(4000))
-            .map { f -> f to score(f.name, tokens) }
+        val pending = readableOnly(dao.pendingUpload(4000))
+        if (tokens.isEmpty()) {
+            // Questions like "what was the last doc" or "what arrived" don't name a file;
+            // sync the most recent pending files so the server has recent context.
+            return uploadAll(pending.take(limit))
+        }
+        val ranked = pending
+            .map { f ->
+                val nameScore = score(f.name, tokens)
+                val senderScore = f.senderName?.let { score(it, tokens) * 3 } ?: 0
+                val chatScore = f.chatName?.let { score(it, tokens) * 2 } ?: 0
+                val textScore = f.extractedText?.let { score(it, tokens) * 4 } ?: 0
+                f to (nameScore + senderScore + chatScore + textScore)
+            }
             .filter { it.second > 0 }
             .sortedByDescending { it.second }
             .take(limit)
             .map { it.first }
-        return uploadAll(ranked)
+        val sent = uploadAll(ranked)
+        // If question didn't match any filename/sender/chat, also ensure the top recent pending files are synced
+        if (sent == 0 && pending.isNotEmpty()) {
+            return uploadAll(pending.take(2))
+        }
+        return sent
     }
 
     private suspend fun uploadAll(pending: List<FileEntity>): Int = withContext(Dispatchers.IO) {
@@ -485,15 +628,22 @@ class Repo private constructor(private val context: Context) {
                 retire(f.id)
                 continue
             }
+            val extracted = f.extractedText ?: if (f.isImage || f.name.endsWith(".pdf", ignoreCase = true)) {
+                app.reyna.ocr.OnDeviceExtractor.extract(context, file, f.isImage)?.also {
+                    dao.updateExtractedText(f.id, it)
+                }
+            } else null
+
             val result = api.upload(
                 file = file,
                 fileName = f.name,
                 mimeType = mimeOf(f.name, f.isImage),
                 chatName = f.chatName,
-                senderName = if (f.confidence >= Attribution.MIN_NAMED) f.senderName else null,
+                senderName = if (f.confidence >= Attribution.MIN_NAMED && !f.senderName.isNullOrBlank()) f.senderName else null,
                 postedAtSeconds = f.postedAt / 1000,
                 confidence = f.confidence,
                 method = f.method,
+                extractedText = extracted,
             )
             result.onSuccess {
                 dao.markUploaded(f.id, it.remoteId, it.folder)
@@ -518,11 +668,15 @@ class Repo private constructor(private val context: Context) {
     /**
      * Stops trying to send a file, without pretending it reached the server.
      *
-     * The row keeps remoteId 0, which everywhere else already reads as "not on
-     * the server", so a retired file is never cited and never counted as
-     * synced. It only stops being asked about.
+     * Marks with remoteId -1 so it is retired from future queues without
+     * colliding with un-uploaded files (remoteId = 0).
      */
-    private suspend fun retire(id: Long) = dao.markUploaded(id, 0, null)
+    private suspend fun retire(id: Long) = dao.markUploaded(id, -1, null)
+
+    /** Resets files that were retired before image uploading was supported. */
+    suspend fun resetRetiredFiles(): Int = withContext(Dispatchers.IO) {
+        dao.resetRetiredFiles()
+    }
 
     /**
      * Asks a question and records both turns.
@@ -569,6 +723,9 @@ class Repo private constructor(private val context: Context) {
             dao.insertMessage(MessageEntity(text = question, fromUser = true, at = System.currentTimeMillis()))
         }
 
+        // Reconcile quickly so newly arrived WhatsApp files are indexed before matching
+        runCatching { reconcile() }
+
         // Send the few files this question is about, and nothing else.
         //
         // This used to run syncPending() as well, which walks up to four
@@ -590,7 +747,8 @@ class Repo private constructor(private val context: Context) {
         // real chips. Matched by name because the backend numbers files by its
         // own ids, which the phone does not share.
         val local = dao.allFiles()
-        var citedIds = answer?.files.orEmpty().mapNotNull { cited ->
+        val attachedFiles = answer?.files.orEmpty().takeIf { answer?.intent == "fetch" }.orEmpty()
+        var citedIds = attachedFiles.mapNotNull { cited ->
             local.firstOrNull { it.name.equals(cited.name, ignoreCase = true) }?.id
         }
         var citations = answer?.citations.orEmpty()
@@ -634,7 +792,7 @@ class Repo private constructor(private val context: Context) {
                 fromUser = false,
                 at = System.currentTimeMillis(),
                 fileIds = citedIds.joinToString(","),
-                citations = encodeCitations(citations),
+                citations = encodeEvidence(citations, attachedFiles),
                 // A request that never landed is Reyna's own state, not an
                 // answer, so it gets the same treatment as running out of
                 // allowance rather than sitting in the conversation looking
@@ -658,12 +816,10 @@ class Repo private constructor(private val context: Context) {
             "find", "any", "the", "for", "with", "from", "that", "this", "file", "files",
             "pdf", "pdfs", "doc", "docs", "notes", "note", "can", "you", "me", "show",
             "tell", "what", "where", "which", "is", "are", "have", "please", "received", "get",
+            "did", "share", "shared", "send", "sent", "about", "who", "when", "how", "give",
         )
         return question.lowercase()
             .split(Regex("[^a-zA-Z0-9]+"))
-            // A bare digit is kept. "module 4" and "module 2" differ by
-            // exactly one character, and dropping it as too short is why a
-            // question about module 4 went looking for every module.
             .filter { it.isNotBlank() && it !in stopWords && (it.length > 1 || it[0].isDigit()) }
     }
 
@@ -705,8 +861,11 @@ class Repo private constructor(private val context: Context) {
      * Hand rolled rather than pulling in a serialisation library for one type.
      * The app has no JSON dependency and this is not a reason to acquire one.
      */
-    private fun encodeCitations(cs: List<ReynaApi.Citation>): String {
-        if (cs.isEmpty()) return ""
+    private fun encodeEvidence(
+        cs: List<ReynaApi.Citation>,
+        files: List<ReynaApi.CitedFile> = emptyList(),
+    ): String {
+        if (cs.isEmpty() && files.isEmpty()) return ""
         val arr = org.json.JSONArray()
         for (c in cs) {
             arr.put(
@@ -720,6 +879,18 @@ class Repo private constructor(private val context: Context) {
                     .put("context", c.context)
                     .put("confidence", c.confidence)
                     .put("page", c.page)
+            )
+        }
+        for (file in files) {
+            arr.put(
+                org.json.JSONObject()
+                    .put("kind", "file")
+                    .put("file_id", file.id)
+                    .put("file_name", file.name)
+                    .put("folder", file.folder ?: "")
+                    .put("sender", file.sender ?: "")
+                    .put("shared_at", file.sharedAt ?: "")
+                    .put("confidence", file.confidence)
             )
         }
         return arr.toString()
@@ -904,7 +1075,7 @@ class Repo private constructor(private val context: Context) {
             "ppt", "pptx", "odp",
             "xls", "xlsx", "ods", "csv",
             "txt", "md", "log", "json", "xml", "html", "htm", "epub",
-        )
+        ) + IMAGE_EXT
 
         fun isReadable(name: String): Boolean =
             name.substringAfterLast('.', "").lowercase() in READABLE_EXT

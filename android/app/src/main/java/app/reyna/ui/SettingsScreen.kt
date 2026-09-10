@@ -105,7 +105,7 @@ fun SettingsScreen(vm: ReynaViewModel, onImport: () -> Unit) {
 
         item { SectionHeader("Backend") }
         item {
-            FieldRow("Server", backend, "http://10.0.2.2:8080") {
+            FieldRow("Server", backend, "https://your-server-domain") {
                 backend = it; vm.backendUrl = it
             }
         }

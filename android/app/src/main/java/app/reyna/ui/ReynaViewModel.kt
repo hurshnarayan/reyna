@@ -12,6 +12,7 @@ import app.reyna.data.Repo
 import app.reyna.net.ReynaApi
 import app.reyna.permissions.Permissions
 import app.reyna.search.SearchableFile
+import app.reyna.search.FileSearch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -177,7 +178,7 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
                         // stored with the message, so an answer always shows
                         // the current attribution rather than what was true
                         // when it was written.
-                        files = m.fileIds
+                        files = (m.fileIds
                             .split(",")
                             .mapNotNull { it.trim().toLongOrNull() }
                             .mapNotNull { id -> files.firstOrNull { it.id == id } }
@@ -190,8 +191,10 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
                                     whenText = relativeTime(f.postedAt),
                                     confidence = f.confidence,
                                     isImage = f.isImage,
+                                    remoteId = f.remoteId,
                                 )
-                            },
+                            } + decodeFetchedFiles(m.citations, files))
+                            .distinctBy { it.fileName.lowercase() },
                     )
                 }
             }
@@ -455,8 +458,26 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
             whenText = relativeTime(f.postedAt),
             confidence = f.confidence,
             isImage = f.isImage,
+            path = f.path,
+            sizeBytes = f.sizeBytes,
+            mtime = f.mtime,
+            postedAt = f.postedAt,
+            isSent = f.isSent,
+            extractedText = f.extractedText,
+            remoteId = f.remoteId,
         )
     }
+
+    /** Content candidates from Room FTS; final weighting stays in FileSearch. */
+    suspend fun contentSearchIds(query: String): Set<Long> =
+        repo.searchContentIds(FileSearch.contentIndexQuery(query))
+
+    /** Returns local bytes for preview, restoring an uploaded file if needed. */
+    suspend fun previewPath(file: SearchableFile): String? = repo.previewFile(
+        localPath = file.path,
+        remoteId = file.remoteId,
+        fileName = file.fileName,
+    )?.absolutePath
 
     /**
      * Finds the local row a citation refers to.
@@ -522,6 +543,53 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
                 app.startActivity(intent)
             }.onFailure { _toast.value = "No app on this phone can open that file" }
         }
+    }
+
+    /** Opens a chat attachment, restoring backend-only fetch results into cache first. */
+    fun openChatFile(file: FoundFile) {
+        viewModelScope.launch {
+            val local = when {
+                file.id > 0L -> _files.value.firstOrNull { it.id == file.id }
+                else -> localFileFor(file.remoteId, file.fileName)
+            }
+            val cached = repo.previewFile(
+                localPath = local?.path.orEmpty(),
+                remoteId = local?.remoteId?.takeIf { it > 0L } ?: file.remoteId,
+                fileName = file.fileName,
+            )
+            if (cached == null) {
+                _toast.value = "Could not download that file"
+                return@launch
+            }
+            openPath(cached, file.fileName, file.isImage)
+        }
+    }
+
+    /** Resolves a chat result for press-and-hold Quick Look. */
+    suspend fun chatPreviewPath(file: FoundFile): String? {
+        val local = when {
+            file.id > 0L -> _files.value.firstOrNull { it.id == file.id }
+            else -> localFileFor(file.remoteId, file.fileName)
+        }
+        return repo.previewFile(
+            localPath = local?.path.orEmpty(),
+            remoteId = local?.remoteId?.takeIf { it > 0L } ?: file.remoteId,
+            fileName = file.fileName,
+        )?.absolutePath
+    }
+
+    private fun openPath(file: java.io.File, name: String, isImage: Boolean) {
+        val app = getApplication<Application>()
+        runCatching {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                app, "${app.packageName}.files", file,
+            )
+            app.startActivity(
+                Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(uri, mimeOf(name, isImage))
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }.onFailure { _toast.value = "No app on this phone can open that file" }
     }
 
     /**
@@ -819,6 +887,52 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
                     confidence = o.optDouble("confidence", 0.0),
                     page = o.optInt("page", 1).coerceAtLeast(1),
                 )
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    /** Fetch attachments share the evidence JSON so old Room rows need no schema rewrite. */
+    private fun decodeFetchedFiles(json: String, localFiles: List<FileEntity>): List<FoundFile> {
+        if (json.isBlank()) return emptyList()
+        return runCatching {
+            val arr = org.json.JSONArray(json)
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                if (o.optString("kind") != "file") return@mapNotNull null
+                val name = o.optString("file_name")
+                if (name.isBlank()) return@mapNotNull null
+                val remoteId = o.optLong("file_id", 0)
+                val local = localFiles.firstOrNull {
+                    it.name.equals(name, ignoreCase = true) ||
+                        (remoteId > 0 && it.remoteId == remoteId)
+                }
+                if (local != null) {
+                    FoundFile(
+                        id = local.id,
+                        fileName = local.name,
+                        senderName = local.senderName,
+                        chatName = local.chatName,
+                        whenText = relativeTime(local.postedAt),
+                        confidence = local.confidence,
+                        isImage = local.isImage,
+                        remoteId = local.remoteId,
+                    )
+                } else {
+                    val sender = o.optString("sender").ifBlank { null }
+                    val folder = o.optString("folder").ifBlank { null }
+                    FoundFile(
+                        id = 0,
+                        remoteId = remoteId,
+                        fileName = name,
+                        senderName = sender,
+                        chatName = null,
+                        whenText = "",
+                        confidence = o.optDouble("confidence", 0.0),
+                        isImage = app.reyna.attribution.Attribution.isImage(name),
+                        subtitle = listOfNotNull(sender, folder).joinToString(" · ")
+                            .ifBlank { "Available in Reyna" },
+                    )
+                }
             }
         }.getOrDefault(emptyList())
     }
