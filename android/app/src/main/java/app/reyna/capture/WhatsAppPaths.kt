@@ -56,6 +56,17 @@ object WhatsAppPaths {
         }
     }
 
+    /** Roots the periodic reconciliation scan walks recursively. */
+    fun scanRoots(): List<File> = buildList {
+        for (pkg in PACKAGES) {
+            val base = root(pkg)
+            if (!base.isDirectory) continue
+            for (dir in MEDIA_DIRS) {
+                File(base, dir).takeIf { it.isDirectory }?.let(::add)
+            }
+        }
+    }
+
     /** Whether this path sits under a `/Sent/` folder. */
     fun isSent(file: File): Boolean = file.parentFile?.name == SENT
 
