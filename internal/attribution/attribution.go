@@ -130,6 +130,12 @@ func WANameCounter(diskName string) (int, bool) {
 	return n, err == nil
 }
 
+func isImageFile(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") ||
+		strings.HasSuffix(lower, ".png") || strings.HasSuffix(lower, ".webp")
+}
+
 // Attribute matches one file against the events we know about.
 //
 // The chain runs strongest first and collects every candidate rather than
@@ -157,6 +163,13 @@ func Attribute(f File, events []Event, zone *time.Location) Result {
 
 	var candidates []Link
 	for _, e := range events {
+		if strings.EqualFold(e.ChatName, "WhatsApp") || strings.EqualFold(e.SenderDisplay, "WhatsApp") {
+			continue
+		}
+		if strings.TrimSpace(e.ChatName) == "" && strings.TrimSpace(e.SenderDisplay) == "" {
+			continue
+		}
+
 		dt := e.PostedAt.Sub(f.MTime)
 		if dt < 0 {
 			dt = -dt
@@ -175,6 +188,12 @@ func Attribute(f File, events []Event, zone *time.Location) Result {
 		// The filename appears inside the message text.
 		if diskLower != "" && strings.Contains(strings.ToLower(e.Text), diskLower) && dt <= twoHours {
 			candidates = append(candidates, Link{f.ID, e.ID, model.AttrNotification, 0.75})
+			continue
+		}
+
+		// High-confidence temporal notification match for unnamed media attachments (e.g. photos)
+		if isImageFile(f.DiskName) && e.HasAttachment && e.AttachmentName == "" && dt <= 5*time.Minute {
+			candidates = append(candidates, Link{f.ID, e.ID, model.AttrNotification, 0.85})
 			continue
 		}
 
@@ -234,9 +253,38 @@ func Attribute(f File, events []Event, zone *time.Location) Result {
 	}
 
 	var best *Link
+	var bestEvent *Event
+	var bestGap time.Duration
 	for i := range candidates {
-		if best == nil || candidates[i].Confidence > best.Confidence {
-			best = &candidates[i]
+		c := &candidates[i]
+		e := findEvent(events, c.EventID)
+		gap := time.Duration(1<<63 - 1)
+		if e != nil {
+			gap = e.PostedAt.Sub(f.MTime)
+			if gap < 0 {
+				gap = -gap
+			}
+		}
+
+		better := false
+		if best == nil {
+			better = true
+		} else if c.Confidence > best.Confidence {
+			better = true
+		} else if c.Confidence == best.Confidence {
+			cHasSender := e != nil && strings.TrimSpace(e.SenderDisplay) != ""
+			bestHasSender := bestEvent != nil && strings.TrimSpace(bestEvent.SenderDisplay) != ""
+			if cHasSender && !bestHasSender {
+				better = true
+			} else if cHasSender == bestHasSender && gap < bestGap {
+				better = true
+			}
+		}
+
+		if better {
+			best = c
+			bestEvent = e
+			bestGap = gap
 		}
 	}
 	return Result{FileID: f.ID, Best: best, Candidates: candidates}
