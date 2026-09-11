@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -2168,6 +2169,42 @@ func (s *Server) ambiguousCandidates(scored []repository.ScoredFile) []model.Can
 	if len(rivals) < 2 {
 		return nil
 	}
+
+	// Deduplication & Subject Ambiguity Guard:
+	// If all rivals are copies/versions of the same file (same filename or normalized name),
+	// or all rivals belong to the exact same subject/folder, there is no real ambiguity
+	// ("they are about different things"). The ranking should pick the top match directly.
+	normName := func(name string) string {
+		name = strings.ToLower(name)
+		name = strings.TrimSuffix(name, filepath.Ext(name))
+		var b strings.Builder
+		for _, r := range name {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+				b.WriteRune(r)
+			}
+		}
+		res := b.String()
+		res = strings.TrimSuffix(res, "1")
+		res = strings.TrimSuffix(res, "2")
+		res = strings.TrimSuffix(res, "v2")
+		return res
+	}
+
+	uniqueSubjects := make(map[string]bool)
+	uniqueNormalizedNames := make(map[string]bool)
+	for _, sf := range rivals {
+		uniqueSubjects[strings.ToLower(strings.TrimSpace(sf.Subject))] = true
+		uniqueNormalizedNames[normName(sf.FileName)] = true
+	}
+	// If all candidates are copies/versions of the same file, do not pop choice modal.
+	if len(uniqueNormalizedNames) < 2 {
+		return nil
+	}
+	// If all candidates are in the exact same folder/category, do not pop choice modal.
+	if len(uniqueSubjects) < 2 {
+		return nil
+	}
+
 	if len(rivals) > maxCandidates {
 		rivals = rivals[:maxCandidates]
 	}
@@ -2644,11 +2681,14 @@ func plural(n int, unit string) string {
 	return fmt.Sprintf("%d %ss", n, unit)
 }
 
-// isFactualQuestion returns true if the query is asking a direct question
+// isFactualQuestion returns true if the query is asking a direct question or travel route
 // where the user wants information or an answer, rather than just browsing a file.
 func isFactualQuestion(query string) bool {
 	q := strings.ToLower(strings.TrimSpace(query))
 	if strings.HasSuffix(q, "?") {
+		return true
+	}
+	if strings.Contains(q, " from ") && strings.Contains(q, " to ") {
 		return true
 	}
 	starters := []string{
