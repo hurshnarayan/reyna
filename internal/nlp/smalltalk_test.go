@@ -3,7 +3,7 @@ package nlp
 import "testing"
 
 func TestIsSmallTalk(t *testing.T) {
-	yes := []string{"hi", "Hello!", "hey there", "thanks", "thanks a lot", "ok", "good morning", "bye"}
+	yes := []string{"hi", "Hello!", "hey there", "thanks", "thanks a lot", "ok", "good morning", "bye", "dhanyawad", "shukriya", "namaste", "नमस्ते", "धन्यवाद"}
 	for _, s := range yes {
 		if !IsSmallTalk(s) {
 			t.Errorf("expected small talk: %q", s)

@@ -1,8 +1,10 @@
 package app.reyna.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,23 +22,44 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Sort
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -51,33 +74,89 @@ import app.reyna.search.FileHit
 import app.reyna.search.FileSearch
 import app.reyna.search.FuzzySearch
 import app.reyna.search.SearchableFile
+import app.reyna.search.SortMode
 import app.reyna.ui.components.ConfidenceDot
+import app.reyna.ui.components.FileThumbnail
+import app.reyna.ui.components.FileTypeFilter
+import app.reyna.ui.components.QuickLookModal
+import app.reyna.ui.components.SortAndFilterDrawer
 import app.reyna.ui.theme.Dimens
 import app.reyna.ui.theme.reynaColors
 
 /**
- * The file list, with search.
+ * The file list, with search and sorting.
  *
  * Reyna's filenames are hostile to exact search: half are
  * `DOC-20260818-WA0041.pdf`, and the named ones get typed from memory months
  * later. So the box is fuzzy by default and shows what matched, which is what
  * makes a loose hit legible rather than mysterious.
+ *
+ * Files are sorted by captured latest by default, with additional modes for
+ * date, name, kind, and size. Long-pressing any row triggers a macOS Quick Look
+ * preview popup.
  */
 @Composable
 fun FilesScreen(
     files: List<SearchableFile>,
+    searchContentIds: suspend (String) -> Set<Long> = { emptySet() },
     onOpen: (SearchableFile) -> Unit = {},
     onAskWhoShared: (SearchableFile) -> Unit = {},
+    loadPreviewPath: suspend (SearchableFile) -> String? = { file ->
+        file.path.takeIf { java.io.File(it).isFile }
+    },
 ) {
     val c = reynaColors
     var query by remember { mutableStateOf("") }
-    var fuzzy by remember { mutableStateOf(true) }
+    var indexedQuery by remember { mutableStateOf("") }
+    var contentCandidateIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var chatFilter by remember { mutableStateOf<String?>(null) }
+    var sortMode by remember { mutableStateOf(SortMode.LATEST) }
+    var sortAscending by remember { mutableStateOf(false) }
+    var quickLookFile by remember { mutableStateOf<SearchableFile?>(null) }
+    var lastQuickLookFile by remember { mutableStateOf<SearchableFile?>(null) }
+    if (quickLookFile != null) {
+        lastQuickLookFile = quickLookFile
+    }
+    var sortDrawerOpen by remember { mutableStateOf(false) }
+    var typeFilter by remember { mutableStateOf(FileTypeFilter.ALL) }
 
-    val allHits = remember(query, fuzzy, files) { FileSearch.search(query, files, fuzzy) }
-    val facets = remember(allHits) { FileSearch.chatFacets(allHits) }
-    val hits = remember(allHits, chatFilter) {
-        if (chatFilter == null) allHits else allHits.filter { it.file.chatName == chatFilter }
+    LaunchedEffect(query, files) {
+        val requested = query.trim()
+        if (requested.isEmpty()) {
+            indexedQuery = ""
+            contentCandidateIds = emptySet()
+        } else {
+            // Debounce typing; SQLite FTS is fast, but obsolete queries should
+            // not compete with the one the person is still entering.
+            delay(120)
+            contentCandidateIds = runCatching { searchContentIds(requested) }.getOrDefault(emptySet())
+            indexedQuery = requested
+        }
+    }
+
+    val indexedCandidates = if (indexedQuery == query.trim()) contentCandidateIds else emptySet()
+    val allHits = remember(query, indexedCandidates, files) {
+        FileSearch.search(query, files, fuzzy = true, contentCandidateIds = indexedCandidates)
+    }
+    val typeFilteredHits = remember(allHits, typeFilter) {
+        when (typeFilter) {
+            FileTypeFilter.ALL -> allHits
+            FileTypeFilter.DOCUMENTS -> allHits.filter { !it.file.isImage }
+            FileTypeFilter.PHOTOS -> allHits.filter { it.file.isImage }
+        }
+    }
+    val facets = remember(typeFilteredHits) { FileSearch.chatFacets(typeFilteredHits) }
+    val filtered = remember(typeFilteredHits, chatFilter) {
+        if (chatFilter == null) typeFilteredHits else typeFilteredHits.filter { it.file.chatName == chatFilter }
+    }
+    val hits = remember(filtered, sortMode, sortAscending, query) {
+        // When searching with non-empty query and default LATEST descending,
+        // search relevance score is preserved unless user picked a sort mode.
+        if (query.isNotBlank() && sortMode == SortMode.LATEST && !sortAscending) {
+            filtered
+        } else {
+            FileSearch.sortFiles(filtered, sortMode, sortAscending)
+        }
     }
 
     // Only computed when a search fails, since it walks the whole vocabulary.
@@ -86,53 +165,152 @@ fun FilesScreen(
             FuzzySearch.suggestions(query.trim(), FileSearch.vocabulary(files))
         } else emptyList()
     }
-    // A strict search that finds nothing is usually a spelling the user is sure
-    // about, so offering fuzzy is more useful than offering corrections.
-    val fuzzyWouldHelp = remember(query, fuzzy, allHits) {
-        !fuzzy && allHits.isEmpty() && query.isNotBlank() &&
-            FileSearch.search(query, files, fuzzy = true).isNotEmpty()
-    }
-
-    Column(Modifier.fillMaxSize().background(c.background)) {
-        SearchBar(
-            query = query,
-            fuzzy = fuzzy,
-            onQuery = { query = it; chatFilter = null },
-            onToggleFuzzy = { fuzzy = !fuzzy },
-        )
-
-        if (query.isNotBlank() && allHits.isNotEmpty()) {
-            Text(
-                "Showing ${hits.size} of ${files.size} files",
-                fontSize = 12.sp,
-                color = c.onSurfaceMuted,
-                modifier = Modifier.padding(horizontal = Dimens.page, vertical = 8.dp),
+    Box(Modifier.fillMaxSize().background(c.background)) {
+        Column(Modifier.fillMaxSize()) {
+            SearchBar(
+                query = query,
+                onQuery = { query = it; chatFilter = null },
             )
-        }
 
-        if (facets.size > 1) {
-            FacetRow(
-                facets = facets,
-                total = allHits.size,
-                selected = chatFilter,
-                onSelect = { chatFilter = it },
-            )
-        }
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Dimens.page, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                val hasFilter = typeFilter != FileTypeFilter.ALL || sortMode != SortMode.LATEST || sortAscending
+                val interactionSource = remember { MutableInteractionSource() }
+                val isPressed by interactionSource.collectIsPressedAsState()
+                val btnScale by animateFloatAsState(
+                    targetValue = if (isPressed) 0.94f else 1.0f,
+                    animationSpec = spring(dampingRatio = 0.75f, stiffness = 600f),
+                    label = "sortFilterScale",
+                )
 
-        if (allHits.isEmpty() && query.isNotBlank()) {
-            EmptyResults(
-                query = query.trim(),
-                suggestions = suggestions,
-                offerFuzzy = fuzzyWouldHelp,
-                onTryFuzzy = { fuzzy = true },
-                onSuggestion = { query = it },
-            )
-        } else {
-            LazyColumn(Modifier.fillMaxSize()) {
-                items(hits.size) { i -> ResultRow(hits[i], onOpen, onAskWhoShared) }
-                item { Spacer(Modifier.height(16.dp)) }
+                Box(
+                    Modifier
+                        .graphicsLayer {
+                            scaleX = btnScale
+                            scaleY = btnScale
+                        }
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (hasFilter) c.accent.copy(alpha = 0.12f) else c.surface)
+                        .border(
+                            1.dp,
+                            if (hasFilter) c.accent else c.border,
+                            RoundedCornerShape(8.dp),
+                        )
+                        .clickable(interactionSource = interactionSource, indication = null) {
+                            sortDrawerOpen = true
+                        }
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Rounded.Tune,
+                            contentDescription = "Sort & Filter",
+                            tint = if (hasFilter) c.accent else c.onSurface,
+                            modifier = Modifier.size(15.dp),
+                        )
+                        Spacer(Modifier.width(5.dp))
+                        Text(
+                            text = if (typeFilter != FileTypeFilter.ALL) typeFilter.label else "Filter",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (hasFilter) c.accent else c.onSurface,
+                        )
+                    }
+                }
+
+                SortRow(
+                    currentMode = sortMode,
+                    ascending = sortAscending,
+                    onSelectMode = { mode ->
+                        if (sortMode == mode) {
+                            sortAscending = !sortAscending
+                        } else {
+                            sortMode = mode
+                            sortAscending = (mode == SortMode.NAME)
+                        }
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            if (query.isNotBlank() && allHits.isNotEmpty()) {
+                Text(
+                    "Showing ${hits.size} of ${files.size} files",
+                    fontSize = 12.sp,
+                    color = c.onSurfaceMuted,
+                    modifier = Modifier.padding(horizontal = Dimens.page, vertical = 6.dp),
+                )
+            }
+
+            if (facets.size > 1) {
+                FacetRow(
+                    facets = facets,
+                    total = allHits.size,
+                    selected = chatFilter,
+                    onSelect = { chatFilter = it },
+                )
+            }
+
+            if (allHits.isEmpty() && query.isNotBlank()) {
+                EmptyResults(
+                    query = query.trim(),
+                    suggestions = suggestions,
+                    onSuggestion = { query = it },
+                )
+            } else {
+                LazyColumn(Modifier.fillMaxSize()) {
+                    items(hits.size, key = { hits[it].file.id }) { i ->
+                        ResultRow(
+                            hit = hits[i],
+                            onOpen = onOpen,
+                            onHoldStart = { quickLookFile = it },
+                            onHoldEnd = { quickLookFile = null },
+                            onAskWhoShared = onAskWhoShared,
+                            loadPreviewPath = loadPreviewPath,
+                        )
+                    }
+                    item { Spacer(Modifier.height(16.dp)) }
+                }
             }
         }
+
+        AnimatedVisibility(
+            visible = quickLookFile != null,
+            enter = fadeIn(tween(120)) + scaleIn(tween(120), initialScale = 0.95f),
+            exit = fadeOut(tween(80)) + scaleOut(tween(80), targetScale = 0.95f),
+        ) {
+            lastQuickLookFile?.let { file ->
+                QuickLookModal(
+                    file = file,
+                    loadPreviewPath = loadPreviewPath,
+                    onDismiss = { quickLookFile = null },
+                    onOpen = { onOpen(file) },
+                    onAskWhoShared = { onAskWhoShared(file) },
+                )
+            }
+        }
+
+        SortAndFilterDrawer(
+            visible = sortDrawerOpen,
+            currentSort = sortMode,
+            ascending = sortAscending,
+            currentType = typeFilter,
+            totalFiles = files.size,
+            onSelectSort = { mode, asc ->
+                sortMode = mode
+                sortAscending = asc
+            },
+            onSelectType = { type ->
+                typeFilter = type
+            },
+            onDismiss = { sortDrawerOpen = false },
+        )
     }
 }
 
@@ -146,9 +324,7 @@ fun FilesScreen(
 @Composable
 private fun SearchBar(
     query: String,
-    fuzzy: Boolean,
     onQuery: (String) -> Unit,
-    onToggleFuzzy: () -> Unit,
 ) {
     val c = reynaColors
     Row(
@@ -165,7 +341,7 @@ private fun SearchBar(
         Spacer(Modifier.width(10.dp))
         Box(Modifier.weight(1f)) {
             if (query.isEmpty()) {
-                Text("Search files, people, chats", fontSize = 15.sp, color = c.onSurfaceMuted)
+                Text("Search names or text inside files", fontSize = 15.sp, color = c.onSurfaceMuted)
             }
             BasicTextField(
                 value = query,
@@ -174,23 +350,6 @@ private fun SearchBar(
                 textStyle = TextStyle(fontSize = 15.sp, color = c.onSurface),
                 cursorBrush = SolidColor(c.accent),
                 modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        Spacer(Modifier.width(6.dp))
-        // Fuzzy matching, named rather than symbolised. A bold tilde in a
-        // tinted circle told nobody what it did, and it was the loudest thing
-        // on a screen whose job is to get out of the way of the filenames.
-        Box(
-            Modifier
-                .clip(RoundedCornerShape(7.dp))
-                .clickable { onToggleFuzzy() }
-                .padding(horizontal = 8.dp, vertical = 3.dp),
-        ) {
-            Text(
-                "Fuzzy",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                color = if (fuzzy) c.accent else c.onSurfaceFaint,
             )
         }
         if (query.isNotEmpty()) {
@@ -260,29 +419,121 @@ private fun Chip(label: String, count: Int, active: Boolean, onClick: () -> Unit
 }
 
 @Composable
+private fun SortRow(
+    currentMode: SortMode,
+    ascending: Boolean,
+    onSelectMode: (SortMode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = reynaColors
+    Row(
+        modifier
+            .horizontalScroll(rememberScrollState())
+            .padding(vertical = 3.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Rounded.Sort,
+            contentDescription = "Sort",
+            tint = c.onSurfaceMuted,
+            modifier = Modifier.size(15.dp),
+        )
+        SortMode.entries.forEach { mode ->
+            val isActive = currentMode == mode
+            val arrow = if (isActive) {
+                if (mode == SortMode.NAME) {
+                    if (ascending) " A→Z" else " Z→A"
+                } else {
+                    if (ascending) " ↑" else " ↓"
+                }
+            } else ""
+
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (isActive) c.accent.copy(alpha = 0.16f) else c.surface)
+                    .border(
+                        1.dp,
+                        if (isActive) c.accent else c.border,
+                        RoundedCornerShape(8.dp),
+                    )
+                    .clickable { onSelectMode(mode) }
+                    .padding(horizontal = 9.dp, vertical = 5.dp),
+            ) {
+                Text(
+                    text = "${mode.label}$arrow",
+                    fontSize = 12.sp,
+                    fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (isActive) c.accent else c.onSurfaceMuted,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun ResultRow(
     hit: FileHit,
     onOpen: (SearchableFile) -> Unit,
+    onHoldStart: (SearchableFile) -> Unit,
+    onHoldEnd: () -> Unit,
     onAskWhoShared: (SearchableFile) -> Unit,
+    loadPreviewPath: suspend (SearchableFile) -> String?,
 ) {
     val c = reynaColors
     val f = hit.file
+    val haptic = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+    var isPressed by remember { mutableStateOf(false) }
+
     Row(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = Dimens.page, vertical = 4.dp)
             .clip(RoundedCornerShape(11.dp))
-            .background(c.surface)
+            .background(if (isPressed) c.bubbleIncoming else c.surface)
             .border(1.dp, c.border, RoundedCornerShape(11.dp))
-            .clickable { onOpen(f) }
-            .padding(horizontal = 12.dp, vertical = 11.dp),
-        verticalAlignment = Alignment.Top,
+            .pointerInput(f) {
+                var isHeld = false
+                detectTapGestures(
+                    onTap = {
+                        if (!isHeld) {
+                            onOpen(f)
+                        }
+                    },
+                    onLongPress = {
+                        // Consumes Compose's long press to ensure onTap does not fire
+                    },
+                    onPress = {
+                        isHeld = false
+                        isPressed = true
+                        val holdJob = scope.launch {
+                            delay(220)
+                            isHeld = true
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onHoldStart(f)
+                        }
+                        try {
+                            tryAwaitRelease()
+                        } finally {
+                            holdJob.cancel()
+                            isPressed = false
+                            if (isHeld) {
+                                onHoldEnd()
+                            }
+                        }
+                    },
+                )
+            }
+            .padding(horizontal = 11.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            if (f.isImage) Icons.Rounded.Image else Icons.Rounded.Description,
-            null,
-            tint = c.onSurfaceFaint,
-            modifier = Modifier.size(19.dp).padding(top = 1.dp),
+        FileThumbnail(
+            file = f,
+            modifier = Modifier.size(44.dp),
+            cornerRadius = 8.dp,
+            loadPreviewPath = loadPreviewPath,
         )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
@@ -299,18 +550,43 @@ private fun ResultRow(
                 ConfidenceDot(f.confidence)
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    // The one place the attribution line comes from, so a result
-                    // can never print a name the confidence does not support.
                     Attribution.describe(f.confidence, f.senderName, f.chatName, f.whenText),
                     fontSize = 12.sp,
                     color = c.onSurfaceMuted,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (f.formattedSize.isNotBlank()) {
+                    Text(
+                        " · ${f.formattedSize}",
+                        fontSize = 12.sp,
+                        color = c.onSurfaceFaint,
+                        maxLines = 1,
+                    )
+                }
+            }
+            hit.reason?.let { reason ->
+                Spacer(Modifier.height(5.dp))
+                Text(
+                    reason.label,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = c.accent,
+                )
+            }
+            hit.snippet?.let { snippet ->
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    snippet,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                    color = c.onSurfaceMuted,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
             if (f.confidence < Attribution.MIN_NAMED) {
-                // The repair affordance sits where the gap is noticed.
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(6.dp))
                 Box(
                     Modifier
                         .clip(RoundedCornerShape(7.dp))
@@ -360,8 +636,6 @@ private fun highlight(text: String, spans: List<Int>, color: Color): AnnotatedSt
 private fun EmptyResults(
     query: String,
     suggestions: List<String>,
-    offerFuzzy: Boolean,
-    onTryFuzzy: () -> Unit,
     onSuggestion: (String) -> Unit,
 ) {
     val c = reynaColors
@@ -369,32 +643,14 @@ private fun EmptyResults(
         Modifier.fillMaxWidth().padding(horizontal = Dimens.page, vertical = 28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("No results for \"$query\"", fontSize = 15.sp, color = c.onSurface)
-        if (offerFuzzy || suggestions.isNotEmpty()) {
+        Text("Nothing matched \"$query\"", fontSize = 15.sp, color = c.onSurface)
+        if (suggestions.isNotEmpty()) {
             Spacer(Modifier.height(14.dp))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
             ) {
-                if (offerFuzzy) {
-                    Box(
-                        Modifier
-                            .clip(CircleShape)
-                            .background(c.bubbleOutgoing.copy(alpha = 0.14f))
-                            .clickable { onTryFuzzy() }
-                            .padding(horizontal = 12.dp, vertical = 7.dp),
-                    ) {
-                        Text(
-                            "Try fuzzy search",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = c.bubbleOutgoing,
-                        )
-                    }
-                }
-                if (suggestions.isNotEmpty()) {
-                    Text("Did you mean", fontSize = 13.sp, color = c.onSurfaceMuted)
-                }
+                Text("Did you mean", fontSize = 13.sp, color = c.onSurfaceMuted)
             }
             if (suggestions.isNotEmpty()) {
                 Spacer(Modifier.height(9.dp))

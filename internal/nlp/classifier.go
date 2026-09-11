@@ -944,36 +944,38 @@ Respond ONLY with JSON: {"content": "...", "summary": "..."}`, fileName, mimeTyp
 	return resp.Content, resp.Summary
 }
 
-// ── NLP Query Parsing (WHO/WHAT/WHEN/WHY) ──
-
-// ParseNLPQuery parses a natural language query into structured components.
-// Uses AI as primary parser, keyword as fallback (per PDF: "the main killer feature").
-func (c *Classifier) ParseNLPQuery(query string) (who, what, when, why string) {
-	return c.ParseNLPQueryWithHistory(query, nil)
+// ParsedNLPQuery represents the structured analysis of a search or retrieval query.
+type ParsedNLPQuery struct {
+	Who            string   `json:"who"`
+	What           string   `json:"what"`
+	When           string   `json:"when"`
+	Why            string   `json:"why"`
+	SearchTerms    []string `json:"search_terms"`
+	HasContentCues bool     `json:"has_content_cues"`
 }
 
-// ParseNLPQueryWithHistory parses a query with recent conversation history for pronoun/context resolution.
-func (c *Classifier) ParseNLPQueryWithHistory(query string, history []model.ChatMessageContext) (who, what, when, why string) {
-	// Primary: Use LLM for accurate parsing of any natural language with context
+// ParseNLPQueryDetailed parses a natural language query with conversation history into structured filters
+// including expanded search terms, alias resolution, and content-cue detection.
+func (c *Classifier) ParseNLPQueryDetailed(query string, history []model.ChatMessageContext) ParsedNLPQuery {
 	if c.IsEnabled() {
-		who, what, when, why = c.llmParseQueryWithHistory(query, history)
-		if who != "" || what != "" {
-			if strings.EqualFold(strings.TrimSpace(who), "reyna") {
-				if what == "" {
-					what = "reyna"
-				} else if !strings.Contains(strings.ToLower(what), "reyna") {
-					what = "reyna " + what
-				}
-				who = ""
+		p := c.llmParseQueryDetailedWithHistory(query, history)
+		if strings.EqualFold(strings.TrimSpace(p.Who), "reyna") {
+			if p.What == "" {
+				p.What = "reyna"
+			} else if !strings.Contains(strings.ToLower(p.What), "reyna") {
+				p.What = "reyna " + p.What
 			}
-			// Drop generic filler words from WHAT that would over-filter results
-			what = c.cleanGenericWhat(what)
-			return
+			p.Who = ""
+		}
+		p.What = c.cleanGenericWhat(p.What)
+		p.Why = normalizeRetrievalIntent(query, p.Why)
+		if p.Why == "smalltalk" || p.Who != "" || p.What != "" || len(p.SearchTerms) > 0 {
+			return p
 		}
 	}
 
 	// Fallback: keyword parsing (free, instant)
-	who, what, when, why = c.keywordParseQuery(query)
+	who, what, when, why := c.keywordParseQuery(query)
 	if strings.EqualFold(strings.TrimSpace(who), "reyna") {
 		if what == "" {
 			what = "reyna"
@@ -983,7 +985,59 @@ func (c *Classifier) ParseNLPQueryWithHistory(query string, history []model.Chat
 		who = ""
 	}
 	what = c.cleanGenericWhat(what)
-	return
+	why = normalizeRetrievalIntent(query, why)
+	var terms []string
+	if what != "" {
+		terms = append(terms, what)
+	}
+	return ParsedNLPQuery{
+		Who:            who,
+		What:           what,
+		When:           when,
+		Why:            why,
+		SearchTerms:    terms,
+		HasContentCues: false,
+	}
+}
+
+// ParseNLPQuery parses a natural language query into structured components.
+// Uses AI as primary parser, keyword as fallback (per PDF: "the main killer feature").
+func (c *Classifier) ParseNLPQuery(query string) (who, what, when, why string) {
+	return c.ParseNLPQueryWithHistory(query, nil)
+}
+
+// ParseNLPQueryWithHistory parses a query with recent conversation history for pronoun/context resolution.
+func (c *Classifier) ParseNLPQueryWithHistory(query string, history []model.ChatMessageContext) (who, what, when, why string) {
+	p := c.ParseNLPQueryDetailed(query, history)
+	return p.Who, p.What, p.When, p.Why
+}
+
+// normalizeRetrievalIntent keeps the delivery contract independent of which
+// parser produced WHY. "Get me" and "send me" ask for the file itself; treating
+// them as search/QA made Reyna describe matches or ask the user to choose even
+// after the requested WhatsApp file had already reached the backend.
+func normalizeRetrievalIntent(query, parsed string) string {
+	if parsed == "fetch" {
+		return parsed
+	}
+
+	q := strings.ToLower(strings.Trim(strings.TrimSpace(query), "?.,! "))
+	for {
+		before := q
+		for _, prefix := range []string{"hey reyna ", "reyna, ", "reyna ", "please ", "can you ", "could you "} {
+			q = strings.TrimSpace(strings.TrimPrefix(q, prefix))
+		}
+		if q == before {
+			break
+		}
+	}
+
+	for _, request := range []string{"fetch", "get me", "send me"} {
+		if q == request || strings.HasPrefix(q, request+" ") {
+			return "fetch"
+		}
+	}
+	return parsed
 }
 
 // cleanGenericWhat removes filler words from WHAT that would incorrectly filter results.
@@ -1090,7 +1144,9 @@ func (c *Classifier) keywordParseQuery(query string) (who, what, when, why strin
 	}
 
 	// WHY patterns
-	if strings.Contains(lower, "find") || strings.Contains(lower, "search") || strings.Contains(lower, "get") {
+	if strings.HasPrefix(lower, "fetch") || strings.Contains(lower, "fetch") {
+		why = "fetch"
+	} else if strings.Contains(lower, "find") || strings.Contains(lower, "search") || strings.Contains(lower, "get") {
 		why = "search"
 	} else if strings.Contains(lower, "do we have") || strings.Contains(lower, "has anyone") || strings.Contains(lower, "is there") {
 		why = "check_existence"
@@ -1103,7 +1159,9 @@ func (c *Classifier) keywordParseQuery(query string) (who, what, when, why strin
 	// WHAT — if not already set, clean up remaining text
 	if what == "" && lower != "" {
 		what = stripPhrases(lower, []string{
+			"please send me", "please get me", "please fetch me",
 			"can you find me", "can you show me", "can you get me", "can you find", "can you",
+			"fetch me", "fetch",
 			"find me", "show me", "get me", "search for", "find", "search",
 			"has anyone shared", "do we have", "share", "shared", "upload", "uploaded",
 			"sent", "send", "received", "receive", "about", "any", "the", "some",
@@ -1116,10 +1174,10 @@ func (c *Classifier) keywordParseQuery(query string) (who, what, when, why strin
 }
 
 func (c *Classifier) llmParseQuery(query string) (who, what, when, why string) {
-	return c.llmParseQueryWithHistory(query, nil)
+	return c.ParseNLPQueryWithHistory(query, nil)
 }
 
-func (c *Classifier) llmParseQueryWithHistory(query string, history []model.ChatMessageContext) (who, what, when, why string) {
+func (c *Classifier) llmParseQueryDetailedWithHistory(query string, history []model.ChatMessageContext) ParsedNLPQuery {
 	var histSection string
 	if len(history) > 0 {
 		var histBuf strings.Builder
@@ -1138,7 +1196,7 @@ func (c *Classifier) llmParseQueryWithHistory(query string, history []model.Chat
 		histSection = histBuf.String()
 	}
 
-	prompt := fmt.Sprintf(`You are a query parser for a file retrieval system covering documents shared in a person's chats.
+	prompt := fmt.Sprintf(`You are an intelligent query parser for a personal document retrieval assistant covering files shared in chats (invoices, tickets, receipts, IDs, notes, medical reports, contracts, spreadsheets, photos, etc.).
 Parse this natural language query into structured search filters.
 
 %sCurrent Query: "%s"
@@ -1146,41 +1204,60 @@ Parse this natural language query into structured search filters.
 Rules:
 - "who": Extract the PERSON'S NAME if the user is asking about files from a specific sender person. Leave empty if no person mentioned.
   IMPORTANT: The assistant/app itself is named "Reyna". "Reyna" is NEVER a sender person. If the user mentions "Reyna" (e.g. "Reyna script", "Reyna document", "hey Reyna find X"), "Reyna" belongs in "what" if it is part of the topic/document name, or ignored if used as a greeting. NEVER set "who" to "Reyna".
-- "what": Extract the SPECIFIC TOPIC, KEYWORD, or SUBJECT being searched.
-  CONTEXT RESOLUTION RULE: If the query uses pronouns or follow-up phrases (e.g. "can you find it?", "what does it say?", "explain module 1 from that", "open it", "summarize it", "who sent it?", "send that to me", "where is that exam?"), RESOLVE the referred topic or file from the Conversation History and output that specific topic/filename in "what". If there is no previous context and the user uses generic words like "notes", "files", "stuff", leave this empty.
+- "what": Extract the SPECIFIC TOPIC, KEYWORD, or SUBJECT being searched. Correct any obvious typos (e.g. "tikcet" -> "ticket", "depature" -> "departure").
+  CONTEXT RESOLUTION RULE: If the query uses pronouns or follow-up phrases (e.g. "can you find it?", "what does it say?", "explain module 1 from that", "open it", "summarize it", "who sent it?", "send that to me", "where is that exam?"), RESOLVE the referred topic or file from the Conversation History and output that specific topic/filename in "what". If there is no previous context and the user uses generic words or file types like "notes", "files", "stuff", "image", "images", "photo", "photos", "pic", "pics", "pdf", "pdfs", "doc", "docs", leave "what" empty.
 - "when": Extract time reference as one of: today, yesterday, last_week, this_week, last_month. ONLY extract when an explicit calendar period is specified. Words like "latest", "recent", "newest", "last" indicate sorting order, NOT a time filter; leave "when" empty for them.
-- "why": One of: retrieve, search, check_existence, activity_check, qa
+- "why": One of: retrieve, search, check_existence, activity_check, qa, fetch, smalltalk.
+  * Set "smalltalk" for greetings, thanks ("thanks", "dhanyawad", "shukriya", "hi", "namaste") with no search request.
+  * Set "fetch" when the user asks to receive or open the file itself ("fetch", "get me", "send me").
+  * Set "qa" when they ask what a document says or ask a factual/informational question.
+- "search_terms": An array of 1 to 6 high-recall search keywords/aliases/synonyms for database search:
+  * Fix typos (e.g. "hyderbad" -> "hyderabad", "chemstry" -> "chemistry").
+  * Expand city, station, and transit aliases (e.g. if query mentions "Hyderabad", include "Hyderabad", "Secunderabad", "HYB", "SC"; if "Bengaluru", include "Bengaluru", "Bangalore", "SBC"; if "Delhi", include "Delhi", "NDLS").
+  * For multilingual queries, include English translations and transliterated terms (e.g. "bijli ka bil" -> ["electricity bill", "bijli", "bill", "electricity"]).
+  * Include any numbers, codes, dates, or PNRs mentioned (e.g. "4656526133").
+- "has_content_cues": true if the query asks about details *inside* the file (departure times, amounts, dates, formulas, room numbers, specific clauses) rather than just asking for a file by name.
 
 Examples:
-- "can you find me the latest Reyna script received" → {"who":"","what":"Reyna script","when":"","why":"search"}
-- "mohit sent some notes" → {"who":"mohit","what":"","when":"","why":"retrieve"}
-- "do we have OS notes?" → {"who":"","what":"OS","when":"","why":"check_existence"}
-- "what did priya upload yesterday?" → {"who":"priya","what":"","when":"yesterday","why":"retrieve"}
-- "find compiler lab manual" → {"who":"","what":"compiler lab manual","when":"","why":"search"}
-- "rakesh shared quantum mechanics pdf" → {"who":"rakesh","what":"quantum mechanics","when":"","why":"retrieve"}
+- "can you find me the latest Reyna script received" → {"who":"","what":"Reyna script","when":"","why":"search","search_terms":["reyna","script"],"has_content_cues":false}
+- "at what time is my departure to Hyderabad" → {"who":"","what":"departure to Hyderabad","when":"","why":"qa","search_terms":["departure","Hyderabad","Secunderabad","ticket","train"],"has_content_cues":true}
+- "can you get me the train tikcet with 465" → {"who":"","what":"train ticket 465","when":"","why":"fetch","search_terms":["train","ticket","465"],"has_content_cues":false}
+- "bijli ka bil kitna aaya" → {"who":"","what":"electricity bill","when":"","why":"qa","search_terms":["electricity bill","bijli","bill","electricity"],"has_content_cues":true}
+- "dhanyawad reyna!" → {"who":"","what":"","when":"","why":"smalltalk","search_terms":[],"has_content_cues":false}
+- "what did priya upload yesterday?" → {"who":"priya","what":"","when":"yesterday","why":"retrieve","search_terms":[],"has_content_cues":false}
+- "find compiler lab manual" → {"who":"","what":"compiler lab manual","when":"","why":"search","search_terms":["compiler","lab manual","compiler design"],"has_content_cues":false}
 
 Respond ONLY with JSON, no other text:
-{"who":"","what":"","when":"","why":"retrieve"}`, histSection, query)
+{"who":"","what":"","when":"","why":"search","search_terms":[],"has_content_cues":false}`, histSection, query)
 
 	result, err := c.llm.Complete(prompt, 600)
 	if err != nil {
 		log.Printf("[NLP] LLM parse failed: %v, falling back to keyword parser", err)
-		// Fall back to keyword parser instead of returning raw query
-		return c.keywordParseQuery(query)
+		who, what, when, why := c.keywordParseQuery(query)
+		var terms []string
+		if what != "" {
+			terms = append(terms, what)
+		}
+		return ParsedNLPQuery{Who: who, What: what, When: when, Why: why, SearchTerms: terms}
 	}
 
-	var resp struct {
-		Who  string `json:"who"`
-		What string `json:"what"`
-		When string `json:"when"`
-		Why  string `json:"why"`
-	}
+	var resp ParsedNLPQuery
 	result = llm.CleanJSON(result)
 	if err := json.Unmarshal([]byte(result), &resp); err != nil {
 		log.Printf("[NLP] LLM parse JSON error: %v, falling back to keyword parser", err)
-		return c.keywordParseQuery(query)
+		who, what, when, why := c.keywordParseQuery(query)
+		var terms []string
+		if what != "" {
+			terms = append(terms, what)
+		}
+		return ParsedNLPQuery{Who: who, What: what, When: when, Why: why, SearchTerms: terms}
 	}
-	return resp.Who, resp.What, resp.When, resp.Why
+	return resp
+}
+
+func (c *Classifier) llmParseQueryWithHistory(query string, history []model.ChatMessageContext) (who, what, when, why string) {
+	p := c.llmParseQueryDetailedWithHistory(query, history)
+	return p.Who, p.What, p.When, p.Why
 }
 
 // ── Notes Q&A ──
@@ -1511,12 +1588,13 @@ CONVERSATION CONTEXT & FOLLOW-UP QUESTIONS:
 - Answer naturally without asking the user to re-specify the file if it was already discussed!
 
 RESPOND ONLY WITH JSON, in exactly this shape and nothing around it:
-{"answer": "...", "quotes": [{"file": "exact filename", "quote": "verbatim text copied from that file's summary"}]}
+{"found": true, "answer": "...", "quotes": [{"file": "exact filename", "quote": "verbatim text copied from that file's summary"}]}
 
+- "found": true if the provided context actually answers the question or contains relevant information matching the request; false if the documents do not contain the answer, do not match the query, or no relevant information is present.
 - "answer" is what the user asked for and nothing else. No raw filenames list. Write one or two clean, natural conversational sentences, under 50 words, plain text with no markdown and no bullets.
 - "quotes" is the evidence. Copy the lines from the summary that contain the answer, character for character. Do not paraphrase, do not tidy, do not translate. If the answer came from a table row, the quote is that row.
 - Every quote must appear word for word in a summary above. A quote that is only a filename is not evidence and will be discarded.
-- If nothing above answers the question, say so plainly in "answer" and return an empty "quotes" list. Never invent either one.
+- If nothing above answers the question, set "found": false, say so plainly in "answer" and return an empty "quotes" list. Never invent either one.
 
 ANSWER THE QUESTION FIRST:
 - Each file carries a "summary:" holding text taken from inside the document.
@@ -1541,10 +1619,11 @@ Your reply:`, histSection, rawQuery, who, what, when, why, ctx.String())
 
 	result, err := c.llm.Complete(prompt, 900)
 	if err != nil || result == "" {
-		return SourcedReply{Answer: fallbackRetrievalReply(rawQuery, files, driveMatches, who, what, when)}
+		return SourcedReply{Found: false, Answer: fallbackRetrievalReply(rawQuery, files, driveMatches, who, what, when)}
 	}
 
 	var parsed struct {
+		Found  *bool  `json:"found"`
 		Answer string `json:"answer"`
 		Quotes []struct {
 			File  string `json:"file"`
@@ -1555,10 +1634,30 @@ Your reply:`, histSection, rawQuery, who, what, when, why, ctx.String())
 		// The model wrote prose instead of JSON. Its answer is still worth
 		// showing; only the evidence is lost, and an answer with no sources
 		// button is better than an error.
-		return SourcedReply{Answer: cleanLLMReply(result)}
+		isNeg := strings.Contains(strings.ToLower(result), "could not find") ||
+			strings.Contains(strings.ToLower(result), "couldn't find") ||
+			strings.Contains(strings.ToLower(result), "no information")
+		return SourcedReply{
+			Found:  !isNeg && (len(files) > 0 || len(driveMatches) > 0),
+			Answer: cleanLLMReply(result),
+		}
 	}
 
-	out := SourcedReply{Answer: cleanLLMReply(parsed.Answer)}
+	found := true
+	if parsed.Found != nil {
+		found = *parsed.Found
+	} else if len(parsed.Quotes) == 0 && (strings.Contains(strings.ToLower(parsed.Answer), "could not find") ||
+		strings.Contains(strings.ToLower(parsed.Answer), "couldn't find") ||
+		strings.Contains(strings.ToLower(parsed.Answer), "no information") ||
+		strings.Contains(strings.ToLower(parsed.Answer), "नहीं मिला") ||
+		strings.Contains(strings.ToLower(parsed.Answer), "nahi mila")) {
+		found = false
+	}
+
+	out := SourcedReply{
+		Found:  found,
+		Answer: cleanLLMReply(parsed.Answer),
+	}
 	for _, q := range parsed.Quotes {
 		if strings.TrimSpace(q.Quote) == "" {
 			continue
@@ -1581,6 +1680,7 @@ type RetrievalFile struct {
 
 // SourcedReply is an answer and the passages it rests on.
 type SourcedReply struct {
+	Found  bool
 	Answer string
 	Quotes []QuotedSource
 }
@@ -1665,4 +1765,12 @@ func fallbackRetrievalReply(rawQuery string, files, driveMatches []RetrievalFile
 	// not claim to know which.
 	b.WriteString(" I could not read them to answer properly just now. Trying again may work.")
 	return b.String()
+}
+
+// Embed computes vector embeddings using the configured LLM provider.
+func (c *Classifier) Embed(text string) ([]float32, error) {
+	if c.llm == nil {
+		return nil, nil
+	}
+	return c.llm.Embed(text)
 }

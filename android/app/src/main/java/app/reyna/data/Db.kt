@@ -9,9 +9,11 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
+import androidx.room.RawQuery
 import androidx.room.Room
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.SupportSQLiteQuery
 import androidx.room.RoomDatabase
 import kotlinx.coroutines.flow.Flow
 
@@ -48,6 +50,7 @@ data class FileEntity(
     val uploaded: Boolean = false,
     val remoteId: Long = 0,
     val folder: String? = null,
+    val extractedText: String? = null,
 )
 
 /**
@@ -170,8 +173,24 @@ interface ReynaDao {
     @Query("UPDATE files SET uploaded = 1, remoteId = :remoteId, folder = :folder WHERE id = :id")
     suspend fun markUploaded(id: Long, remoteId: Long, folder: String?)
 
-    @Query("SELECT * FROM files WHERE uploaded = 0 ORDER BY postedAt ASC LIMIT :limit")
+    @Query("SELECT * FROM files WHERE uploaded = 0 ORDER BY postedAt DESC LIMIT :limit")
     suspend fun pendingUpload(limit: Int): List<FileEntity>
+
+    @Query("UPDATE files SET uploaded = 0 WHERE uploaded = 1 AND remoteId = 0")
+    suspend fun resetRetiredFiles(): Int
+
+    @Query("UPDATE files SET senderName = '', chatName = '', confidence = 0.0, method = '' WHERE LOWER(chatName) = 'whatsapp' OR LOWER(senderName) = 'whatsapp'")
+    suspend fun resetBogusAttributions(): Int
+
+    @Query("UPDATE files SET extractedText = :text WHERE id = :id")
+    suspend fun updateExtractedText(id: Long, text: String)
+
+    @Query("SELECT * FROM files WHERE extractedText IS NULL AND (isImage = 1 OR name LIKE '%.pdf') ORDER BY postedAt DESC LIMIT :limit")
+    suspend fun pendingOcr(limit: Int = 10): List<FileEntity>
+
+    /** Candidate generation only; Kotlin owns field weighting and explanations. */
+    @RawQuery
+    suspend fun searchFileIds(query: SupportSQLiteQuery): List<Long>
 
     @Query("SELECT COUNT(*) FROM files")
     fun observeFileCount(): Flow<Int>
@@ -195,6 +214,9 @@ interface ReynaDao {
 
     @Query("SELECT COUNT(*) FROM events")
     suspend fun eventCount(): Int
+
+    @Query("DELETE FROM events WHERE LOWER(chatName) = 'whatsapp' OR LOWER(senderDisplay) = 'whatsapp' OR (chatName = '' AND senderDisplay = '')")
+    suspend fun deleteBogusEvents(): Int
 
     @Query("DELETE FROM events")
     suspend fun clearEvents()
@@ -245,7 +267,7 @@ interface ReynaDao {
 
 @Database(
     entities = [FileEntity::class, EventEntity::class, LinkEntity::class, MessageEntity::class],
-    version = 3,
+    version = 5,
     exportSchema = false,
 )
 abstract class ReynaDb : RoomDatabase() {
@@ -256,17 +278,62 @@ abstract class ReynaDb : RoomDatabase() {
 
         /**
          * Adds the notice column to messages.
-         *
-         * Written out rather than left to the destructive fallback, which
-         * drops every table. This database is the phone's index of every
-         * captured file and the attribution behind each one, rebuilt only by a
-         * full rescan and, for anything learned from a notification, not
-         * rebuildable at all. Losing a conversation to a schema change would be
-         * a nuisance; losing that is the app.
          */
         private val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE messages ADD COLUMN notice TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
+        /**
+         * Adds extractedText column to files for on-device OCR.
+         */
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE files ADD COLUMN extractedText TEXT DEFAULT NULL")
+            }
+        }
+
+        private fun createSearchIndex(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts4(
+                    name, senderName, chatName, extractedText, content='files'
+                )""".trimIndent()
+            )
+            db.execSQL(
+                """CREATE TRIGGER IF NOT EXISTS files_fts_ai AFTER INSERT ON files BEGIN
+                    INSERT INTO files_fts(docid, name, senderName, chatName, extractedText)
+                    VALUES (new.id, new.name, new.senderName, new.chatName, new.extractedText);
+                END""".trimIndent()
+            )
+            db.execSQL(
+                """CREATE TRIGGER IF NOT EXISTS files_fts_bd BEFORE DELETE ON files BEGIN
+                    DELETE FROM files_fts WHERE docid = old.id;
+                END""".trimIndent()
+            )
+            db.execSQL(
+                """CREATE TRIGGER IF NOT EXISTS files_fts_bu BEFORE UPDATE ON files BEGIN
+                    DELETE FROM files_fts WHERE docid = old.id;
+                END""".trimIndent()
+            )
+            db.execSQL(
+                """CREATE TRIGGER IF NOT EXISTS files_fts_au AFTER UPDATE ON files BEGIN
+                    INSERT INTO files_fts(docid, name, senderName, chatName, extractedText)
+                    VALUES (new.id, new.name, new.senderName, new.chatName, new.extractedText);
+                END""".trimIndent()
+            )
+        }
+
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                createSearchIndex(db)
+                db.execSQL("INSERT INTO files_fts(files_fts) VALUES('rebuild')")
+            }
+        }
+
+        private val SEARCH_INDEX_CALLBACK = object : RoomDatabase.Callback() {
+            override fun onCreate(db: SupportSQLiteDatabase) {
+                createSearchIndex(db)
             }
         }
 
@@ -276,10 +343,8 @@ abstract class ReynaDb : RoomDatabase() {
                 ReynaDb::class.java,
                 "reyna.db",
             )
-                .addMigrations(MIGRATION_2_3)
-                // Still the last resort for a mismatch nothing above covers,
-                // but every schema change from here needs its own migration
-                // above or it silently wipes the library.
+                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addCallback(SEARCH_INDEX_CALLBACK)
                 .fallbackToDestructiveMigration()
                 .build().also { instance = it }
         }

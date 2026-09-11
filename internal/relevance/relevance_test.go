@@ -162,21 +162,33 @@ func TestContainsWordIsCaseInsensitive(t *testing.T) {
 
 // A passing mention in the text must not rank level with a title that says
 // exactly what was asked for. A pitch deck mentioning artificial intelligence,
-// a question and a paper was offered as the answer to "question paper for AI".
-func TestTitleCoverageBeatsScatteredMentions(t *testing.T) {
+// A title match heavily outranks scattered body mentions by Score.
+func TestTitleScoreBeatsScatteredMentions(t *testing.T) {
 	tokens := []string{"question", "paper", "ai"}
 	real := Scored("AI model question paper.pdf", "PYQ", "", tokens)
 	deck := Scored("ReynaSIH.pptx", "Projects",
 		"Reyna uses AI to answer any question about a paper you were sent", tokens)
 
-	if real.Coverage != 1.0 {
-		t.Fatalf("title match coverage = %v, want 1.0", real.Coverage)
+	if real.Coverage != 1.0 || deck.Coverage != 1.0 {
+		t.Fatalf("both cover all query tokens: real=%v deck=%v", real.Coverage, deck.Coverage)
 	}
-	if deck.Coverage >= real.Coverage {
-		t.Fatalf("body mentions matched the title: deck=%v real=%v", deck.Coverage, real.Coverage)
+	if real.Score <= deck.Score {
+		t.Fatalf("title score must beat scattered body: real=%v deck=%v", real.Score, deck.Score)
 	}
-	if deck.Coverage >= Floor(real.Coverage) {
-		t.Fatalf("deck survived the floor: coverage=%v floor=%v", deck.Coverage, Floor(real.Coverage))
+}
+
+// WhatsApp numeric filenames (e.g. 4656526133.pdf) carry zero words in title.
+// When all query tokens appear in the extracted body text, coverage must be 1.0
+// and survive Floor so tickets, invoices, and scans are never discarded.
+func TestNumericWhatsAppFilenameSurvivesFloor(t *testing.T) {
+	tokens := []string{"departure", "hyderabad"}
+	body := "Your departure time to Hyderabad Secunderabad is 22:00."
+	ticket := Scored("4656526133.pdf", "", body, tokens)
+	if ticket.Coverage != 1.0 {
+		t.Fatalf("numeric WhatsApp file coverage = %v, want 1.0", ticket.Coverage)
+	}
+	if ticket.Coverage < Floor(1.0) {
+		t.Fatalf("numeric WhatsApp file dropped by Floor(1.0): cover=%v", ticket.Coverage)
 	}
 }
 
@@ -189,5 +201,28 @@ func TestContentOnlyStillSurvivesWhenNothingBetterExists(t *testing.T) {
 	}
 	if only.Coverage < Floor(only.Coverage) {
 		t.Fatal("the best available fell below its own floor")
+	}
+}
+
+func TestCosineSimilarity(t *testing.T) {
+	a := []float32{1.0, 0.0, 0.0}
+	b := []float32{1.0, 0.0, 0.0}
+	if sim := CosineSimilarity(a, b); sim < 0.999 || sim > 1.001 {
+		t.Fatalf("identical vectors sim = %v, want 1.0", sim)
+	}
+
+	orthogonal := []float32{0.0, 1.0, 0.0}
+	if sim := CosineSimilarity(a, orthogonal); sim < -0.001 || sim > 0.001 {
+		t.Fatalf("orthogonal vectors sim = %v, want 0.0", sim)
+	}
+
+	opposite := []float32{-1.0, 0.0, 0.0}
+	if sim := CosineSimilarity(a, opposite); sim < -1.001 || sim > -0.999 {
+		t.Fatalf("opposite vectors sim = %v, want -1.0", sim)
+	}
+
+	empty := []float32{}
+	if sim := CosineSimilarity(a, empty); sim != 0.0 {
+		t.Fatalf("empty vector sim = %v, want 0.0", sim)
 	}
 }

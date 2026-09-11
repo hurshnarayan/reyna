@@ -315,60 +315,27 @@ Consequences that are already designed in, and should not be undone:
   now sets `thinkingBudget: 0` and reports `finishReason`, so an empty
   candidate is diagnosable rather than looking like an empty document.
 
-## The mark
+## The mascot
 
-Reyna's logo is three rising drops forming a crown, specified in the "Reyna
-Mark" artifact and reproduced from its geometry rather than eyeballed. Every
-drop is the same curve placed three times, rotated about a pivot below the
-mark, the outer pair splayed thirty degrees. The tails stop level and short of
-that pivot so the shapes never touch, and the centre drop is longer and heavier
-than the outer pair, which is what makes it read as a crown rather than a fan.
+Reyna is the supplied glowing cat mascot. The six source images are copied
+unchanged into `res/drawable-nodpi`: `reyna_app_logo.png` is the launcher and
+launch-screen art; `reyna_mascot_1.png` through `reyna_mascot_5.png` are the
+transparent animation frames. Keeping them `nodpi` prevents Android from
+selecting or resampling different density copies.
 
-It lives in three places, all carrying the same numbers on the same hundred by
-hundred grid:
+`ui/components/ReynaMascot.kt` owns both UI forms. `ReynaMascot` renders frame
+three as the calm, forward-looking state. `ReynaMascotAnimated` advances over
+all five supplied frames on Compose's animation clock, so it also follows the
+system animation scale. The toolbar uses the calm state. Onboarding plays the
+full sequence, and the mascot at the end of a chat switches from calm to
+animated while a request is in flight. The object remains after the answer;
+only its state changes, and the streamed stage text remains beside it.
 
-- `ui/components/ReynaMark.kt` draws it in Compose, taking whatever colour it
-  is given. Use `ReynaLogo` and size it with a modifier.
-- `res/drawable/ic_reyna_mark.xml` is the tinted vector, for the notification
-  icon and anything that needs a drawable.
-- `res/drawable/ic_launcher_foreground.xml` places it in the adaptive icon's
-  66dp safe zone by a single scale and translate, so the geometry stays
-  identical rather than being redrawn to fit.
-
-There is no disc behind it. The mark is the three drops; a filled circle is a
-container it does not need, and one that stayed black regardless of theme meant
-the app opened on a hard black puck before a near-white screen. Drawn straight
-onto the background in the foreground colour, it is dark on a light theme and
-light on a dark one without anything having to switch. That holds in four
-places, and all four had to be fixed separately: the toolbar avatar, the
-onboarding screen, the adaptive launcher icon (`drawable/` and
-`drawable-night/`), and the Android 12 launch screen, which is configured in
-`values/themes.xml` and `values-night/themes.xml` and otherwise falls back to
-the launcher icon's plate.
-
-On the onboarding screen the mark assembles itself: a drop falls, lands, ripples,
-and the three drops splash up out of the point of impact. That motion is the
-mark's own construction rather than something laid over it, since all three
-drops are rotations about a pivot below the mark and their tails already point
-at it. In chat the mark stands at the end of the conversation permanently, under the
-last answer, the way a signature sits at the foot of a letter. At rest it is
-quiet; while a question is being answered it darkens and its drops jiggle out
-of step with each other, with the stage text beside it. One object in two
-states, not two objects: an indicator that appeared on send and disappeared on
-arrival meant the thing that had been working vanished at the moment it
-finished, and the next question built a new one from nothing. It replaced the
-spinner, so the screen carries one piece of visual language rather than two.
-
-Two traps worth knowing. A Compose `Canvas` clips to its bounds, so the falling
-drop cannot start above the frame; it starts just inside the top edge and fades
-in. And onboarding content sits in a `verticalScroll`, which hands its child an
-unbounded height, so `Arrangement.Center` silently did nothing and the mark sat
-jammed at the top of the page; the viewport is now measured outside the scroll
-and passed in as a minimum height.
-
-Minimum size 16dp; below that the gaps close and it stops being three shapes.
-Do not put a bar under it, outline it, squash it, fill it with a gradient, or
-put it back on a disc. The old lightning bolt is gone.
+The adaptive icon fills its foreground canvas with the supplied app-logo art.
+The artwork's own whitespace keeps the face within Android's safe zone while
+the launcher applies the user's icon mask. Both light and dark launch themes
+use the same art. `ic_reyna_mark.xml` remains only as the monochrome Android
+notification small icon, where the platform does not permit full-colour art.
 
 ## Still open
 

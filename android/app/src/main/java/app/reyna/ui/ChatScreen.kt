@@ -76,7 +76,9 @@ import app.reyna.ui.components.Bubble
 import app.reyna.ui.components.BubbleText
 import app.reyna.ui.components.BubbleTime
 import app.reyna.ui.components.FileChip
+import app.reyna.ui.components.QuickLookModal
 import app.reyna.ui.components.ReynaAvatar
+import app.reyna.search.SearchableFile
 import app.reyna.ui.theme.Dimens
 import app.reyna.ui.theme.reynaColors
 
@@ -90,6 +92,10 @@ data class FoundFile(
     val whenText: String,
     val confidence: Double,
     val isImage: Boolean = false,
+    /** Backend id when a fetch result is not present in Room on this phone. */
+    val remoteId: Long = 0,
+    /** Optional truthful subtitle for backend-only results. */
+    val subtitle: String? = null,
 )
 
 /**
@@ -146,7 +152,7 @@ fun ChatScreen(
     onAddFile: () -> Unit = {},
     onStop: () -> Unit = {},
     onClearChat: () -> Unit = {},
-    onOpenFile: (Long) -> Unit = {},
+    onOpenFile: (FoundFile) -> Unit = {},
     onOpenSource: (Source) -> Unit = {},
     onAskWhoShared: (Long) -> Unit = {},
     pendingToDrive: Int = 0,
@@ -162,10 +168,12 @@ fun ChatScreen(
     choice: ReynaViewModel.PendingChoice? = null,
     onChooseCandidate: (List<Long>) -> Unit = {},
     onPreviewCandidate: (Long, String) -> Unit = { _, _ -> },
+    loadPreviewPath: suspend (FoundFile) -> String? = { null },
 ) {
     val c = reynaColors
     val listState = rememberLazyListState()
     var sheetSources by remember { mutableStateOf<List<Source>>(emptyList()) }
+    var quickLookFile by remember { mutableStateOf<FoundFile?>(null) }
 
     // Whether the choice sheet is on screen, kept apart from whether there is
     // a choice to make. Dismissing the sheet used to throw the candidates away
@@ -184,7 +192,8 @@ fun ChatScreen(
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size)
     }
 
-    Column(Modifier.fillMaxSize().background(c.background)) {
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().background(c.background)) {
         ChatToolbar(
             watchingChats = watchingChats,
             fileCount = fileCount,
@@ -225,6 +234,10 @@ fun ChatScreen(
             items(messages.size) { i ->
                 MessageRow(
                     msg = messages[i],
+                    onOpenFile = onOpenFile,
+                    onAskWhoShared = onAskWhoShared,
+                    onPreviewStart = { quickLookFile = it },
+                    onPreviewEnd = { quickLookFile = null },
                     onShowSources = { sheetSources = it },
                     onCopy = onCopy,
                     onRetry = onRetry,
@@ -232,10 +245,16 @@ fun ChatScreen(
                     // older one would have to discard everything said after
                     // it, which is a bigger thing than the button looks like.
                     canRetry = !sending && i == messages.lastIndex,
-                    hasChoice = choice != null && !sheetOpen && i == messages.lastIndex,
-                    onReopenChoice = { sheetOpen = true },
                 )
             }
+
+			if (choice != null && !sheetOpen) item {
+				ActionChip(
+					icon = Icons.Rounded.Article,
+					label = "Choose a document",
+					onClick = { sheetOpen = true },
+				)
+			}
             // The mark stays, and it is the same mark either way.
             //
             // It used to be created when a question went out and destroyed
@@ -275,6 +294,25 @@ fun ChatScreen(
             onStop = onStop,
             sending = sending,
         )
+        }
+
+        quickLookFile?.let { found ->
+            val preview = SearchableFile(
+                id = if (found.id > 0L) found.id else -found.remoteId,
+                fileName = found.fileName,
+                senderName = found.senderName,
+                chatName = found.chatName,
+                whenText = found.whenText,
+                confidence = found.confidence,
+                isImage = found.isImage,
+                remoteId = found.remoteId,
+            )
+            QuickLookModal(
+                file = preview,
+                loadPreviewPath = { loadPreviewPath(found) },
+                onDismiss = { quickLookFile = null },
+            )
+        }
     }
 }
 
@@ -430,11 +468,13 @@ private fun MarkRow(sending: Boolean, stage: String) {
 private fun MessageRow(
     msg: ChatMessage,
     onShowSources: (List<Source>) -> Unit,
+    onOpenFile: (FoundFile) -> Unit,
+    onAskWhoShared: (Long) -> Unit,
+    onPreviewStart: (FoundFile) -> Unit,
+    onPreviewEnd: () -> Unit,
     onCopy: (String) -> Unit = {},
     onRetry: (ChatMessage) -> Unit = {},
     canRetry: Boolean = false,
-    hasChoice: Boolean = false,
-    onReopenChoice: () -> Unit = {},
 ) {
     if (msg.fromUser) {
         // A question is a thing somebody said, so it keeps its bubble. Both
@@ -449,7 +489,10 @@ private fun MessageRow(
         NoticeCard(msg)
         return
     }
-    AnswerBlock(msg, onShowSources, onCopy, onRetry, canRetry, hasChoice, onReopenChoice)
+    AnswerBlock(
+        msg, onShowSources, onOpenFile, onAskWhoShared,
+        onPreviewStart, onPreviewEnd, onCopy, onRetry, canRetry,
+    )
 }
 
 /**
@@ -523,11 +566,13 @@ private fun NoticeCard(msg: ChatMessage) {
 private fun AnswerBlock(
     msg: ChatMessage,
     onShowSources: (List<Source>) -> Unit,
+    onOpenFile: (FoundFile) -> Unit,
+    onAskWhoShared: (Long) -> Unit,
+    onPreviewStart: (FoundFile) -> Unit,
+    onPreviewEnd: () -> Unit,
     onCopy: (String) -> Unit,
     onRetry: (ChatMessage) -> Unit,
     canRetry: Boolean,
-    hasChoice: Boolean,
-    onReopenChoice: () -> Unit,
 ) {
     val c = reynaColors
     Column(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 2.dp)) {
@@ -542,6 +587,28 @@ private fun AnswerBlock(
             )
         }
 
+        if (msg.files.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                msg.files.forEach { file ->
+                    FileChip(
+                        fileName = file.fileName,
+                        senderName = file.senderName,
+                        chatName = file.chatName,
+                        whenText = file.whenText,
+                        confidence = file.confidence,
+                        isImage = file.isImage,
+                        subtitle = file.subtitle,
+                        canAskWhoShared = file.id > 0,
+                        onOpen = { onOpenFile(file) },
+                        onAskWhoShared = { onAskWhoShared(file.id) },
+                        onHoldStart = { onPreviewStart(file) },
+                        onHoldEnd = onPreviewEnd,
+                    )
+                }
+            }
+        }
+
         Spacer(Modifier.height(9.dp))
         AnswerActions(
             msg = msg,
@@ -549,8 +616,6 @@ private fun AnswerBlock(
             onCopy = onCopy,
             onRetry = onRetry,
             canRetry = canRetry,
-            hasChoice = hasChoice,
-            onReopenChoice = onReopenChoice,
         )
     }
 }
@@ -575,27 +640,11 @@ private fun AnswerActions(
     onCopy: (String) -> Unit,
     onRetry: (ChatMessage) -> Unit,
     canRetry: Boolean,
-    hasChoice: Boolean,
-    onReopenChoice: () -> Unit,
 ) {
     val c = reynaColors
     var copied by remember(msg.text) { mutableStateOf(false) }
 
     Row(verticalAlignment = Alignment.CenterVertically) {
-        // A dismissed choice has to be reachable again.
-        //
-        // Swiping the sheet away used to strand the question: Reyna had asked
-        // which document was meant, the candidates were gone, and the only way
-        // back was to type the question a second time. The choice outlives the
-        // sheet now, and this is the way back into it.
-        if (hasChoice) {
-            ActionChip(
-                icon = Icons.Rounded.Article,
-                label = "Choose a document",
-                onClick = onReopenChoice,
-            )
-            Spacer(Modifier.width(2.dp))
-        }
         // Evidence first, because it is the only control here that changes
         // what the user knows rather than what they have.
         //

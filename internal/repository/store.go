@@ -2,11 +2,15 @@ package repository
 
 import (
 	"database/sql"
+	"encoding/binary"
 	"fmt"
 	"log"
+	"math"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/hurshnarayan/reyna/internal/model"
@@ -138,6 +142,11 @@ func (s *Store) migrate() error {
 		// rows with empty content_hash so historical rows aren't affected.
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_files_hash_unique ON files(group_id, content_hash) WHERE content_hash != ''`,
 		`ALTER TABLE group_settings ADD COLUMN hidden INTEGER DEFAULT 0`,
+		`CREATE TABLE IF NOT EXISTS file_embeddings (
+			file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+			embedding BLOB NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
 	}
 	for _, m := range migrations {
 		s.db.Exec(m) // ignore errors if columns already exist
@@ -1921,9 +1930,9 @@ func TokenizeWhat(what string) []string {
 		"recently": true, "latest": true, "last": true, "ago": true, "back": true, "only": true,
 	}
 	lower := strings.ToLower(what)
-	// replace non-alphanumeric with spaces
+	// replace non-alphanumeric with spaces (supports all Unicode letters, digits, and combining marks/vowels)
 	cleaned := strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r) {
 			return r
 		}
 		return ' '
@@ -1943,7 +1952,7 @@ func TokenizeWhat(what string) []string {
 	// side of this had already been fixed; this side had not.
 	isNumber := func(tok string) bool {
 		for _, r := range tok {
-			if r < '0' || r > '9' {
+			if !unicode.IsDigit(r) {
 				return false
 			}
 		}
@@ -1953,7 +1962,9 @@ func TokenizeWhat(what string) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, tok := range strings.Fields(cleaned) {
-		if (len(tok) < 3 && !shortAllowed[tok] && !isNumber(tok)) || stop[tok] || seen[tok] {
+		runeCount := utf8.RuneCountInString(tok)
+		isShort := (len(tok) == runeCount && runeCount < 3 && !shortAllowed[tok] && !isNumber(tok)) || (runeCount < 2 && !shortAllowed[tok] && !isNumber(tok))
+		if isShort || stop[tok] || seen[tok] {
 			continue
 		}
 		seen[tok] = true
@@ -2076,6 +2087,86 @@ func (s *Store) GetFilesByIDs(ids []int64) ([]model.File, error) {
 	for _, id := range ids {
 		if f, ok := byID[id]; ok {
 			out = append(out, f)
+		}
+	}
+	return out, nil
+}
+
+// FloatsToBytes converts a slice of float32 to little-endian bytes.
+func FloatsToBytes(vec []float32) []byte {
+	buf := make([]byte, len(vec)*4)
+	for i, v := range vec {
+		binary.LittleEndian.PutUint32(buf[i*4:(i+1)*4], math.Float32bits(v))
+	}
+	return buf
+}
+
+// BytesToFloats converts little-endian bytes back to a slice of float32.
+func BytesToFloats(buf []byte) []float32 {
+	if len(buf)%4 != 0 {
+		return nil
+	}
+	vec := make([]float32, len(buf)/4)
+	for i := range vec {
+		bits := binary.LittleEndian.Uint32(buf[i*4 : (i+1)*4])
+		vec[i] = math.Float32frombits(bits)
+	}
+	return vec
+}
+
+// SaveFileEmbedding stores a vector embedding for a file.
+func (s *Store) SaveFileEmbedding(fileID int64, vec []float32) error {
+	if len(vec) == 0 {
+		return nil
+	}
+	blob := FloatsToBytes(vec)
+	_, err := s.db.Exec(`
+		INSERT INTO file_embeddings (file_id, embedding, created_at)
+		VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(file_id) DO UPDATE SET embedding = excluded.embedding, created_at = CURRENT_TIMESTAMP
+	`, fileID, blob)
+	return err
+}
+
+// GetFileEmbedding retrieves the vector embedding for a file, or nil if none.
+func (s *Store) GetFileEmbedding(fileID int64) ([]float32, error) {
+	var blob []byte
+	err := s.db.QueryRow(`SELECT embedding FROM file_embeddings WHERE file_id = ?`, fileID).Scan(&blob)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return BytesToFloats(blob), nil
+}
+
+// GetAllEmbeddings retrieves embeddings for all eligible files in the given groups.
+func (s *Store) GetAllEmbeddings(groupIDs []int64) (map[int64][]float32, error) {
+	out := make(map[int64][]float32)
+	if len(groupIDs) == 0 {
+		return out, nil
+	}
+	placeholders, args := buildInClause(groupIDs)
+	query := fmt.Sprintf(`
+		SELECT e.file_id, e.embedding
+		FROM file_embeddings e
+		JOIN files f ON f.id = e.file_id
+		WHERE f.group_id IN (%s) AND f.status != 'deleted_in_drive'
+	`, placeholders)
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var fID int64
+		var blob []byte
+		if err := rows.Scan(&fID, &blob); err == nil {
+			if vec := BytesToFloats(blob); len(vec) > 0 {
+				out[fID] = vec
+			}
 		}
 	}
 	return out, nil

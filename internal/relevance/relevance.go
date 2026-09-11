@@ -16,7 +16,10 @@
 // "diodes", which is the whole distinction the old test could not draw.
 package relevance
 
-import "strings"
+import (
+	"math"
+	"strings"
+)
 
 // minStemLen is the shortest token allowed to match by prefix.
 //
@@ -231,7 +234,7 @@ func Scored(name, folder, content string, tokens []string) Result {
 			r.Score += 12
 		case ContainsWord(content, tok):
 			r.Matched++
-			credit += 0.5
+			credit += 1.0
 			r.Score += 4
 		}
 	}
@@ -302,4 +305,24 @@ func Floor(best float64) float64 {
 		// token matches when nothing matched all three.
 		return best - 0.0001
 	}
+}
+
+// CosineSimilarity computes the cosine similarity between two float32 vectors.
+// Returns a score between -1.0 and 1.0 (typically 0.0 to 1.0 for normalized embeddings).
+func CosineSimilarity(a, b []float32) float64 {
+	if len(a) == 0 || len(a) != len(b) {
+		return 0.0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		va := float64(a[i])
+		vb := float64(b[i])
+		dot += va * vb
+		normA += va * va
+		normB += vb * vb
+	}
+	if normA <= 0 || normB <= 0 {
+		return 0.0
+	}
+	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
 }

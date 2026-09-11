@@ -79,6 +79,8 @@ type Provider interface {
 	// CompleteWithDoc sends a prompt along with a base64-encoded document for content extraction.
 	// Falls back to Complete with filename-only analysis if the provider doesn't support documents.
 	CompleteWithDoc(prompt string, fileData []byte, mimeType string, maxTokens int) (string, error)
+	// Embed returns a vector embedding for the given text (e.g. 768-dim float32 vector).
+	Embed(text string) ([]float32, error)
 	// Name returns the provider name for logging.
 	Name() string
 	// IsEnabled returns true if the provider has a valid API key.
@@ -117,6 +119,9 @@ func (n *noop) Complete(prompt string, maxTokens int) (string, error) {
 }
 func (n *noop) CompleteWithDoc(prompt string, fileData []byte, mimeType string, maxTokens int) (string, error) {
 	return "", fmt.Errorf("no LLM provider configured")
+}
+func (n *noop) Embed(text string) ([]float32, error) {
+	return nil, nil
 }
 func (n *noop) Name() string    { return "none" }
 func (n *noop) IsEnabled() bool { return false }
@@ -256,6 +261,10 @@ func (c *claudeProvider) CompleteWithDoc(prompt string, fileData []byte, mimeTyp
 		return "", fmt.Errorf("empty response from Claude")
 	}
 	return r.Content[0].Text, nil
+}
+
+func (c *claudeProvider) Embed(text string) ([]float32, error) {
+	return nil, errors.New("claude embedding not supported")
 }
 
 // geminiModels is the order models are tried in.
@@ -600,6 +609,52 @@ func (g *geminiProvider) CompleteWithDoc(prompt string, fileData []byte, mimeTyp
 	return text, nil
 }
 
+func (g *geminiProvider) Embed(text string) ([]float32, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil, nil
+	}
+	if len(text) > 8000 {
+		text = text[:8000]
+	}
+
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=%s", g.apiKey)
+	body := map[string]interface{}{
+		"model": "models/gemini-embedding-001",
+		"content": map[string]interface{}{
+			"parts": []map[string]string{
+				{"text": text},
+			},
+		},
+		"outputDimensionality": 768,
+	}
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+
+	respBody, status, err := doGeminiRequestWithRetry(url, jsonBody)
+	if err != nil {
+		return nil, err
+	}
+	if status != 200 {
+		return nil, fmt.Errorf("gemini embed error %d: %s", status, string(respBody))
+	}
+
+	var r struct {
+		Embedding struct {
+			Values []float32 `json:"values"`
+		} `json:"embedding"`
+	}
+	if err := json.Unmarshal(respBody, &r); err != nil {
+		return nil, err
+	}
+	if len(r.Embedding.Values) == 0 {
+		return nil, fmt.Errorf("empty embedding returned from Gemini")
+	}
+	return r.Embedding.Values, nil
+}
+
 // ── Grok (xAI) — OpenAI-compatible API ──
 
 type grokProvider struct {
@@ -665,6 +720,10 @@ func (x *grokProvider) CompleteWithDoc(prompt string, fileData []byte, mimeType 
 	return x.Complete(prompt, maxTokens)
 }
 
+func (x *grokProvider) Embed(text string) ([]float32, error) {
+	return nil, errors.New("grok embedding not supported")
+}
+
 // ── OpenAI (GPT) ──
 
 type openaiProvider struct {
@@ -726,6 +785,10 @@ func (o *openaiProvider) Complete(prompt string, maxTokens int) (string, error) 
 // OpenAI doesn't support document blocks in the same way — fallback to text-only
 func (o *openaiProvider) CompleteWithDoc(prompt string, fileData []byte, mimeType string, maxTokens int) (string, error) {
 	return o.Complete(prompt, maxTokens)
+}
+
+func (o *openaiProvider) Embed(text string) ([]float32, error) {
+	return nil, errors.New("openai embedding not supported")
 }
 
 // ── Helpers ──

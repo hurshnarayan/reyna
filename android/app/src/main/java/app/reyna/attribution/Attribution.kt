@@ -132,6 +132,10 @@ object Attribution {
     fun waNameCounter(diskName: String): Int? =
         WA_NAME.find(diskName)?.groupValues?.getOrNull(4)?.toIntOrNull()
 
+    private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp")
+    fun isImage(diskName: String): Boolean =
+        diskName.substringAfterLast('.', "").lowercase(Locale.ROOT) in IMAGE_EXTENSIONS
+
     /**
      * Matches one file against the events we know about.
      *
@@ -171,6 +175,9 @@ object Attribution {
         val fileDate = waNameDate(file.diskName)
 
         for (e in events) {
+            if (e.chatName.equals("WhatsApp", ignoreCase = true) || e.senderDisplay.equals("WhatsApp", ignoreCase = true)) continue
+            if (e.chatName.isBlank() && e.senderDisplay.isBlank()) continue
+
             val dt = abs(e.postedAtMillis - file.mtimeMillis)
 
             // Rules 1-2. The event names this exact file. Nothing beats it.
@@ -191,6 +198,14 @@ object Attribution {
                 dt <= TWO_HOURS
             ) {
                 candidates += Link(file.id, e.id, Method.NOTIFICATION, 0.75)
+                continue
+            }
+
+            // Rule 3b. High-confidence temporal notification match for unnamed media attachments (e.g. photos)
+            // When an attachment notification arrives within 5 minutes of the file being written,
+            // and did not name an unrelated file, it directly explains the new media.
+            if (isImage(file.diskName) && e.hasAttachment && e.attachmentName.isEmpty() && dt <= 5 * 60 * 1000L) {
+                candidates += Link(file.id, e.id, Method.NOTIFICATION, 0.85)
                 continue
             }
 
@@ -230,7 +245,17 @@ object Attribution {
             candidates
         }
 
-        val best = resolved.maxByOrNull { it.confidence }
+        val best = resolved.maxWithOrNull(
+            compareBy<Link> { it.confidence }
+                .thenBy { link ->
+                    val ev = events.firstOrNull { it.id == link.eventId }
+                    if (!ev?.senderDisplay.isNullOrBlank()) 1 else 0
+                }
+                .thenByDescending { link ->
+                    val ev = events.firstOrNull { it.id == link.eventId }
+                    if (ev != null) -abs(ev.postedAtMillis - file.mtimeMillis) else Long.MIN_VALUE
+                }
+        )
         return Attributed(file.id, best, resolved)
     }
 

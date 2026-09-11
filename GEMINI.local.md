@@ -41,7 +41,11 @@ CRITICAL WORKSPACE & SCOPE DIRECTIVES FOR REYNA:
    - The WhatsApp web bot and React dashboard are obsolete. Do not suggest or touch bot code.
 
 3. HARD INVARIANTS:
+   - Scope: Universal personal WhatsApp document archiving & retrieval (invoices, contracts, tickets, receipts, scans, spreadsheets, notes). Not restricted to students/colleges.
    - Attribution Floor: Never name an individual below 0.70 confidence.
-   - Tokenization: Whole-word matching only (no substring matching).
+   - Tokenization: Whole-word, Unicode-aware matching (no substring matching, never strip non-ASCII).
+   - Hybrid Retrieval: SQL token search + dense 768-dim Gemini vector cosine similarity. Full credit (1.0) for body text matches.
+   - Zero Hardcoded Entities: Never hardcode cities, routes, station codes, course acronyms, or negative-reply phrases in Go. Let LLM handle semantics and return structured boolean found flag.
+   - Direct Factual QA: Questions bypass ambiguity prompts and pass candidate context directly to LLM for relation/route resolution.
    - Fast-fail Quota Wall: Fast return amber Notice card on Gemini quota limits.
    - Run/Build: Controlled via `justfile` (`just backend-bg`, `just tunnel-up`, `just build`).

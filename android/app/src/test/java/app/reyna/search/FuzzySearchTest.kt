@@ -180,6 +180,75 @@ class FuzzySearchTest {
     }
 
     @Test
+    fun `finds exact words inside extracted content and explains why`() {
+        val files = listOf(
+            SearchableFile(
+                id = 1,
+                fileName = "IMG-20260910-WA0015.jpg",
+                senderName = null,
+                chatName = null,
+                whenText = "today",
+                confidence = 0.0,
+                extractedText = "This chapter introduces artificial intelligence and search agents.",
+            ),
+        )
+
+        val hit = FileSearch.search(
+            "artificial intelligence",
+            files,
+            contentCandidateIds = setOf(1),
+        ).single()
+
+        assertEquals(MatchReason.CONTENT, hit.reason)
+        assertTrue(hit.snippet.orEmpty().contains("artificial intelligence"))
+    }
+
+    @Test
+    fun `does not fuzzy subsequence match inside long document bodies`() {
+        val files = listOf(
+            SearchableFile(
+                id = 1,
+                fileName = "unrelated.pdf",
+                senderName = null,
+                chatName = null,
+                whenText = "today",
+                confidence = 0.0,
+                extractedText = "A report with scattered letters but no requested technical phrase.",
+            ),
+        )
+
+        assertTrue(
+            FileSearch.search("artificial intelligence", files, contentCandidateIds = setOf(1)).isEmpty()
+        )
+    }
+
+    @Test
+    fun `does not fall back to files matching only one query word`() {
+        val files = listOf(
+            SearchableFile(1, "Artificial_notes.pdf", null, null, "today", 0.0),
+            SearchableFile(2, "Intelligence_notes.pdf", null, null, "today", 0.0),
+        )
+
+        assertTrue(FileSearch.search("artificial intelligence", files).isEmpty())
+    }
+
+    @Test
+    fun `filename typo still finds the intended file`() {
+        val files = listOf(
+            SearchableFile(1, "Compiler_Lab_Manual.pdf", null, null, "today", 0.0),
+        )
+
+        val hits = FileSearch.search("compilre", files, contentCandidateIds = emptySet())
+        assertEquals("Compiler_Lab_Manual.pdf", hits.single().file.fileName)
+        assertEquals(MatchReason.FILE_NAME, hits.single().reason)
+    }
+
+    @Test
+    fun `content index query contains only safe normalized prefixes`() {
+        assertEquals("artificial* OR intelligence*", FileSearch.contentIndexQuery("inside: Artificial Intelligence!"))
+    }
+
+    @Test
     fun `chat facets count the results, not the library`() {
         val files = sampleFiles()
         val hits = FileSearch.search("compiler", files)

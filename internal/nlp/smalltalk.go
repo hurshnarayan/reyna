@@ -1,6 +1,9 @@
 package nlp
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 // pleasantries are words that carry no request.
 var pleasantries = map[string]bool{
@@ -15,6 +18,10 @@ var pleasantries = map[string]bool{
 	"bye": true, "goodbye": true, "cya": true,
 	"you": true, "u": true, "there": true, "a": true, "lot": true, "so": true, "much": true,
 	"test": true, "testing": true,
+	// Indic romanized & native pleasantries
+	"dhanyawad": true, "dhanyawaad": true, "dhanyavad": true, "shukriya": true, "shukriyaa": true,
+	"pranam": true, "pranaam": true, "vanakkam": true, "namaskaram": true, "alvida": true,
+	"नमस्ते": true, "धन्यवाद": true, "शुक्रिया": true, "प्रणाम": true, "வணக்கம்": true, "నమస్కారం": true,
 }
 
 // IsSmallTalk reports whether a message is a greeting or an acknowledgement
@@ -32,7 +39,7 @@ var pleasantries = map[string]bool{
 // morning" qualify, "good notes on databases" does not.
 func IsSmallTalk(text string) bool {
 	words := strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
-		return !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9')
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && !unicode.IsMark(r)
 	})
 	if len(words) == 0 || len(words) > 4 {
 		return false
