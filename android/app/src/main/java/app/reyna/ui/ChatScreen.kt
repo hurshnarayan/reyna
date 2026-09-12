@@ -87,6 +87,7 @@ import app.reyna.ui.components.BreathingBlob
 import app.reyna.ui.components.ConfidenceDot
 import app.reyna.ui.components.ReynaMascot
 import app.reyna.ui.components.ReynaMascotAnimated
+import app.reyna.ui.components.ReynaNavMascot
 import app.reyna.ui.components.Bubble
 import app.reyna.ui.components.BubbleText
 import app.reyna.ui.components.BubbleTime
@@ -227,7 +228,7 @@ fun ChatScreen(
             state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                horizontal = Dimens.page, vertical = 10.dp,
+                start = Dimens.page, top = 16.dp, end = Dimens.page, bottom = 12.dp,
             ),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -386,16 +387,16 @@ private fun ChatToolbar(
                     .padding(vertical = 2.dp, horizontal = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                ReynaMascot(
-                    modifier = Modifier.size(27.dp),
+                ReynaNavMascot(
+                    modifier = Modifier.size(33.dp),
                     contentDescription = null,
                 )
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(7.dp))
                 Text(
                     "reyna",
-                    fontSize = 19.sp,
+                    fontSize = 22.sp,
                     fontWeight = FontWeight.Bold,
-                    letterSpacing = (-0.4).sp,
+                    letterSpacing = (-0.5).sp,
                     color = c.onSurface,
                 )
             }
@@ -409,18 +410,18 @@ private fun ChatToolbar(
                     .background(c.surfaceRaised)
                     .border(1.dp, c.border, CircleShape)
                     .clickable { onOpenTracking() }
-                    .padding(horizontal = 9.dp, vertical = 4.dp),
+                    .padding(horizontal = 7.dp, vertical = 2.5.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 BreathingBlob(
                     color = if (sending) Color(0xFF22C55E) else c.confident,
                     isBreathing = sending,
-                    size = 6.dp,
+                    size = 4.dp,
                 )
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(4.5.dp))
                 Text(
                     if (sending) "Searching..." else "$fileCount files",
-                    fontSize = 11.5.sp,
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
                     color = if (sending) c.onSurface else c.onSurfaceMuted,
                 )
@@ -498,12 +499,12 @@ private fun MarkRow(sending: Boolean, stage: String) {
     ) {
         if (sending) {
             ReynaMascotAnimated(
-                modifier = Modifier.size(36.dp),
+                modifier = Modifier.size(22.dp),
                 contentDescription = null,
             )
         } else {
             ReynaMascot(
-                modifier = Modifier.size(36.dp),
+                modifier = Modifier.size(22.dp),
                 contentDescription = null,
             )
         }
@@ -517,16 +518,10 @@ private fun MarkRow(sending: Boolean, stage: String) {
             exit = fadeOut(tween(160)),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Spacer(Modifier.width(10.dp))
-                BreathingBlob(
-                    color = Color(0xFF22C55E),
-                    isBreathing = true,
-                    size = 6.dp,
-                )
-                Spacer(Modifier.width(7.dp))
+                Spacer(Modifier.width(8.dp))
                 Text(
                     stage.ifBlank { "Looking through your files" },
-                    fontSize = 14.sp,
+                    fontSize = 13.5.sp,
                     color = c.onSurfaceMuted,
                     maxLines = 2,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,

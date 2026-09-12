@@ -8,11 +8,18 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import app.reyna.R
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlin.random.Random
 
 private val MascotFrames = intArrayOf(
     R.drawable.reyna_mascot_1,
@@ -22,14 +29,63 @@ private val MascotFrames = intArrayOf(
     R.drawable.reyna_mascot_5,
 )
 
-/** Reyna at rest. Frame three looks straight ahead and anchors the sequence. */
+private val NavMascotFrames = intArrayOf(
+    R.drawable.reyna_nav_1,
+    R.drawable.reyna_nav_2,
+    R.drawable.reyna_nav_3,
+    R.drawable.reyna_nav_4,
+    R.drawable.reyna_nav_5,
+    R.drawable.reyna_nav_6,
+    R.drawable.reyna_nav_7,
+    R.drawable.reyna_nav_8,
+    R.drawable.reyna_nav_9,
+)
+
+/** Reyna at rest. Looks straight ahead and anchors the mark. */
 @Composable
 fun ReynaMascot(
     modifier: Modifier = Modifier,
     contentDescription: String? = "Reyna",
 ) {
     Image(
-        painter = painterResource(R.drawable.reyna_mascot_3),
+        painter = painterResource(R.drawable.reyna_nav_1),
+        contentDescription = contentDescription,
+        modifier = modifier,
+        contentScale = ContentScale.Fit,
+    )
+}
+
+/**
+ * Navigation bar mascot.
+ *
+ * Rather than a continuous rapid loop, it rests statically and triggers an
+ * organic "alive" sequence (ears perk, blink, look around, return) at a
+ * relaxed pace (200ms per frame, 1.8s total), waiting 15-20 seconds between triggers.
+ */
+@Composable
+fun ReynaNavMascot(
+    modifier: Modifier = Modifier,
+    contentDescription: String? = "Reyna",
+    frameDurationMillis: Long = 200L,
+) {
+    var frameIndex by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        // Initial gentle pause before first alive sequence
+        delay(3_000L)
+        while (isActive) {
+            for (i in NavMascotFrames.indices) {
+                frameIndex = i
+                delay(frameDurationMillis)
+            }
+            frameIndex = 0
+            // Subsequent animations hit after 15 to 20 seconds
+            val restInterval = Random.nextLong(15_000L, 20_000L)
+            delay(restInterval)
+        }
+    }
+
+    Image(
+        painter = painterResource(NavMascotFrames[frameIndex]),
         contentDescription = contentDescription,
         modifier = modifier,
         contentScale = ContentScale.Fit,
