@@ -713,6 +713,13 @@ private fun AnswerActions(
     val c = reynaColors
     var copied by remember(msg.text) { mutableStateOf(false) }
 
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(2_000L)
+            copied = false
+        }
+    }
+
     Row(verticalAlignment = Alignment.CenterVertically) {
         // Evidence first, because it is the only control here that changes
         // what the user knows rather than what they have.

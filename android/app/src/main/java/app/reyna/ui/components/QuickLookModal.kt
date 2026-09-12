@@ -6,7 +6,12 @@ import android.graphics.Color as AndroidColor
 import android.graphics.Matrix
 import android.graphics.pdf.PdfRenderer
 import android.media.ExifInterface
+import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.view.View
+import android.view.ViewGroup
+import android.view.Window
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -41,6 +46,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -55,11 +61,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowCompat
 import app.reyna.attribution.Attribution
 import app.reyna.search.FileKind
 import app.reyna.search.SearchableFile
@@ -68,12 +79,28 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
+ * Traverses view hierarchy to locate the Dialog's hosting Window.
+ */
+private fun findDialogWindow(view: View): Window? {
+    var current: View? = view
+    while (current != null) {
+        if (current is DialogWindowProvider) {
+            return current.window
+        }
+        val parent = current.parent
+        if (parent is DialogWindowProvider) {
+            return parent.window
+        }
+        current = parent as? View
+    }
+    return null
+}
+
+/**
  * Clean macOS Quick Look-style floating peek preview overlay.
  *
  * Appears on long-press (hold) and dismisses instantly upon release.
- * Intentionally free of buttons, headers, and clutter. Shows only the full
- * preview content with minimal hairline borders and a translucent dark
- * gradient at the bottom for the filename, author, and time.
+ * Also supports tap-to-open preview from bottom sheets and chat links.
  */
 @Composable
 fun QuickLookModal(
@@ -86,22 +113,51 @@ fun QuickLookModal(
     onAskWhoShared: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    BackHandler(onBack = onDismiss)
-
-    var contentRatio by remember(file.path) { mutableStateOf<Float?>(null) }
-
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.68f))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onDismiss,
-            )
-            .padding(horizontal = 20.dp, vertical = 36.dp),
-        contentAlignment = Alignment.Center,
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
     ) {
+        val view = LocalView.current
+        DisposableEffect(view) {
+            val window = findDialogWindow(view)
+            window?.let { win ->
+                win.setLayout(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+                WindowCompat.setDecorFitsSystemWindows(win, false)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    win.attributes.fitInsetsTypes = 0
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    win.attributes.layoutInDisplayCutoutMode =
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                }
+                win.setFlags(
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                )
+            }
+            onDispose {}
+        }
+
+        var contentRatio by remember(file.path) { mutableStateOf<Float?>(null) }
+
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.68f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss,
+                )
+                .padding(horizontal = 20.dp, vertical = 36.dp),
+            contentAlignment = Alignment.Center,
+        ) {
         BoxWithConstraints(
             contentAlignment = Alignment.Center,
         ) {
@@ -192,6 +248,7 @@ fun QuickLookModal(
                 }
             }
         }
+    }
     }
 }
 
