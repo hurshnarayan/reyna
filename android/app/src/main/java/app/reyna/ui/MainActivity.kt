@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -381,7 +382,11 @@ private fun MainShell(vm: ReynaViewModel) {
                         )
                     }
                 }
-                TabBar(tab) { tab = it }
+                @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+                val isImeVisible = androidx.compose.foundation.layout.WindowInsets.isImeVisible
+                if (!isImeVisible) {
+                    TabBar(tab) { tab = it }
+                }
             }
         }
 
@@ -482,7 +487,7 @@ private fun TabBar(current: Int, onSelect: (Int) -> Unit) {
                             .background(if (active) c.bubbleIncoming else Color.Transparent)
                             .padding(horizontal = 16.dp, vertical = 4.dp),
                     ) {
-                        Icon(t.icon, t.label, tint = c.onSurface, modifier = Modifier.size(21.dp))
+                        Icon(t.icon, t.label, tint = if (active) c.onSurface else c.onSurfaceMuted, modifier = Modifier.size(21.dp))
                     }
                     Spacer(Modifier.height(3.dp))
                     Text(

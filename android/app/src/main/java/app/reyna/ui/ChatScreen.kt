@@ -25,19 +25,24 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AddCircleOutline
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Article
 import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudOff
-import androidx.compose.material.icons.rounded.CloudUpload
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.Forum
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Schedule
-import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -52,8 +57,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.rememberScrollState
@@ -211,27 +218,9 @@ fun ChatScreen(
             onOpenSettings = onOpenSettings,
         )
 
-        // Files that reached the server but not the user's Drive are the one
-        // thing Reyna must not stay quiet about. Everything else it does is
-        // recoverable by asking again; this is the case where the user thinks
-        // their documents are filed and they are not.
-        if (pendingToDrive > 0) {
-            PendingBanner(pendingToDrive, pushing, onPushToDrive)
-        }
-
-        // A thread with nothing in it is the normal way Reyna opens now. It
-        // used to greet with a file count on every launch, which read as the
-        // app talking to itself, and the count belongs on the tracking screen
-        // where it can be looked at rather than in the way of the first
-        // question.
+        // Clean empty state with zero button clutter
         if (messages.isEmpty() && !sending) {
-            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Text(
-                    "Ask for something you half remember.",
-                    fontSize = 14.sp,
-                    color = c.onSurfaceMuted,
-                )
-            }
+            EmptyChatState(modifier = Modifier.weight(1f).fillMaxWidth())
         } else LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -386,7 +375,17 @@ private fun ChatToolbar(
                 .padding(horizontal = Dimens.page, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            ReynaAvatar()
+            Box(
+                Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(c.surfaceRaised)
+                    .border(1.dp, c.border, CircleShape)
+                    .clickable { onOpenTracking() },
+                contentAlignment = Alignment.Center,
+            ) {
+                ReynaAvatar(size = 26.dp)
+            }
             Spacer(Modifier.width(11.dp))
             Column(
                 Modifier
@@ -401,11 +400,20 @@ private fun ChatToolbar(
                     fontWeight = FontWeight.SemiBold,
                     color = c.onSurface,
                 )
-                Text(
-                    "Watching $watchingChats chats · $fileCount files",
-                    fontSize = 12.sp,
-                    color = c.onSurfaceMuted,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(c.confident)
+                    )
+                    Spacer(Modifier.width(5.dp))
+                    Text(
+                        "Watching $watchingChats chats · $fileCount files",
+                        fontSize = 12.sp,
+                        color = c.onSurfaceMuted,
+                    )
+                }
             }
             IconButton(Icons.Rounded.BarChart, "Tracking", onOpenTracking)
             Box {
@@ -777,83 +785,139 @@ private fun Composer(
     sending: Boolean,
 ) {
     val c = reynaColors
+    val haptic = LocalHapticFeedback.current
     var text by remember { mutableStateOf("") }
     var attachOpen by remember { mutableStateOf(false) }
     val canSend = text.isNotBlank() && !sending
 
-    Column {
+    val sendScale by animateFloatAsState(
+        targetValue = if (canSend || sending) 1f else 0.94f,
+        label = "send-scale",
+    )
+
+    Column(Modifier.background(c.background)) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.divider))
         Row(
             Modifier
                 .fillMaxWidth()
-                .navigationBarsPadding()
                 .imePadding()
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Attach offers importing a chat, which is how Reyna learns who
-            // shared the older files.
+            // Attach button with dropdown
             Box {
                 Box(
-                    Modifier.size(40.dp).clip(CircleShape).clickable { attachOpen = true },
+                    Modifier
+                        .size(42.dp)
+                        .clip(CircleShape)
+                        .background(c.surfaceRaised)
+                        .border(1.dp, c.border, CircleShape)
+                        .clickable { attachOpen = true },
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        Icons.Rounded.AddCircleOutline,
+                        Icons.Rounded.Add,
                         contentDescription = "Attach",
-                        tint = c.onSurfaceMuted,
-                        modifier = Modifier.size(24.dp),
+                        tint = c.onSurface,
+                        modifier = Modifier.size(22.dp),
                     )
                 }
-                DropdownMenu(expanded = attachOpen, onDismissRequest = { attachOpen = false }) {
-                    // Two different things, and conflating them was the bug:
-                    // an export teaches Reyna who shared the older files, a
-                    // file is a document to keep.
+                DropdownMenu(
+                    expanded = attachOpen,
+                    onDismissRequest = { attachOpen = false },
+                    modifier = Modifier.background(c.surface),
+                ) {
                     DropdownMenuItem(
                         text = { Text("Add a file") },
+                        leadingIcon = {
+                            Icon(Icons.Rounded.UploadFile, null, tint = c.accent, modifier = Modifier.size(20.dp))
+                        },
                         onClick = { attachOpen = false; onAddFile() },
                     )
                     DropdownMenuItem(
                         text = { Text("Import a chat") },
+                        leadingIcon = {
+                            Icon(Icons.Rounded.Forum, null, tint = c.accent, modifier = Modifier.size(20.dp))
+                        },
                         onClick = { attachOpen = false; onImport() },
                     )
                 }
             }
 
+            Spacer(Modifier.width(8.dp))
+
+            // Text input capsule with clear button
             Box(
                 Modifier
                     .weight(1f)
-                    .clip(CircleShape)
-                    .background(c.bubbleIncoming)
-                    .padding(horizontal = 16.dp, vertical = 11.dp),
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(c.surfaceRaised)
+                    .border(
+                        1.dp,
+                        if (text.isNotBlank()) c.accent.copy(alpha = 0.5f) else c.border,
+                        RoundedCornerShape(22.dp),
+                    )
+                    .padding(horizontal = 15.dp, vertical = 10.dp),
             ) {
-                if (text.isEmpty()) {
-                    Text("Ask Reyna", fontSize = 15.sp, color = c.onSurfaceMuted)
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.weight(1f)) {
+                        if (text.isEmpty()) {
+                            Text("Ask Reyna...", fontSize = 15.sp, color = c.onSurfaceMuted)
+                        }
+                        BasicTextField(
+                            value = text,
+                            onValueChange = { text = it },
+                            textStyle = TextStyle(fontSize = 15.sp, color = c.onSurface),
+                            cursorBrush = SolidColor(c.accent),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    if (text.isNotEmpty()) {
+                        Box(
+                            Modifier
+                                .size(22.dp)
+                                .clip(CircleShape)
+                                .clickable { text = "" },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Rounded.Close,
+                                contentDescription = "Clear",
+                                tint = c.onSurfaceMuted,
+                                modifier = Modifier.size(15.dp),
+                            )
+                        }
+                    }
                 }
-                BasicTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    textStyle = TextStyle(fontSize = 15.sp, color = c.onSurface),
-                    cursorBrush = SolidColor(c.bubbleOutgoing),
-                    modifier = Modifier.fillMaxWidth(),
-                )
             }
 
             Spacer(Modifier.width(8.dp))
-            // While an answer is in flight the same button becomes Stop, so
-            // changing your mind is one tap in the place you already looked.
+
+            // Send / Stop button
             Box(
                 Modifier
-                    .size(40.dp)
+                    .size(42.dp)
+                    .graphicsLayer {
+                        scaleX = sendScale
+                        scaleY = sendScale
+                    }
                     .clip(CircleShape)
                     .background(
                         when {
-                            sending -> c.onSurface
-                            canSend -> c.bubbleOutgoing
-                            else -> c.bubbleIncoming
+                            sending -> Color(0xFFEF4444)
+                            canSend -> c.onSurface
+                            else -> c.surfaceRaised
                         }
                     )
+                    .then(
+                        if (!canSend && !sending) Modifier.border(1.dp, c.border, CircleShape)
+                        else Modifier
+                    )
                     .clickable(enabled = sending || canSend) {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         if (sending) {
                             onStop()
                         } else {
@@ -867,9 +931,9 @@ private fun Composer(
                     if (sending) Icons.Rounded.Stop else Icons.Rounded.ArrowUpward,
                     contentDescription = if (sending) "Stop" else "Send",
                     tint = when {
-                        sending -> c.background
-                        canSend -> c.onBubbleOutgoing
-                        else -> c.onSurfaceMuted
+                        sending -> Color.White
+                        canSend -> c.background
+                        else -> c.onSurfaceFaint
                     },
                     modifier = Modifier.size(if (sending) 18.dp else 20.dp),
                 )
@@ -878,54 +942,55 @@ private fun Composer(
     }
 }
 
-
 /**
- * The one warning in the app.
- *
- * Stated as a fact with the fix attached, not as an alert. Nothing has gone
- * wrong when files are waiting, they are simply not filed yet, and dressing
- * that in red would teach the user to ignore it by the third time they saw it.
+ * Minimal empty state: centered mascot, clean title and subtitle, zero clutter.
  */
 @Composable
-private fun PendingBanner(count: Int, pushing: Boolean, onPush: () -> Unit) {
+private fun EmptyChatState(
+    modifier: Modifier = Modifier,
+) {
     val c = reynaColors
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Dimens.page, vertical = 6.dp)
-            .clip(RoundedCornerShape(11.dp))
-            .background(c.surface)
-            .border(1.dp, c.border, RoundedCornerShape(11.dp))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+
+    Box(
+        modifier = modifier.padding(horizontal = Dimens.page, vertical = 40.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            Icons.Rounded.CloudUpload,
-            null,
-            tint = c.onSurfaceFaint,
-            modifier = Modifier.size(17.dp),
-        )
-        Spacer(Modifier.width(10.dp))
-        Text(
-            if (count == 1) "1 document is not in your Drive yet"
-            else "$count documents are not in your Drive yet",
-            fontSize = 13.sp,
-            color = c.onSurface,
-            modifier = Modifier.weight(1f),
-        )
-        Spacer(Modifier.width(8.dp))
-        Box(
-            Modifier
-                .clip(RoundedCornerShape(7.dp))
-                .border(1.dp, c.border, RoundedCornerShape(7.dp))
-                .clickable(enabled = !pushing) { onPush() }
-                .padding(horizontal = 10.dp, vertical = 5.dp),
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
         ) {
+            Box(
+                Modifier
+                    .size(80.dp)
+                    .clip(CircleShape)
+                    .background(c.surfaceRaised)
+                    .border(1.dp, c.border, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                ReynaMascot(
+                    modifier = Modifier.size(54.dp),
+                    contentDescription = null,
+                )
+            }
+
+            Spacer(Modifier.height(18.dp))
+
             Text(
-                if (pushing) "Filing" else "File now",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                color = if (pushing) c.onSurfaceFaint else c.accent,
+                "What can I find?",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = c.onSurface,
+                textAlign = TextAlign.Center,
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            Text(
+                "Ask for any document, note, or receipt.",
+                fontSize = 14.sp,
+                color = c.onSurfaceMuted,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 24.dp),
             )
         }
     }

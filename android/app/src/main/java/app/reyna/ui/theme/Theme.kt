@@ -79,9 +79,6 @@ data class ReynaColors(
     }
 }
 
-/** The mark is a lightning bolt, so the accent is electric. */
-private val Electric = Color(0xFF3B5BFE)
-
 /**
  * Light is a warm off-white rather than pure white.
  *
@@ -90,43 +87,43 @@ private val Electric = Color(0xFF3B5BFE)
  * Reyna holds.
  */
 private val LightColors = ReynaColors(
-    background = Color(0xFFFCFCFB),
+    background = Color(0xFFFFFFFF),
     surface = Color(0xFFFFFFFF),
-    border = Color(0xFFE7E7E3),
-    bubbleIncoming = Color(0xFFF3F3F1),
-    bubbleOutgoing = Electric,
-    onBubbleOutgoing = Color(0xFFFFFFFF),
-    onSurface = Color(0xFF1A1A18),
-    onSurfaceMuted = Color(0xFF73736D),
-    onSurfaceFaint = Color(0xFFA1A19A),
-    divider = Color(0xFFEDEDEA),
-    surfaceRaised = Color(0xFFFFFFFF),
-    accent = Electric,
-    confident = Color(0xFF3F8F5B),
-    partial = Color(0xFFB07A22),
-    unknown = Color(0xFF9A9A93),
-    notice = Color(0xFF9A6511),
-    noticeSurface = Color(0xFFFDF4E3),
+    border = Color(0xFFE5E5E5),
+    bubbleIncoming = Color(0xFFF4F4F5),
+    bubbleOutgoing = Color(0xFFF4F4F5),
+    onBubbleOutgoing = Color(0xFF18181B),
+    onSurface = Color(0xFF18181B),
+    onSurfaceMuted = Color(0xFF71717A),
+    onSurfaceFaint = Color(0xFFA1A1AA),
+    divider = Color(0xFFEEEEEE),
+    surfaceRaised = Color(0xFFF4F4F5),
+    accent = Color(0xFF18181B),
+    confident = Color(0xFF22C55E),
+    partial = Color(0xFFEAB308),
+    unknown = Color(0xFF71717A),
+    notice = Color(0xFFD97706),
+    noticeSurface = Color(0xFFFEF3C7),
 )
 
 private val DarkColors = ReynaColors(
-    background = Color(0xFF141415),
-    surface = Color(0xFF1B1B1D),
-    border = Color(0xFF2C2C30),
-    bubbleIncoming = Color(0xFF26262A),
-    bubbleOutgoing = Electric,
-    onBubbleOutgoing = Color(0xFFFFFFFF),
-    onSurface = Color(0xFFF0F0EE),
-    onSurfaceMuted = Color(0xFF9A9A95),
-    onSurfaceFaint = Color(0xFF6E6E6A),
-    divider = Color(0xFF262629),
-    surfaceRaised = Color(0xFF212125),
-    accent = Color(0xFF6D86FF),
-    confident = Color(0xFF5FB07B),
-    partial = Color(0xFFD9A24A),
-    unknown = Color(0xFF8A8A85),
-    notice = Color(0xFFE0AE5C),
-    noticeSurface = Color(0xFF2A2317),
+    background = Color(0xFF0F0F10),
+    surface = Color(0xFF171719),
+    border = Color(0xFF27272A),
+    bubbleIncoming = Color(0xFF1C1C1F),
+    bubbleOutgoing = Color(0xFF27272A),
+    onBubbleOutgoing = Color(0xFFF4F4F5),
+    onSurface = Color(0xFFF4F4F5),
+    onSurfaceMuted = Color(0xFFA1A1AA),
+    onSurfaceFaint = Color(0xFF52525B),
+    divider = Color(0xFF202023),
+    surfaceRaised = Color(0xFF1C1C1F),
+    accent = Color(0xFFF4F4F5),
+    confident = Color(0xFF22C55E),
+    partial = Color(0xFFEAB308),
+    unknown = Color(0xFF71717A),
+    notice = Color(0xFFF59E0B),
+    noticeSurface = Color(0xFF291E0A),
 )
 
 val LocalReynaColors = staticCompositionLocalOf { LightColors }
