@@ -363,8 +363,8 @@ func (c *Classifier) ClassifyFileWithContent(fileName, mimeType string, fileData
 		}
 	}
 
-	// Tier 2b: PDFs — combined LLM call with the file as inline doc block
-	if c.IsEnabled() && len(fileData) > 0 && strings.Contains(mimeType, "pdf") {
+	// Tier 2b: PDFs & Images — combined LLM call with the file as inline doc block
+	if c.IsEnabled() && len(fileData) > 0 && (strings.Contains(mimeType, "pdf") || strings.Contains(mimeType, "image")) {
 		foldersStr := "(no existing folders — pick a descriptive new one)"
 		if len(existingFolders) > 0 {
 			foldersStr = strings.Join(existingFolders, ", ")

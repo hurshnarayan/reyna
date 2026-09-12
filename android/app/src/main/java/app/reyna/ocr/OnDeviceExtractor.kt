@@ -54,7 +54,80 @@ object OnDeviceExtractor {
     private fun extractFromImage(context: Context, file: File): String? {
         val image = InputImage.fromFilePath(context, Uri.fromFile(file))
         val visionText = Tasks.await(recognizer.process(image), 15, TimeUnit.SECONDS)
-        return visionText.text.trim().ifBlank { null }
+        return formatVisionText(visionText).ifBlank { null }
+    }
+
+    /**
+     * Reconstructs 2D reading order from OCR text blocks.
+     *
+     * ML Kit's default `visionText.text` concatenates text blocks in arbitrary column order,
+     * which scrambles tables, multi-column forms, timetables, and proctor lists.
+     * This clusters detected lines into visual rows by vertical position, sorts each row
+     * left-to-right by horizontal coordinate, and joins table columns with " | ".
+     */
+    fun formatVisionText(visionText: com.google.mlkit.vision.text.Text): String {
+        val allLines = visionText.textBlocks.flatMap { it.lines }
+        if (allLines.isEmpty()) {
+            return visionText.text.trim()
+        }
+
+        val validLines = allLines.filter { it.boundingBox != null && it.text.isNotBlank() }
+        if (validLines.isEmpty()) {
+            return visionText.text.trim()
+        }
+
+        val sorted = validLines.sortedWith(compareBy({ it.boundingBox!!.top }, { it.boundingBox!!.left }))
+
+        class VisualRow(
+            var top: Int,
+            var bottom: Int,
+            val lines: MutableList<com.google.mlkit.vision.text.Text.Line> = mutableListOf()
+        ) {
+            fun add(line: com.google.mlkit.vision.text.Text.Line) {
+                val box = line.boundingBox!!
+                lines.add(line)
+                top = minOf(top, box.top)
+                bottom = maxOf(bottom, box.bottom)
+            }
+        }
+
+        val rows = mutableListOf<VisualRow>()
+        for (line in sorted) {
+            val box = line.boundingBox!!
+            val lineH = (box.bottom - box.top).coerceAtLeast(1)
+            val centerY = (box.top + box.bottom) / 2
+
+            val matching = rows.find { r ->
+                val rH = (r.bottom - r.top).coerceAtLeast(1)
+                val overlapTop = maxOf(r.top, box.top)
+                val overlapBottom = minOf(r.bottom, box.bottom)
+                val overlap = (overlapBottom - overlapTop).coerceAtLeast(0)
+                val minH = minOf(lineH, rH)
+                overlap >= (minH * 0.45f) || (centerY in r.top..r.bottom)
+            }
+
+            if (matching != null) {
+                matching.add(line)
+            } else {
+                val newRow = VisualRow(box.top, box.bottom)
+                newRow.add(line)
+                rows.add(newRow)
+            }
+        }
+
+        rows.sortBy { it.top }
+
+        val sb = StringBuilder()
+        for (r in rows) {
+            r.lines.sortBy { it.boundingBox!!.left }
+            if (r.lines.size > 1) {
+                sb.append(r.lines.joinToString(" | ") { it.text.trim() }).append("\n")
+            } else {
+                sb.append(r.lines.first().text.trim()).append("\n")
+            }
+        }
+
+        return sb.toString().trim()
     }
 
     private fun extractFromPdf(file: File): String? {
@@ -79,7 +152,8 @@ object OnDeviceExtractor {
                     try {
                         page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                         val input = InputImage.fromBitmap(bitmap, 0)
-                        Tasks.await(recognizer.process(input), 15, TimeUnit.SECONDS).text.trim()
+                        val visionText = Tasks.await(recognizer.process(input), 15, TimeUnit.SECONDS)
+                        formatVisionText(visionText)
                     } finally {
                         bitmap.recycle()
                     }

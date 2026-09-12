@@ -708,16 +708,11 @@ func (s *Server) handleDeviceUpload(w http.ResponseWriter, r *http.Request) {
 
 		var extractedContent, contentSummary string
 		switch {
-		case len(data) > 0 && (strings.Contains(mime, "pdf") || nlp.IsOfficeDoc(mime)):
+		case len(data) > 0 && (strings.Contains(mime, "pdf") || nlp.IsOfficeDoc(mime) || IsDocumentImage(fName, mime, devText)):
 			classifySubject, _, _, extractedContent, contentSummary = s.classifier.ClassifyFileWithContent(fName, mime, data, existingFolders, fmeta)
 
 		case strings.HasPrefix(mime, "image/"):
-			// Photographs get a folder without asking a model.
-			//
-			// A model call per image is a call spent deciding that a forwarded
-			// photo belongs in Photos. Multiply that by the several hundred
-			// images a real phone holds and it is the whole daily allowance,
-			// spent before a single document has been read.
+			// Ordinary photographs (selfies, landscapes, memes) get Photos without consuming a model call
 			classifySubject = "Photos"
 
 		default:
@@ -742,6 +737,16 @@ func (s *Server) handleDeviceUpload(w http.ResponseWriter, r *http.Request) {
 				} else {
 					contentSummary = devText
 				}
+			}
+		}
+
+		// If devText was used but lacks structured table markdown (|) while content has tabular signals,
+		// and raw bytes are available, attempt deep extraction to preserve table rows.
+		if extractedContent != "" && len(data) > 0 && IsDocumentImage(fName, mime, extractedContent) &&
+			needsTableFormatting(extractedContent) && !strings.Contains(extractedContent, "|") {
+			if content, summary, err := s.classifier.ExtractContent(fName, mime, fSize, data); err == nil && content != "" {
+				extractedContent = content
+				contentSummary = summary
 			}
 		}
 
@@ -2938,14 +2943,61 @@ var readableExtensions = map[string]bool{
 	".xml": true, ".html": true, ".htm": true, ".epub": true,
 }
 
+// needsTableFormatting reports whether text contains tabular keywords or numbers that
+// benefit from structured row-by-row markdown table extraction.
+func needsTableFormatting(text string) bool {
+	if text == "" {
+		return false
+	}
+	lower := strings.ToLower(text)
+	tableSignals := []string{
+		"si no", "sl no", "sl. no", "roll no", "roll number", "usn", "proctee",
+		"proctor", "total", "subtotal", "balance", "amount", "gst", "tax",
+		"invoice", "receipt", "timetable", "schedule", "course code", "marks",
+		"grade", "candidate", "passenger", "pnr", "seat no", "berth", "room no",
+	}
+	for _, sig := range tableSignals {
+		if strings.Contains(lower, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsDocumentImage reports whether an image file is a document, receipt, ticket,
+// table, proctor list, schedule, or text capture rather than an everyday photo.
+func IsDocumentImage(fileName, mimeType, sampleText string) bool {
+	if !strings.HasPrefix(mimeType, "image/") && !strings.Contains(mimeType, "image") {
+		return false
+	}
+	lowerName := strings.ToLower(fileName)
+	docClues := []string{
+		"list", "proct", "table", "sheet", "receipt", "invoice", "bill", "ticket",
+		"schedule", "timetable", "admit", "result", "marks", "syllabus", "card",
+		"note", "form", "pnr", "statement", "report", "doc", "scan", "cert",
+		"challan", "fee", "token", "slip", "letter", "circular", "roster",
+	}
+	for _, clue := range docClues {
+		if strings.Contains(lowerName, clue) {
+			return true
+		}
+	}
+	if sampleText != "" && (needsTableFormatting(sampleText) || len(strings.Fields(sampleText)) >= 15) {
+		return true
+	}
+	return false
+}
+
 // ReadableForExtraction reports whether reading this file could ever produce
 // text. The extension decides, because the mime type arrives from a phone and
 // is frequently application/octet-stream.
 func ReadableForExtraction(mimeType, fileName string) bool {
-	if strings.HasPrefix(mimeType, "image/") ||
-		strings.HasPrefix(mimeType, "video/") ||
+	if strings.HasPrefix(mimeType, "video/") ||
 		strings.HasPrefix(mimeType, "audio/") {
 		return false
+	}
+	if strings.HasPrefix(mimeType, "image/") || strings.Contains(mimeType, "image") {
+		return IsDocumentImage(fileName, mimeType, "")
 	}
 	i := strings.LastIndex(fileName, ".")
 	if i < 0 {
@@ -3039,7 +3091,15 @@ func (s *Server) ensureContent(files []model.File, max int, deadline time.Time, 
 		if read >= max || time.Now().After(deadline) {
 			break
 		}
-		if have[f.ID] != "" || !ReadableForExtraction(f.MimeType, f.FileName) {
+		cached := have[f.ID]
+		needsExtraction := cached == ""
+		if !needsExtraction && (strings.Contains(f.MimeType, "image") || strings.Contains(f.MimeType, "pdf")) {
+			// If cached text from on-device OCR is missing table row structure (|) but content indicates a table/list
+			if needsTableFormatting(cached) && !strings.Contains(cached, "|") {
+				needsExtraction = true
+			}
+		}
+		if !needsExtraction || !ReadableForExtraction(f.MimeType, f.FileName) {
 			continue
 		}
 		// Naming the file is the point. "Reading Module 1 ODE.pdf" tells the
@@ -3371,31 +3431,26 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		var content string
-		if i == 0 {
-			// Top hit: always re-extract the full PDF live
+		if cached := s.store.GetFileExtractedContent([]int64{f.ID})[f.ID]; cached != "" {
+			content = cached
+		}
+
+		// Grounding: top hit gets live extraction; subsequent hits get live extraction if content
+		// is missing or lacks structured table formatting (|) for tabular documents/images.
+		needsExtract := content == "" || i == 0
+		if !needsExtract && (strings.Contains(f.MimeType, "image") || strings.Contains(f.MimeType, "pdf")) {
+			if needsTableFormatting(content) && !strings.Contains(content, "|") {
+				needsExtract = true
+			}
+		}
+
+		if needsExtract {
 			if data, derr := s.drive.GetLocalFileData(f.ID); derr == nil && len(data) > 0 {
-				log.Printf("[QA] full-document extract for top hit: %s (%d bytes)", f.FileName, len(data))
+				log.Printf("[QA] document extract for %s (%d bytes)", f.FileName, len(data))
 				extracted, summary, _ := s.classifier.ExtractContent(f.FileName, f.MimeType, f.FileSize, data)
 				if extracted != "" {
 					content = extracted
 					_ = s.store.UpdateFileContent(f.ID, extracted, summary)
-				}
-			}
-		}
-		// Fallback / non-top: use cached extracted_content
-		if content == "" {
-			if cached := s.store.GetFileExtractedContent([]int64{f.ID})[f.ID]; cached != "" {
-				content = cached
-			}
-		}
-		// Lazy fallback: cached content empty → try a one-time extract
-		if content == "" {
-			if data, derr := s.drive.GetLocalFileData(f.ID); derr == nil && len(data) > 0 {
-				log.Printf("[QA] lazy-extracting %s (%d bytes)", f.FileName, len(data))
-				extracted, summary, _ := s.classifier.ExtractContent(f.FileName, f.MimeType, f.FileSize, data)
-				if extracted != "" {
-					_ = s.store.UpdateFileContent(f.ID, extracted, summary)
-					content = extracted
 				}
 			}
 		}
