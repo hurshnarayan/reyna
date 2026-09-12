@@ -21,3 +21,10 @@ This directory preserves the source mascot graphics for easy reference and futur
 - Files: `reyna_mascot_1.png` to `reyna_mascot_5.png`
 - Used in app as: `R.drawable.reyna_mascot_1` .. `R.drawable.reyna_mascot_5` via `ReynaMascotAnimated()`
 - Used during active search / querying in chat message rows (`MarkRow`).
+
+## 3. Loading / Splash Mascot (`loading/`)
+- Source: 8-frame tail-wag sequence from `/Users/harsh/Documents/Reyna_loading/`
+- Files: `1.png` to `8.png`
+- Used in app as: `R.drawable.reyna_loading_1` .. `R.drawable.reyna_loading_8` via `ReynaLoadingMascot()`
+- Fast-paced, prominent tail wag used on app launch / splash screen and loading states.
+

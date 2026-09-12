@@ -41,6 +41,17 @@ private val NavMascotFrames = intArrayOf(
     R.drawable.reyna_nav_9,
 )
 
+private val LoadingMascotFrames = intArrayOf(
+    R.drawable.reyna_loading_1,
+    R.drawable.reyna_loading_2,
+    R.drawable.reyna_loading_3,
+    R.drawable.reyna_loading_4,
+    R.drawable.reyna_loading_5,
+    R.drawable.reyna_loading_6,
+    R.drawable.reyna_loading_7,
+    R.drawable.reyna_loading_8,
+)
+
 /** Reyna at rest. Looks straight ahead and anchors the mark. */
 @Composable
 fun ReynaMascot(
@@ -136,3 +147,36 @@ fun ReynaMascotAnimated(
         contentScale = ContentScale.Fit,
     )
 }
+
+/**
+ * Fast-paced loading animation with prominent energetic tail wag.
+ *
+ * Used during app launch splash screen and active loading states.
+ * 8 frames cycling at a snappy pace (default 560ms cycle, 70ms per frame).
+ */
+@Composable
+fun ReynaLoadingMascot(
+    modifier: Modifier = Modifier,
+    contentDescription: String? = "Reyna is loading",
+    cycleDurationMillis: Int = 560,
+) {
+    val transition = rememberInfiniteTransition(label = "reyna-loading-mascot")
+    val position by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = LoadingMascotFrames.size.toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = cycleDurationMillis, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "reyna-loading-frame",
+    )
+    val frame = position.toInt().coerceIn(LoadingMascotFrames.indices)
+
+    Image(
+        painter = painterResource(LoadingMascotFrames[frame]),
+        contentDescription = contentDescription,
+        modifier = modifier,
+        contentScale = ContentScale.Fit,
+    )
+}
+

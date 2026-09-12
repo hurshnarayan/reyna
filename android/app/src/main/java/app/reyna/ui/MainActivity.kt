@@ -10,6 +10,10 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -53,9 +57,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.reyna.permissions.Permissions
 import app.reyna.ui.components.FluidTopNotification
+import app.reyna.ui.components.ReynaLoadingMascot
 import app.reyna.ui.components.WhoSharedThisDrawer
 import app.reyna.ui.theme.ReynaTheme
 import app.reyna.ui.theme.reynaColors
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
 
@@ -123,6 +129,13 @@ private fun ReynaApp(vm: ReynaViewModel, activity: ComponentActivity) {
     val toast by vm.toast.collectAsState()
     var activeNotice by remember { mutableStateOf<Pair<String, String>?>(null) }
     var noticeColor by remember { mutableStateOf(Color(0xFF10B981)) }
+    var splashVisible by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        // App launch splash entrance: energetic tail-wagging loading animation
+        delay(1_400L)
+        splashVisible = false
+    }
 
     LaunchedEffect(toast) {
         toast?.let { text ->
@@ -176,6 +189,52 @@ private fun ReynaApp(vm: ReynaViewModel, activity: ComponentActivity) {
                 vm.clearToast()
             },
         )
+
+        // App launch / splash screen with fast-paced loading mascot
+        AnimatedVisibility(
+            visible = splashVisible,
+            enter = fadeIn(),
+            exit = fadeOut(tween(350)),
+        ) {
+            LaunchSplashScreen()
+        }
+    }
+}
+
+/**
+ * App launch splash screen featuring Reyna's prominent fast-paced tail wag animation.
+ */
+@Composable
+private fun LaunchSplashScreen(modifier: Modifier = Modifier) {
+    val c = reynaColors
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(c.background)
+            .clickable(
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                indication = null,
+                onClick = {},
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            ReynaLoadingMascot(
+                modifier = Modifier.size(128.dp),
+                cycleDurationMillis = 560,
+            )
+            Spacer(Modifier.height(20.dp))
+            Text(
+                text = "reyna",
+                fontSize = 25.sp,
+                fontWeight = FontWeight.Bold,
+                color = c.onSurface,
+                letterSpacing = (-0.5).sp,
+            )
+        }
     }
 }
 
