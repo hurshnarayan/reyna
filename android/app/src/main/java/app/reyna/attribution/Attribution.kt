@@ -136,6 +136,29 @@ object Attribution {
     fun isImage(diskName: String): Boolean =
         diskName.substringAfterLast('.', "").lowercase(Locale.ROOT) in IMAGE_EXTENSIONS
 
+    fun isMediaCompatible(diskName: String, attName: String, text: String): Boolean {
+        val fIsImage = isImage(diskName)
+        if (attName.isNotEmpty()) {
+            val attIsImage = isImage(attName)
+            if (fIsImage != attIsImage) return false
+            val fExt = diskName.substringAfterLast('.', "").lowercase(Locale.ROOT)
+            val attExt = attName.substringAfterLast('.', "").lowercase(Locale.ROOT)
+            if (!fIsImage && fExt.isNotEmpty() && attExt.isNotEmpty() && fExt != attExt) return false
+            return true
+        }
+        val t = text.trim()
+        if (fIsImage) {
+            if (t.startsWith("📄") || t.contains(".pdf", ignoreCase = true) || t.contains(".docx", ignoreCase = true) || t.contains(".pptx", ignoreCase = true)) {
+                return false
+            }
+            return true
+        }
+        if (t.startsWith("📷") || t.contains("photo", ignoreCase = true)) {
+            return false
+        }
+        return true
+    }
+
     /**
      * Matches one file against the events we know about.
      *
@@ -212,14 +235,14 @@ object Attribution {
             // Rules 4-5. The name is WhatsApp-generated, so it tells us the
             // date but not which message. Resolved below, once we know how many
             // events share that day.
-            if (fileDate != null && e.hasAttachment && sameDay(e.postedAtMillis, fileDate, zone)) {
+            if (fileDate != null && e.hasAttachment && isMediaCompatible(file.diskName, e.attachmentName, e.text) && sameDay(e.postedAtMillis, fileDate, zone)) {
                 candidates += Link(file.id, e.id, Method.DATE_UNIQUE, 0.70)
                 continue
             }
 
             // Rule 6. Nothing but proximity. Weak by construction, and only
             // ever enough to say "shared in this chat", never a name.
-            if (e.hasAttachment && dt <= TEN_MINUTES) {
+            if (e.hasAttachment && isMediaCompatible(file.diskName, e.attachmentName, e.text) && dt <= TEN_MINUTES) {
                 candidates += Link(file.id, e.id, Method.TIME_ONLY, 0.30)
             }
         }

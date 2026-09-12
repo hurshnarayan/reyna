@@ -226,3 +226,85 @@ func TestCosineSimilarity(t *testing.T) {
 		t.Fatalf("empty vector sim = %v, want 0.0", sim)
 	}
 }
+
+func TestSummaryEntityOutranksGenericFilenameDecoy(t *testing.T) {
+	primary := []string{"helmet", "cost"}
+	allTokens := []string{"helmet", "cost", "price", "bill", "invoice", "receipt"}
+
+	// Numeric WhatsApp file with AI summary indicating it is a helmet tax invoice
+	realReceipt := ScoredWithPrimary("3144.pdf", "Invoices", "Tax invoice for FF818 STORM III helmet purchased by Harsh Narayan", "Total: 15400 INR", allTokens, primary)
+
+	// Decoy laptop bill that merely has 'bill' in its filename
+	laptopBill := ScoredWithPrimary("BILL-LAPTOP.pdf", "Invoices", "Tax invoice for Dell Laptop", "Total: 65000 INR", allTokens, primary)
+
+	if realReceipt.Score <= laptopBill.Score {
+		t.Fatalf("real helmet receipt (%v) should outrank generic laptop bill (%v)", realReceipt.Score, laptopBill.Score)
+	}
+}
+
+// When a user asks for "ticket of harsh and khushi", a ticket that contains BOTH passengers
+// and covers the query completely must outrank a decoy ticket that only contains one passenger.
+func TestFullEntityCoverageOutranksPartialDecoy(t *testing.T) {
+	primary := []string{"train", "ticket", "harsh", "khushi"}
+	allTokens := []string{"train", "ticket", "harsh", "khushi", "booking", "travel"}
+
+	// File 2181: Train ticket with both Harsh Narayan and Khushi Mehta
+	twoPassengers := ScoredWithPrimary(
+		"4656526133.pdf",
+		"Di",
+		"IRCTC Electronic Reservation Slip for Rajdhani Exp (22691) from KSR Bengaluru to Secunderabad.",
+		"Electronic Reservation Slip (ERS)-Normal User Booked from KSR BENGALURU (SBC) To SECUNDERABAD JN (SC) Start Date* 12-Sept-2026 Train No./Name 22691/RAJDHANI EXP Passenger Details 1 KHUSHI MEHTA 2 HARSH NARAYAN Ticket Fare 3480 Booking Date 29-Aug-2026 Travel Insurance Premium 0.90",
+		allTokens,
+		primary,
+	)
+
+	// File 2180: Flight ticket with Khushi Mehta and others (Harsh is absent)
+	onePassenger := ScoredWithPrimary(
+		"44117890315459052945.pdf",
+		"Di",
+		"Flight booking confirmation for Khushi Mehta, Sonam Sahoo, Ramendra Sahoo, and Rishi Sahoo.",
+		"E-Ticket booked with Booking Confirmed Booking ID : 44117890315459052945 Departure Flight: Hyderabad to Durgapur Sat, 17 Oct 2026 Mrs. Khushi Mehta Mrs. Sonam Sahoo Mr. Ramendra Sahoo Travel Insurance Covered",
+		allTokens,
+		primary,
+	)
+
+	if twoPassengers.Score <= onePassenger.Score {
+		t.Fatalf("full entity match (%v) must outrank single passenger match (%v)", twoPassengers.Score, onePassenger.Score)
+	}
+}
+
+func TestTypoMatchesIntendedWord(t *testing.T) {
+	// "compriot" is a typo for "compatriot"
+	tokens := []string{"compriot"}
+	primary := []string{"compriot"}
+
+	// Compatriot dictionary file
+	compatriotDoc := ScoredWithPrimary(
+		"IMG-20260910-WA0001.jpg",
+		"Di",
+		"A Google search result page defining the word 'compatriot' in English and Hindi.",
+		"compatriot noun a person who comes from the same country as you",
+		tokens,
+		primary,
+	)
+
+	// Random electricity bill decoy
+	billDoc := ScoredWithPrimary(
+		"Electricity_Bill_June.pdf",
+		"Bills",
+		"Electricity bill for June 2026",
+		"BESCOM electricity bill payment receipt",
+		tokens,
+		primary,
+	)
+
+	if compatriotDoc.Matched == 0 {
+		t.Fatal("compriot should fuzzy match compatriot in summary/content")
+	}
+	if compatriotDoc.Score <= billDoc.Score {
+		t.Fatalf("compatriot doc (%v) should outrank unrelated bill (%v)", compatriotDoc.Score, billDoc.Score)
+	}
+}
+
+
+

@@ -578,6 +578,16 @@ class ReynaViewModel(app: Application) : AndroidViewModel(app) {
         )?.absolutePath
     }
 
+    /** Resolves a source citation for press-and-hold Quick Look. */
+    suspend fun sourcePreviewPath(source: Source): String? {
+        val local = localFileFor(source.fileId, source.fileName)
+        return repo.previewFile(
+            localPath = local?.path.orEmpty(),
+            remoteId = local?.remoteId?.takeIf { it > 0L } ?: source.fileId,
+            fileName = source.fileName,
+        )?.absolutePath
+    }
+
     private fun openPath(file: java.io.File, name: String, isImage: Boolean) {
         val app = getApplication<Application>()
         runCatching {

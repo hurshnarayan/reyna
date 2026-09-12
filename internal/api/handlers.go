@@ -1704,16 +1704,67 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("[NLP-RETRIEVE] groupIDs=%v", groupIDs)
 
+	currentUserName := ""
+	if req.UserPhone != "" && req.UserPhone != "device" {
+		if u, err := s.store.GetUserByPhone(req.UserPhone); err == nil && u.Name != "" && u.Name != "You" {
+			currentUserName = u.Name
+		}
+	}
+	if currentUserName == "" {
+		currentUserName = s.store.GetPrimaryUserName()
+	}
+	if currentUserName != "" {
+		log.Printf("[NLP-RETRIEVE] resolved user identity name=%q", currentUserName)
+	}
+
 	// A question that answers a previous "which one did you mean" skips the
 	// search entirely. The user has already said which documents they meant.
 	var scored []repository.ScoredFile
 	searchTerms := parsedQuery.SearchTerms
+	var dateTerms []string
+	if when == "tomorrow" {
+		tTomorrow := now.In(istLocation).AddDate(0, 0, 1)
+		dateTerms = []string{
+			tTomorrow.Format("02-Jan"),
+			fmt.Sprintf("%d-Sept", tTomorrow.Day()),
+			fmt.Sprintf("%02d-Sept", tTomorrow.Day()),
+			tTomorrow.Format("02 Jan"),
+			tTomorrow.Format("02 January"),
+			fmt.Sprintf("%d Sept", tTomorrow.Day()),
+			fmt.Sprintf("%d-Sep", tTomorrow.Day()),
+			tTomorrow.Format("02/01"),
+			tTomorrow.Format("02-01"),
+		}
+		searchTerms = append(searchTerms, dateTerms...)
+	} else if when == "today" {
+		tToday := now.In(istLocation)
+		dateTerms = []string{
+			tToday.Format("02-Jan"),
+			fmt.Sprintf("%d-Sept", tToday.Day()),
+			fmt.Sprintf("%02d-Sept", tToday.Day()),
+			tToday.Format("02 Jan"),
+			tToday.Format("02 January"),
+			fmt.Sprintf("%d Sept", tToday.Day()),
+			fmt.Sprintf("%d-Sep", tToday.Day()),
+			tToday.Format("02/01"),
+			tToday.Format("02-01"),
+		}
+		searchTerms = append(searchTerms, dateTerms...)
+	}
 	if len(searchTerms) == 0 && what != "" {
 		searchTerms = []string{what}
 	}
 	searchWhat := strings.Join(searchTerms, " ")
 	if searchWhat == "" {
 		searchWhat = what
+	}
+
+	primaryWhat := what
+	if who != "" {
+		primaryWhat = strings.TrimSpace(primaryWhat + " " + who)
+	}
+	if primaryWhat == "" {
+		primaryWhat = req.Query
 	}
 
 	if len(req.FileIDs) > 0 {
@@ -1725,44 +1776,74 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Printf("[NLP-RETRIEVE] answering against %d user-chosen file(s)", len(scored))
 	} else {
-		scored, _ = s.store.SearchFilesNLPScored(groupIDs, who, searchWhat, sinceTime, 20)
+		scored, _ = s.store.SearchFilesNLPScoredWithPrimary(groupIDs, who, searchWhat, primaryWhat, sinceTime, 20)
 	}
 	files := scoredFiles(scored)
 	if len(req.FileIDs) == 0 {
 		// Fallback 1: If time window was set and returned nothing, retry without time window
 		if len(scored) == 0 && sinceTime != nil {
-			if fb, _ := s.store.SearchFilesNLPScored(groupIDs, who, searchWhat, nil, 20); len(fb) > 0 {
+			if fb, _ := s.store.SearchFilesNLPScoredWithPrimary(groupIDs, who, searchWhat, primaryWhat, nil, 20); len(fb) > 0 {
 				log.Printf("[NLP-RETRIEVE] no hits with time window; falling back without time filter")
 				scored = fb
 			}
 		}
 		// Fallback 2: If WHO and WHAT together found nothing, retry on WHO alone
 		if len(scored) == 0 && who != "" && (searchWhat != "" || sinceTime != nil) {
-			if fb, _ := s.store.SearchFilesNLPScored(groupIDs, who, "", nil, 20); len(fb) > 0 {
+			if fb, _ := s.store.SearchFilesNLPScoredWithPrimary(groupIDs, who, "", "", nil, 20); len(fb) > 0 {
 				log.Printf("[NLP-RETRIEVE] no hits for who+what; falling back to sender only")
 				scored = fb
 			}
 		}
 		// Fallback 3: If still nothing and WHO was specified, retry on WHAT alone without time filter
 		if len(scored) == 0 && who != "" && searchWhat != "" {
-			if fb, _ := s.store.SearchFilesNLPScored(groupIDs, "", searchWhat, nil, 20); len(fb) > 0 {
+			if fb, _ := s.store.SearchFilesNLPScoredWithPrimary(groupIDs, "", searchWhat, primaryWhat, nil, 20); len(fb) > 0 {
 				log.Printf("[NLP-RETRIEVE] no hits for sender %q; falling back to topic only", who)
 				scored = fb
 			}
 		}
 		// Fallback 4: If WHO was specified and WHAT was empty (or both failed), retry searching WHO as WHAT
 		if len(scored) == 0 && who != "" {
-			if fb, _ := s.store.SearchFilesNLPScored(groupIDs, "", who, nil, 20); len(fb) > 0 {
+			if fb, _ := s.store.SearchFilesNLPScoredWithPrimary(groupIDs, "", who, who, nil, 20); len(fb) > 0 {
 				log.Printf("[NLP-RETRIEVE] no hits for sender %q; trying sender as topic", who)
 				scored = fb
 			}
 		}
 		files = scoredFiles(scored)
 
+		// If explicit relative calendar time was requested (today/tomorrow), search specifically
+		// for files matching the raw date tokens inside their text, and boost them to the top.
+		if len(dateTerms) > 0 {
+			if dateFiles, err := s.store.SearchFilesByRawDateTokens(groupIDs, dateTerms, 10); err == nil && len(dateFiles) > 0 {
+				log.Printf("[NLP-RETRIEVE] found %d file(s) matching raw date tokens %v", len(dateFiles), dateTerms)
+				existing := make(map[int64]bool)
+				for _, sf := range scored {
+					existing[sf.ID] = true
+				}
+				var dateScored []repository.ScoredFile
+				for _, df := range dateFiles {
+					if !existing[df.ID] {
+						dateScored = append(dateScored, repository.ScoredFile{File: df, Coverage: 1.0, Score: 200})
+					} else {
+						for i := range scored {
+							if scored[i].ID == df.ID {
+								scored[i].Score += 200
+								scored[i].Coverage = 1.0
+							}
+						}
+					}
+				}
+				scored = append(dateScored, scored...)
+				sort.SliceStable(scored, func(i, j int) bool {
+					return scored[i].Score > scored[j].Score
+				})
+			}
+		}
+		files = scoredFiles(scored)
+
 		// ── Dense Vector Semantic Search & Hybrid Reranking (Gemini 768-dim embeddings) ──
-		queryForEmbed := what
+		queryForEmbed := req.Query
 		if queryForEmbed == "" {
-			queryForEmbed = req.Query
+			queryForEmbed = what
 		}
 		if queryForEmbed != "" {
 			if queryVec, err := s.classifier.Embed(queryForEmbed); err == nil && len(queryVec) == 768 {
@@ -1770,10 +1851,10 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 				if fileEmbeddings == nil {
 					fileEmbeddings = make(map[int64][]float32)
 				}
-				// Lazily embed top candidates that have extracted text but no embedding yet
+				// Lazily embed top candidates that have text but no embedding yet
 				for _, sf := range scored {
 					if _, has := fileEmbeddings[sf.ID]; !has {
-						if content := s.store.GetFileExtractedContent([]int64{sf.ID})[sf.ID]; content != "" && content != repository.UnreadableSentinel {
+						if content := s.store.GetFileContentWithSummary([]int64{sf.ID})[sf.ID]; content != "" && content != repository.UnreadableSentinel {
 							textToEmbed := fmt.Sprintf("%s. %s. %s", sf.FileName, sf.Subject, content)
 							if len(textToEmbed) > 2000 {
 								textToEmbed = textToEmbed[:2000]
@@ -1795,28 +1876,56 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 					for idx, sf := range scored {
 						scoredMap[sf.ID] = idx
 					}
-					var vectorBonusFiles []int64
+					type vectorCandidate struct {
+						id  int64
+						sim float64
+					}
+					var vectorCandidates []vectorCandidate
 					for fID, fVec := range fileEmbeddings {
 						sim := relevance.CosineSimilarity(queryVec, fVec)
 						if idx, exists := scoredMap[fID]; exists {
 							// Boost existing lexical match with dense semantic similarity
 							scored[idx].Score += sim * 60.0
 							log.Printf("🧠 [VECTOR-HYBRID] file %d (%s) lexical+dense boost (sim=%.3f, new_score=%.1f)", fID, scored[idx].FileName, sim, scored[idx].Score)
-						} else if sim >= 0.65 {
+						} else if sim >= 0.53 {
 							// Dense semantic match not captured by pure keyword search
-							vectorBonusFiles = append(vectorBonusFiles, fID)
+							vectorCandidates = append(vectorCandidates, vectorCandidate{id: fID, sim: sim})
 						}
 					}
-					if len(vectorBonusFiles) > 0 {
-						if extraFiles, err := s.store.GetFilesByIDs(vectorBonusFiles); err == nil {
+					if len(vectorCandidates) > 0 {
+						sort.Slice(vectorCandidates, func(i, j int) bool {
+							return vectorCandidates[i].sim > vectorCandidates[j].sim
+						})
+						if len(vectorCandidates) > 8 {
+							vectorCandidates = vectorCandidates[:8]
+						}
+						var extraIDs []int64
+						simMap := make(map[int64]float64, len(vectorCandidates))
+						for _, vc := range vectorCandidates {
+							extraIDs = append(extraIDs, vc.id)
+							simMap[vc.id] = vc.sim
+						}
+						if extraFiles, err := s.store.GetFilesByIDs(extraIDs); err == nil {
+							tokens := repository.TokenizeWhat(searchWhat)
+							primaryTokens := repository.TokenizeWhat(primaryWhat)
+							summaries := s.store.GetFileContentSummaries(extraIDs)
+							contents := s.store.GetFileExtractedContent(extraIDs)
 							for _, ef := range extraFiles {
-								sim := relevance.CosineSimilarity(queryVec, fileEmbeddings[ef.ID])
+								sim := simMap[ef.ID]
+								r := relevance.ScoredWithPrimary(ef.FileName, ef.Subject+" "+ef.Tags, summaries[ef.ID], contents[ef.ID], tokens, primaryTokens)
+								finalScore := float64(sim) * 60.0
+								finalCoverage := 0.0
+								if r.Matched > 0 {
+									finalScore += r.Score
+									finalCoverage = r.Coverage
+								}
 								scored = append(scored, repository.ScoredFile{
 									File:     ef,
-									Score:    sim * 60.0,
-									Coverage: 0.8,
+									Score:    finalScore,
+									Coverage: finalCoverage,
+									Adjacent: r.Adjacent,
 								})
-								log.Printf("🧠 [VECTOR-SEMANTIC-RETRIEVE] retrieved file %d (%s) via dense cosine similarity=%.3f", ef.ID, ef.FileName, sim)
+								log.Printf("🧠 [VECTOR-SEMANTIC-RETRIEVE] retrieved file %d (%s) via dense cosine similarity=%.3f (score=%.1f, cov=%.2f)", ef.ID, ef.FileName, sim, finalScore, finalCoverage)
 							}
 						}
 					}
@@ -1838,6 +1947,34 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 
 	if isFetch {
 		log.Printf("[NLP-RETRIEVE] Intent is FETCH — returning top 3 file chips directly")
+
+		// If query is a follow-up pronoun query ("fetch it", "send that", "get it"), resolve from immediate history
+		lowerQ := strings.ToLower(strings.TrimSpace(req.Query))
+		isFollowup := lowerQ == "fetch it" || lowerQ == "fetch" || lowerQ == "send it" || lowerQ == "get it" ||
+			lowerQ == "download it" || strings.Contains(lowerQ, "fetch that") || strings.Contains(lowerQ, "send that")
+		if isFollowup && len(req.History) > 0 {
+			for i := len(req.History) - 1; i >= 0; i-- {
+				h := req.History[i]
+				if h.Role == "assistant" && (len(h.FileIDs) > 0 || len(h.FileNames) > 0) {
+					var prevFiles []model.File
+					if len(h.FileIDs) > 0 {
+						prevFiles, _ = s.store.GetFilesByIDs(h.FileIDs)
+					} else if len(h.FileNames) > 0 {
+						for _, fn := range h.FileNames {
+							if foundFiles, _ := s.store.FindFilesStrict(groupIDs, fn, 1); len(foundFiles) > 0 {
+								prevFiles = append(prevFiles, foundFiles[0])
+							}
+						}
+					}
+					if len(prevFiles) > 0 {
+						log.Printf("[NLP-RETRIEVE] FETCH follow-up resolved to %d file(s) from previous turn: %v", len(prevFiles), h.FileNames)
+						files = prevFiles
+						break
+					}
+				}
+			}
+		}
+
 		topFiles := files
 		if len(topFiles) > 3 {
 			topFiles = topFiles[:3]
@@ -1950,6 +2087,11 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 
 	buildDBView := func(fList []model.File) []nlp.RetrievalFile {
 		view := make([]nlp.RetrievalFile, 0, len(fList))
+		fIDs := make([]int64, 0, len(fList))
+		for _, f := range fList {
+			fIDs = append(fIDs, f.ID)
+		}
+		contentMap := s.store.GetFileContentWithSummary(fIDs)
 		for _, f := range fList {
 			sender := ""
 			if f.SenderKnown() {
@@ -1961,7 +2103,7 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 				Folder:   f.Subject,
 				Sender:   sender,
 				SharedAt: formatSharedAt(f.SharedAt()),
-				Summary:  s.store.GetFileExtractedContent([]int64{f.ID})[f.ID],
+				Summary:  contentMap[f.ID],
 			})
 		}
 		return view
@@ -1975,7 +2117,7 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 	if len(files) > 0 {
 		dbView := buildDBView(files)
 		stage.Send("writing", "Writing the answer")
-		sourced = s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, dbView, nil, req.History)
+		sourced = s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, dbView, nil, req.History, currentUserName)
 		citations = s.verifyCitations(sourced.Quotes, files)
 
 		if sourced.Found {
@@ -2021,11 +2163,11 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		stage.Send("writing", "Writing the answer")
-		sourced = s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, dbView, driveView, req.History)
+		sourced = s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, dbView, driveView, req.History, currentUserName)
 		citations = s.verifyCitations(sourced.Quotes, files)
 	} else if len(files) == 0 {
 		stage.Send("writing", "Writing the answer")
-		sourced = s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, nil, nil, req.History)
+		sourced = s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, nil, nil, req.History, currentUserName)
 	}
 
 	if !sourced.Found {
@@ -2274,9 +2416,14 @@ func (s *Server) verifyCitations(quotes []nlp.QuotedSource, files []model.File) 
 		return nil
 	}
 	byName := make(map[string]model.File, len(files))
+	var fileIDs []int64
 	for _, f := range files {
 		byName[strings.ToLower(f.FileName)] = f
+		fileIDs = append(fileIDs, f.ID)
 	}
+
+	contents := s.store.GetFileExtractedContent(fileIDs)
+	summaries := s.store.GetFileContentSummaries(fileIDs)
 
 	out := []model.Citation{}
 	seen := map[string]bool{}
@@ -2286,11 +2433,30 @@ func (s *Server) verifyCitations(quotes []nlp.QuotedSource, files []model.File) 
 			log.Printf("[CITE] dropped, no such file: %q", q.FileName)
 			continue
 		}
-		content := s.store.GetFileExtractedContent([]int64{f.ID})[f.ID]
+		content := contents[f.ID]
+		summary := summaries[f.ID]
+		if summary == "" {
+			summary = f.ContentSummary
+		}
+
 		quote, context, page, ok := locateQuote(content, q.Quote)
+		if !ok && summary != "" {
+			quote, context, page, ok = locateQuote(summary, q.Quote)
+			if !ok {
+				// Model quoted or paraphrased an image or document summary
+				quote = q.Quote
+				if len(quote) > 120 {
+					quote = quote[:120] + "..."
+				}
+				context = summary
+				page = 1
+				ok = true
+			}
+		}
 		if !ok {
 			// If file has no extracted full text yet, allow metadata citation of the file
-			if content == "" {
+			cleanContent := strings.TrimSpace(pageMarker.ReplaceAllString(content, ""))
+			if cleanContent == "" {
 				quote = f.FileName
 				context = "Document: " + f.FileName
 				if f.Subject != "" {
@@ -3137,6 +3303,16 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	currentUserName := ""
+	if req.UserPhone != "" && req.UserPhone != "device" {
+		if u, err := s.store.GetUserByPhone(req.UserPhone); err == nil && u.Name != "" && u.Name != "You" {
+			currentUserName = u.Name
+		}
+	}
+	if currentUserName == "" {
+		currentUserName = s.store.GetPrimaryUserName()
+	}
+
 	// Run the NLP parser to extract topic + sender + time hints from natural
 	// questions. The student may write "explain wien bridge oscillator from
 	// the notes mohit sent today" → who=mohit, what="wien bridge oscillator",
@@ -3256,7 +3432,7 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 	// 3. Local-First: Answer from local files if available
 	var localAnswer string
 	if len(qaSources) > 0 {
-		localAnswer = s.classifier.AnswerFromNotesWithContext(req.Question, qaSources, prev)
+		localAnswer = s.classifier.AnswerFromNotesWithContext(req.Question, qaSources, prev, currentUserName)
 		lower := strings.ToLower(localAnswer)
 		isNegative := strings.Contains(lower, "don't have enough content") ||
 			strings.Contains(lower, "truly don't contain") ||
@@ -3300,7 +3476,7 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 			driveSourceNames = append(driveSourceNames, m.FileName)
 		}
 		if len(driveQASources) > 0 {
-			driveAnswer := s.classifier.AnswerFromNotesWithContext(req.Question, driveQASources, prev)
+			driveAnswer := s.classifier.AnswerFromNotesWithContext(req.Question, driveQASources, prev, currentUserName)
 			json.NewEncoder(w).Encode(model.NotesQAResponse{
 				Answer:       driveAnswer,
 				Sources:      driveSourceNames,

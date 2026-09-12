@@ -20,6 +20,7 @@
 package attribution
 
 import (
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -136,6 +137,34 @@ func isImageFile(name string) bool {
 		strings.HasSuffix(lower, ".png") || strings.HasSuffix(lower, ".webp")
 }
 
+func isMediaCompatible(diskName, attName, text string) bool {
+	fIsImage := isImageFile(diskName)
+	if attName != "" {
+		attIsImage := isImageFile(attName)
+		if fIsImage != attIsImage {
+			return false
+		}
+		fExt := strings.ToLower(filepath.Ext(diskName))
+		attExt := strings.ToLower(filepath.Ext(attName))
+		if !fIsImage && fExt != "" && attExt != "" && fExt != attExt {
+			return false
+		}
+		return true
+	}
+	t := strings.TrimSpace(text)
+	tLower := strings.ToLower(t)
+	if fIsImage {
+		if strings.HasPrefix(t, "📄") || strings.Contains(tLower, ".pdf") || strings.Contains(tLower, ".docx") || strings.Contains(tLower, ".pptx") {
+			return false
+		}
+		return true
+	}
+	if strings.HasPrefix(t, "📷") || strings.Contains(tLower, "photo") {
+		return false
+	}
+	return true
+}
+
 // Attribute matches one file against the events we know about.
 //
 // The chain runs strongest first and collects every candidate rather than
@@ -199,14 +228,14 @@ func Attribute(f File, events []Event, zone *time.Location) Result {
 
 		// The name is WhatsApp-generated, so it gives the date but not which
 		// message. Resolved below once we know how many share that day.
-		if hasDate && e.HasAttachment && sameDay(e.PostedAt, fy, fm, fd, zone) {
+		if hasDate && e.HasAttachment && isMediaCompatible(f.DiskName, e.AttachmentName, e.Text) && sameDay(e.PostedAt, fy, fm, fd, zone) {
 			candidates = append(candidates, Link{f.ID, e.ID, model.AttrDateUnique, 0.70})
 			continue
 		}
 
 		// Nothing but proximity. Weak by construction, and only ever enough to
 		// say "shared in this chat", never a name.
-		if e.HasAttachment && dt <= tenMinutes {
+		if e.HasAttachment && isMediaCompatible(f.DiskName, e.AttachmentName, e.Text) && dt <= tenMinutes {
 			candidates = append(candidates, Link{f.ID, e.ID, model.AttrTimeOnly, 0.30})
 		}
 	}

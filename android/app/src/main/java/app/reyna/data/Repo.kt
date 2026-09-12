@@ -493,9 +493,6 @@ class Repo private constructor(private val context: Context) {
             // only when it reached the disk.
             postedAt = winner?.postedAt ?: f.postedAt,
         )
-        if (deviceToken.isNotBlank() && f.remoteId > 0 && !newSender.isNullOrBlank() && result.confidence >= Attribution.MIN_NAMED) {
-            runCatching { api().setSender(f.remoteId, newSender) }
-        }
         return true
     }
 
@@ -506,10 +503,13 @@ class Repo private constructor(private val context: Context) {
      * behind every "who shared this?" affordance.
      */
     suspend fun setSenderManually(fileId: Long, sender: String) = withContext(Dispatchers.IO) {
-        val f = dao.file(fileId) ?: return@withContext
-        dao.setAttribution(fileId, sender, f.chatName, 1.0, Attribution.Method.USER, f.postedAt)
-        if (deviceToken.isNotBlank() && f.remoteId > 0) {
-            api().setSender(f.remoteId, sender)
+        val f = dao.file(fileId) ?: dao.allFiles().firstOrNull { it.remoteId > 0 && it.remoteId == fileId }
+        val targetRemoteId = if (f != null && f.remoteId > 0) f.remoteId else fileId
+        if (f != null) {
+            dao.setAttribution(f.id, sender, f.chatName, 1.0, Attribution.Method.USER, f.postedAt)
+        }
+        if (deviceToken.isNotBlank() && targetRemoteId > 0) {
+            api().setSender(targetRemoteId, sender)
         }
     }
 
@@ -747,7 +747,16 @@ class Repo private constructor(private val context: Context) {
         // real chips. Matched by name because the backend numbers files by its
         // own ids, which the phone does not share.
         val local = dao.allFiles()
-        val attachedFiles = answer?.files.orEmpty().takeIf { answer?.intent == "fetch" }.orEmpty()
+        val isDocumentSearch = question.contains("file", ignoreCase = true) ||
+            question.contains("photo", ignoreCase = true) ||
+            question.contains("image", ignoreCase = true) ||
+            question.contains("doc", ignoreCase = true) ||
+            question.contains("receipt", ignoreCase = true) ||
+            question.contains("ticket", ignoreCase = true)
+        val attachedFiles = answer?.files.orEmpty().takeIf {
+            answer?.intent == "fetch" || answer?.intent == "retrieve" ||
+                (answer?.citations?.isNotEmpty() == true && isDocumentSearch)
+        }.orEmpty()
         var citedIds = attachedFiles.mapNotNull { cited ->
             local.firstOrNull { it.name.equals(cited.name, ignoreCase = true) }?.id
         }

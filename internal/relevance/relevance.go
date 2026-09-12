@@ -69,8 +69,8 @@ func Words(text string) []string {
 
 // Match reports whether token is one of these words.
 //
-// Exact first, then a prefix relation in either direction so singular and
-// plural forms of the same word do not count as different subjects.
+// Exact first, then prefix stemming, and finally fuzzy typo matching (edit distance <= 2)
+// for words with length >= 5.
 func Match(words []string, token string) bool {
 	if token == "" {
 		return false
@@ -83,6 +83,86 @@ func Match(words []string, token string) bool {
 			return true
 		}
 		if len(w) >= minStemLen && strings.HasPrefix(token, w) {
+			return true
+		}
+		if fuzzyMatch(w, token) {
+			return true
+		}
+	}
+	return false
+}
+
+// levenshtein computes the edit distance between two lowercase ASCII strings.
+func levenshtein(a, b string) int {
+	la, lb := len(a), len(b)
+	if la == 0 {
+		return lb
+	}
+	if lb == 0 {
+		return la
+	}
+	if la > lb {
+		a, b = b, a
+		la, lb = lb, la
+	}
+	prev := make([]int, la+1)
+	curr := make([]int, la+1)
+	for i := 0; i <= la; i++ {
+		prev[i] = i
+	}
+	for j := 1; j <= lb; j++ {
+		curr[0] = j
+		bj := b[j-1]
+		for i := 1; i <= la; i++ {
+			cost := 0
+			if a[i-1] != bj {
+				cost = 1
+			}
+			ins := curr[i-1] + 1
+			del := prev[i] + 1
+			sub := prev[i-1] + cost
+			min := ins
+			if del < min {
+				min = del
+			}
+			if sub < min {
+				min = sub
+			}
+			curr[i] = min
+		}
+		copy(prev, curr)
+	}
+	return prev[la]
+}
+
+// fuzzyMatch reports whether word w and token are close enough to be typos of each other.
+func fuzzyMatch(w, token string) bool {
+	lw, lt := len(w), len(token)
+	if lw < 5 || lt < 5 {
+		return false
+	}
+	// Must share the first character to prevent wild false positives
+	if w[0] != token[0] {
+		return false
+	}
+	diff := lw - lt
+	if diff < -2 || diff > 2 {
+		return false
+	}
+	maxDist := 1
+	if lw >= 6 && lt >= 6 {
+		maxDist = 2
+	}
+	return levenshtein(w, token) <= maxDist
+}
+
+// ContainsFuzzyWord reports whether text contains any word that fuzzy matches token.
+func ContainsFuzzyWord(text, token string) bool {
+	if len(token) < 5 || len(text) < len(token)-2 {
+		return false
+	}
+	for _, w := range Words(text) {
+		if fuzzyMatch(w, token) {
 			return true
 		}
 	}
@@ -194,11 +274,15 @@ type Result struct {
 }
 
 // Scored reports how well a candidate matches, weighing the name heaviest.
-//
-// Name, then folder, then the text inside. A document's name is the strongest
-// statement anyone makes about what it is, and body text is the weakest: a
-// lecture that mentions module 1 once in a footnote is not about module 1.
 func Scored(name, folder, content string, tokens []string) Result {
+	return ScoredWithPrimary(name, folder, "", content, tokens, nil)
+}
+
+// ScoredWithPrimary reports how well a candidate matches, taking into account
+// the document's AI content_summary (which carries strong entity signal for WhatsApp
+// files with numerical or opaque names), and giving higher weight to primary query tokens
+// over secondary synonym expansions.
+func ScoredWithPrimary(name, folder, summary, content string, tokens []string, primaryTokens []string) Result {
 	var r Result
 	if len(tokens) == 0 {
 		return r
@@ -206,39 +290,64 @@ func Scored(name, folder, content string, tokens []string) Result {
 
 	nameWords := Words(name)
 	folderWords := Words(folder)
+	summaryWords := Words(summary)
 
-	// Coverage counts a word in the title for more than the same word buried in
-	// the text.
-	//
-	// It used to count them the same, and coverage is what the floor cuts on,
-	// so any document that happened to mention all the words anywhere scored as
-	// complete a match as one whose name said exactly that. A pitch deck that
-	// mentioned artificial intelligence, a question and a paper in passing
-	// therefore ranked alongside "AI model question paper.pdf" and was offered
-	// as an answer to a request for it.
-	//
-	// Body text still counts, at half. A document really about something says
-	// so in the text and a content-only match is often all there is, so the
-	// relative floor keeps those when nothing better exists; what it stops is a
-	// passing mention standing level with a title.
+	primarySet := make(map[string]bool, len(primaryTokens))
+	for _, pt := range primaryTokens {
+		primarySet[strings.ToLower(pt)] = true
+	}
+
 	var credit float64
+	primaryMatched := 0
 	for _, tok := range tokens {
+		matched := false
+		tokScore := 0.0
+
 		switch {
 		case Match(nameWords, tok):
-			r.Matched++
+			matched = true
 			credit += 1.0
-			r.Score += 25
+			tokScore = 25
+		case Match(summaryWords, tok):
+			matched = true
+			credit += 1.0
+			tokScore = 18
 		case Match(folderWords, tok):
-			r.Matched++
+			matched = true
 			credit += 1.0
-			r.Score += 12
+			tokScore = 12
 		case ContainsWord(content, tok):
-			r.Matched++
+			matched = true
 			credit += 1.0
-			r.Score += 4
+			tokScore = 10
+		case len(tok) >= 5 && ContainsFuzzyWord(content, tok):
+			matched = true
+			credit += 0.85
+			tokScore = 8
+		}
+
+		if matched {
+			r.Matched++
+			// Primary query tokens (the core topic/entity from user query) carry 1.8x weight
+			// over secondary synonym expansions.
+			if len(primarySet) > 0 && primarySet[strings.ToLower(tok)] {
+				tokScore *= 1.8
+				primaryMatched++
+			}
+			r.Score += tokScore
 		}
 	}
 	r.Coverage = credit / float64(len(tokens))
+
+	// Coordination factor: scale score by query term coverage so candidates covering
+	// all or most query terms are strongly preferred over partial matches.
+	r.Score *= (0.5 + 0.5*r.Coverage)
+
+	// Primary completeness bonus: if multiple primary tokens (e.g. ticket + specific people)
+	// were specified and the document covers ALL of them, give a decisive bonus.
+	if len(primarySet) >= 2 && primaryMatched == len(primarySet) {
+		r.Score += 25.0
+	}
 
 	for i := 0; i+1 < len(tokens); i++ {
 		if adjacentIn(nameWords, tokens[i], tokens[i+1]) {

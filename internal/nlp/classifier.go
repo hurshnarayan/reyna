@@ -19,6 +19,14 @@ import (
 // is ~20 MB total request size; we leave headroom for prompt + base64 overhead.
 const geminiInlineMaxBytes = 14 * 1024 * 1024
 
+var istLocation = func() *time.Location {
+	loc, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		return time.FixedZone("IST", 5*3600+30*60)
+	}
+	return loc
+}()
+
 // Classifier handles NLP-based file classification and intent detection
 type Classifier struct {
 	llm llm.Provider
@@ -1196,29 +1204,43 @@ func (c *Classifier) llmParseQueryDetailedWithHistory(query string, history []mo
 		histSection = histBuf.String()
 	}
 
+	now := time.Now().In(istLocation)
+	calendarAnchor := fmt.Sprintf("REAL-WORLD CALENDAR CONTEXT: Today is %s; Tomorrow is %s; Yesterday was %s",
+		now.Format("Monday, 02 January 2006"),
+		now.AddDate(0, 0, 1).Format("Monday, 02 January 2006"),
+		now.AddDate(0, 0, -1).Format("Monday, 02 January 2006"))
+
 	prompt := fmt.Sprintf(`You are an intelligent query parser for a personal document retrieval assistant covering files shared in chats (invoices, tickets, receipts, IDs, notes, medical reports, contracts, spreadsheets, photos, etc.).
 Parse this natural language query into structured search filters.
 
+%s
 %sCurrent Query: "%s"
 
 Rules:
-- "who": Extract the PERSON'S NAME if the user is asking about files from a specific sender person. Leave empty if no person mentioned.
+- "who": Extract the PERSON'S NAME ONLY if the user is asking about files sent/shared by a specific sender person (e.g. "what did Priya send", "files from Mohit", "Rahul ne kya bheja"). Leave empty if a person is named as the passenger, subject, or owner of a document (e.g. "ticket of Harsh and Khushi", "photo of Yash", "resume of Alice", "marksheet of Rahul" -> the persons belong in "what" and "search_terms", NOT in "who", because they are the passengers/subjects inside the document, not the WhatsApp sender).
   IMPORTANT: The assistant/app itself is named "Reyna". "Reyna" is NEVER a sender person. If the user mentions "Reyna" (e.g. "Reyna script", "Reyna document", "hey Reyna find X"), "Reyna" belongs in "what" if it is part of the topic/document name, or ignored if used as a greeting. NEVER set "who" to "Reyna".
-- "what": Extract the SPECIFIC TOPIC, KEYWORD, or SUBJECT being searched. Correct any obvious typos (e.g. "tikcet" -> "ticket", "depature" -> "departure").
-  CONTEXT RESOLUTION RULE: If the query uses pronouns or follow-up phrases (e.g. "can you find it?", "what does it say?", "explain module 1 from that", "open it", "summarize it", "who sent it?", "send that to me", "where is that exam?"), RESOLVE the referred topic or file from the Conversation History and output that specific topic/filename in "what". If there is no previous context and the user uses generic words or file types like "notes", "files", "stuff", "image", "images", "photo", "photos", "pic", "pics", "pdf", "pdfs", "doc", "docs", leave "what" empty.
-- "when": Extract time reference as one of: today, yesterday, last_week, this_week, last_month. ONLY extract when an explicit calendar period is specified. Words like "latest", "recent", "newest", "last" indicate sorting order, NOT a time filter; leave "when" empty for them.
+- "what": Extract the SPECIFIC TOPIC, KEYWORD, or SUBJECT being searched. Correct any obvious typos or misspelled words (e.g. "compriot" -> "compatriot", "tikcet" -> "ticket", "depature" -> "departure").
+  CONTEXT RESOLUTION RULE: If the query uses pronouns or follow-up phrases (e.g. "can you find it?", "what does it say?", "explain module 1 from that", "open it", "summarize it", "who sent it?", "send that to me", "where is that exam?"), RESOLVE the referred topic or file from the Conversation History and output that specific topic/filename in "what".
+  CRITICAL RECENCY RULE FOR FOLLOW-UPS & FETCH: When resolving "fetch it", "send it", "open it", "fetch that", or pronouns, ALWAYS resolve to the entity, file, or topic discussed in the IMMEDIATELY PRECEDING turn (the last assistant message or last user query). NEVER skip over the most recent turn to pick a file or topic from older turns earlier in the conversation!
+  IMPORTANT: If the user is asking a GENERAL or SKEPTICAL schedule query (e.g. "tomorrow I've to go somewhere or what?", "tomorrow I've to go somewhere?", "do I have any plans tomorrow?", "is there any ticket for tomorrow?", "koi ticket hai kya?", "kal kahi jana hai kya?"), do NOT narrow "what" to a single previous file or flight! Keep "what" as general "travel plans" or "ticket" so all travel documents (trains, flights, buses) can be searched for that date!
+- "when": Extract time reference if present: today, tomorrow, yesterday, this_week, last_week, next_week, this_month, next_month, or specific calendar date. ONLY extract when an explicit calendar period is specified. Words like "latest", "recent", "newest", "last" indicate sorting order, NOT a time filter; leave "when" empty for them.
 - "why": One of: retrieve, search, check_existence, activity_check, qa, fetch, smalltalk.
   * Set "smalltalk" for greetings, thanks ("thanks", "dhanyawad", "shukriya", "hi", "namaste") with no search request.
   * Set "fetch" when the user asks to receive or open the file itself ("fetch", "get me", "send me").
   * Set "qa" when they ask what a document says or ask a factual/informational question.
 - "search_terms": An array of 1 to 6 high-recall search keywords/aliases/synonyms for database search:
-  * Fix typos (e.g. "hyderbad" -> "hyderabad", "chemstry" -> "chemistry").
+  * Fix typos and include both corrected word and typed variant (e.g. "compriot" -> ["compatriot", "compriot"], "hyderbad" -> ["hyderabad", "hyderbad"], "chemstry" -> ["chemistry", "chemstry"]).
   * Expand city, station, and transit aliases (e.g. if query mentions "Hyderabad", include "Hyderabad", "Secunderabad", "HYB", "SC"; if "Bengaluru", include "Bengaluru", "Bangalore", "SBC"; if "Delhi", include "Delhi", "NDLS").
+  * Expand travel/schedule terms (e.g. if query is "tomorrow I've to go somewhere?", include ["flight", "train", "ticket", "booking", "travel", "itinerary"]).
   * For multilingual queries, include English translations and transliterated terms (e.g. "bijli ka bil" -> ["electricity bill", "bijli", "bill", "electricity"]).
   * Include any numbers, codes, dates, or PNRs mentioned (e.g. "4656526133").
 - "has_content_cues": true if the query asks about details *inside* the file (departure times, amounts, dates, formulas, room numbers, specific clauses) rather than just asking for a file by name.
 
 Examples:
+- "something compriot file i had" → {"who":"","what":"compatriot file","when":"","why":"retrieve","search_terms":["compatriot","compriot","file"],"has_content_cues":false}
+- "ticket of harsh and khushi" → {"who":"","what":"ticket of harsh and khushi","when":"","why":"fetch","search_terms":["train","ticket","harsh","khushi","booking","travel"],"has_content_cues":false}
+- "tomorrow I've to go somewhere or what?" → {"who":"","what":"travel plans","when":"tomorrow","why":"qa","search_terms":["flight","train","ticket","booking","travel","itinerary"],"has_content_cues":true}
+- "tomorrow I've to go somewhere?" → {"who":"","what":"travel plans","when":"tomorrow","why":"qa","search_terms":["flight","train","ticket","booking","travel","itinerary"],"has_content_cues":true}
 - "can you find me the latest Reyna script received" → {"who":"","what":"Reyna script","when":"","why":"search","search_terms":["reyna","script"],"has_content_cues":false}
 - "at what time is my departure to Hyderabad" → {"who":"","what":"departure to Hyderabad","when":"","why":"qa","search_terms":["departure","Hyderabad","Secunderabad","ticket","train"],"has_content_cues":true}
 - "can you get me the train tikcet with 465" → {"who":"","what":"train ticket 465","when":"","why":"fetch","search_terms":["train","ticket","465"],"has_content_cues":false}
@@ -1228,7 +1250,7 @@ Examples:
 - "find compiler lab manual" → {"who":"","what":"compiler lab manual","when":"","why":"search","search_terms":["compiler","lab manual","compiler design"],"has_content_cues":false}
 
 Respond ONLY with JSON, no other text:
-{"who":"","what":"","when":"","why":"search","search_terms":[],"has_content_cues":false}`, histSection, query)
+{"who":"","what":"","when":"","why":"search","search_terms":[],"has_content_cues":false}`, calendarAnchor, histSection, query)
 
 	result, err := c.llm.Complete(prompt, 600)
 	if err != nil {
@@ -1287,14 +1309,25 @@ type QAFollowup struct {
 // shared-at timestamp so the answer can say "Mohit shared this PDF this
 // morning — the Wien bridge oscillator works as follows…".
 func (c *Classifier) AnswerFromNotes(question string, sources []QASource) string {
-	return c.AnswerFromNotesWithContext(question, sources, nil)
+	return c.AnswerFromNotesWithContext(question, sources, nil, "")
 }
 
 // AnswerFromNotesWithContext is the multi-turn variant. If `prev` is non-nil
 // the prompt includes the previous question/answer so Gemini can build on it.
-func (c *Classifier) AnswerFromNotesWithContext(question string, sources []QASource, prev *QAFollowup) string {
+func (c *Classifier) AnswerFromNotesWithContext(question string, sources []QASource, prev *QAFollowup, currentUserName string) string {
 	if !c.IsEnabled() || len(sources) == 0 {
 		return "I don't have enough content from your notes to answer that. Make sure files have been shared and extracted."
+	}
+
+	now := time.Now().In(istLocation)
+	todayStr := now.Format("Monday, 02 January 2006")
+	tomorrowStr := now.AddDate(0, 0, 1).Format("Monday, 02 January 2006")
+	yesterdayStr := now.AddDate(0, 0, -1).Format("Monday, 02 January 2006")
+	currentDateTimeStr := now.Format("Monday, 02 January 2006, 15:04 MST")
+
+	userContext := "CURRENT USER IDENTITY: Unconfirmed / Device user (never assume user is the person named in documents unless verified)"
+	if currentUserName != "" {
+		userContext = fmt.Sprintf("CURRENT USER IDENTITY: Name: %q (only address user as traveler/recipient if this exact name matches the document)", currentUserName)
 	}
 
 	var context strings.Builder
@@ -1320,6 +1353,29 @@ func (c *Classifier) AnswerFromNotesWithContext(question string, sources []QASou
 	}
 
 	prompt := fmt.Sprintf(`You are Reyna. You help someone find and understand documents that were shared in their chats, whatever those documents are: invoices, contracts, tickets, records, manuals, notes, anything. You answer like a smart friend, not like a dry assistant. Never assume the person is a student or that the files are course material.
+
+REAL-WORLD CALENDAR CONTEXT (GROUND TRUTH):
+- Current Date & Time: %s
+- TODAY is: %s
+- TOMORROW is: %s
+- YESTERDAY was: %s
+
+%s
+
+CRITICAL TEMPORAL VERIFICATION RULES:
+- When the question asks about relative time (e.g. "tomorrow", "today", "yesterday", "next week", "kal", "aaj"):
+  1. Check the event / journey / departure date inside the sources against the real-world calendar anchor above.
+  2. NEVER describe an event as "tomorrow" or "today" unless its actual date matches the calendar anchor!
+  3. If no event matches the requested date, clearly state so (e.g. "No travel/event is scheduled for tomorrow (%s).").
+
+CRITICAL PASSENGER & RECIPIENT IDENTITY RULES:
+- When a document contains passenger names, patient names, customer names, or recipient names:
+  1. Check if the current user's name or first name matches among the passengers or recipients (e.g. user "Harsh" matches passenger "HARSH NARAYAN").
+  2. If the user's name matches a passenger:
+     - You may say "Yes, you have a train/flight scheduled..." or "You and [co-passengers] are traveling...".
+  3. If the user's name is NOT among them, or if user identity is unconfirmed:
+     - NEVER say "You have a flight" or "You are traveling" or "Your appointment"!
+     - State the passenger/recipient names verbatim from the document.
 
 CRITICAL LANGUAGE RULE:
 - Detect the language of the QUESTION ITSELF, not the sender names. "rakesh" / "mohit" / "priya" are proper nouns and DO NOT indicate Hindi.
@@ -1362,9 +1418,9 @@ Formatting:
 SOURCE MATERIAL:
 %s
 %s
-STUDENT QUESTION: %s
+QUESTION: %s
 
-Your answer:`, context.String(), formatQAPrev(prev), question)
+Your answer:`, currentDateTimeStr, todayStr, tomorrowStr, yesterdayStr, userContext, tomorrowStr, context.String(), formatQAPrev(prev), question)
 
 	result, err := c.llm.Complete(prompt, 1200)
 	if err != nil {
@@ -1520,9 +1576,20 @@ func cleanLLMReply(s string) string {
 // retrieval results. This replaces the old template-string buildNLPReply with
 // a conversational, multi-language, intent-aware response. Falls back to a
 // simple template if the LLM call fails.
-func (c *Classifier) GenerateRetrievalReply(rawQuery, who, what, when, why string, files []RetrievalFile, driveMatches []RetrievalFile, history []model.ChatMessageContext) SourcedReply {
+func (c *Classifier) GenerateRetrievalReply(rawQuery, who, what, when, why string, files []RetrievalFile, driveMatches []RetrievalFile, history []model.ChatMessageContext, currentUserName string) SourcedReply {
 	if !c.IsEnabled() {
 		return SourcedReply{Answer: fallbackRetrievalReply(rawQuery, files, driveMatches, who, what, when)}
+	}
+
+	now := time.Now().In(istLocation)
+	todayStr := now.Format("Monday, 02 January 2006")
+	tomorrowStr := now.AddDate(0, 0, 1).Format("Monday, 02 January 2006")
+	yesterdayStr := now.AddDate(0, 0, -1).Format("Monday, 02 January 2006")
+	currentDateTimeStr := now.Format("Monday, 02 January 2006, 15:04 MST")
+
+	userContext := "CURRENT USER IDENTITY: Unconfirmed / Device user (never assume user is the person named in documents unless verified)"
+	if currentUserName != "" {
+		userContext = fmt.Sprintf("CURRENT USER IDENTITY: Name: %q (address user as traveler/recipient only if this exact name matches the document)", currentUserName)
 	}
 
 	var histSection string
@@ -1574,6 +1641,38 @@ func (c *Classifier) GenerateRetrievalReply(rawQuery, who, what, when, why strin
 	prompt := fmt.Sprintf(`You are Reyna. You are a personal document assistant helping someone find and understand files in their chats.
 Write a natural, conversational reply describing what was found or directly answering their question.
 
+REAL-WORLD CALENDAR CONTEXT (GROUND TRUTH):
+- Current Date & Time: %s
+- TODAY is: %s
+- TOMORROW is: %s
+- YESTERDAY was: %s
+
+%s
+
+CRITICAL TEMPORAL & JOURNEY VERIFICATION RULES:
+- When the query asks about relative time (e.g. "tomorrow", "today", "yesterday", "next week", "this month", "kal", "aaj", "parso"):
+  1. Inspect the journey, flight, train, departure, appointment, or due dates found INSIDE the document summaries.
+  2. Cross-reference them strictly against the real-world calendar anchor above.
+  3. If a document DOES have travel or an event scheduled for the requested date (e.g. tomorrow, Saturday, 12 September 2026):
+     - State YES clearly with the departure time, train/flight number, origin, destination, and passenger names!
+     - Example: If a train ticket is for 12-Sept-2026 departing at 20:00 on Rajdhani Exp (22691) from KSR Bengaluru to Secunderabad for Harsh Narayan and Khushi Mehta, state: "Yes! You have a train journey scheduled for tomorrow, Saturday, 12 September 2026. You and Khushi Mehta are traveling on the Rajdhani Express (22691) from KSR Bengaluru to Secunderabad, departing at 20:00 (PNR 4656526133)."
+  4. NEVER call an event date "tomorrow" or "today" unless the document date matches the exact calendar anchor date!
+     For example, if today is Friday, 11 September 2026, then tomorrow is Saturday, 12 September 2026. A flight on 17 October 2026 is OVER A MONTH AWAY and is NEVER tomorrow!
+  5. If NO document matches the requested relative date:
+     - Answer clearly that no event or travel is scheduled for that date (e.g. "No travel is scheduled for tomorrow (%s).").
+     - If an upcoming event or booking exists in the files for a different date (e.g. October 17, 2026), mention it with its REAL, EXACT date and day: "However, an upcoming flight booking was found for [passengers] on Saturday, 17 October 2026...".
+     - Never say "Yes, you have a flight scheduled for tomorrow, October 17, 2026".
+
+CRITICAL PASSENGER & RECIPIENT IDENTITY RULES:
+- Documents shared in WhatsApp chats often belong to family members, friends, or colleagues.
+- Inspect the passenger names, patient names, customer names, or recipient names in the document:
+  1. Check if the current user's name or first name matches a passenger or recipient (e.g. user "Harsh" matches passenger "HARSH NARAYAN").
+  2. If the user's name matches a passenger:
+     - You may say "Yes, you have a train/flight scheduled..." or "You and [co-passengers] are traveling...".
+  3. If the user's name is NOT among the passengers, or if user identity is unconfirmed:
+     - NEVER say "You have a flight" or "You are traveling" or "Your appointment"!
+     - State the passenger/recipient names verbatim from the document (e.g. "A flight booking was found for Mrs. Khushi Mehta...").
+
 %sCRITICAL LANGUAGE RULE — read this twice:
 - Detect the language of the QUERY ITSELF (not the sender names — "rakesh" or "mohit" are proper nouns and do NOT indicate Hindi).
 - If the query is written in English, reply ONLY in English.
@@ -1590,7 +1689,7 @@ CONVERSATION CONTEXT & FOLLOW-UP QUESTIONS:
 RESPOND ONLY WITH JSON, in exactly this shape and nothing around it:
 {"found": true, "answer": "...", "quotes": [{"file": "exact filename", "quote": "verbatim text copied from that file's summary"}]}
 
-- "found": true if the provided context actually answers the question or contains relevant information matching the request; false if the documents do not contain the answer, do not match the query, or no relevant information is present.
+- "found": true if the provided context answers the question or contains relevant information matching the request (including when clarifying that no event is scheduled for the requested date, but an upcoming event was found in the records); false if the documents do not contain the answer, do not match the query, or no relevant information is present.
 - "answer" is what the user asked for and nothing else. No raw filenames list. Write one or two clean, natural conversational sentences, under 50 words, plain text with no markdown and no bullets.
 - "quotes" is the evidence. Copy the lines from the summary that contain the answer, character for character. Do not paraphrase, do not tidy, do not translate. If the answer came from a table row, the quote is that row.
 - Every quote must appear word for word in a summary above. A quote that is only a filename is not evidence and will be discarded.
@@ -1615,7 +1714,7 @@ ORIGINAL QUERY: %s
 PARSED — who:%s what:%s when:%s why:%s
 
 %s
-Your reply:`, histSection, rawQuery, who, what, when, why, ctx.String())
+Your reply:`, currentDateTimeStr, todayStr, tomorrowStr, yesterdayStr, userContext, tomorrowStr, histSection, rawQuery, who, what, when, why, ctx.String())
 
 	result, err := c.llm.Complete(prompt, 900)
 	if err != nil || result == "" {

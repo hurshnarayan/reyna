@@ -59,6 +59,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.ui.graphics.Color
@@ -169,11 +176,13 @@ fun ChatScreen(
     onChooseCandidate: (List<Long>) -> Unit = {},
     onPreviewCandidate: (Long, String) -> Unit = { _, _ -> },
     loadPreviewPath: suspend (FoundFile) -> String? = { null },
+    loadSourcePreviewPath: suspend (Source) -> String? = { null },
 ) {
     val c = reynaColors
     val listState = rememberLazyListState()
     var sheetSources by remember { mutableStateOf<List<Source>>(emptyList()) }
     var quickLookFile by remember { mutableStateOf<FoundFile?>(null) }
+    var quickLookSource by remember { mutableStateOf<Source?>(null) }
 
     // Whether the choice sheet is on screen, kept apart from whether there is
     // a choice to make. Dismissing the sheet used to throw the candidates away
@@ -282,6 +291,15 @@ fun ChatScreen(
                     sheetSources = emptyList()
                     onOpenSource(it)
                 },
+                onPreviewSource = { src ->
+                    quickLookSource = src
+                },
+                onHoldStart = { src ->
+                    quickLookSource = src
+                },
+                onHoldEnd = {
+                    quickLookSource = null
+                },
                 onAskWhoShared = onAskWhoShared,
                 onDismiss = { sheetSources = emptyList() },
             )
@@ -311,6 +329,34 @@ fun ChatScreen(
                 file = preview,
                 loadPreviewPath = { loadPreviewPath(found) },
                 onDismiss = { quickLookFile = null },
+            )
+        }
+
+        quickLookSource?.let { src ->
+            val preview = SearchableFile(
+                id = if (src.fileId > 0L) -src.fileId else -1L,
+                fileName = src.fileName,
+                senderName = src.senderName,
+                chatName = null,
+                whenText = src.sharedAt.orEmpty(),
+                confidence = src.confidence,
+                isImage = app.reyna.attribution.Attribution.isImage(src.fileName),
+                remoteId = src.fileId,
+            )
+            QuickLookModal(
+                file = preview,
+                loadPreviewPath = { loadSourcePreviewPath(src) },
+                onDismiss = { quickLookSource = null },
+                onOpen = {
+                    quickLookSource = null
+                    sheetSources = emptyList()
+                    onOpenSource(src)
+                },
+                onAskWhoShared = {
+                    val id = src.fileId
+                    quickLookSource = null
+                    onAskWhoShared(id)
+                },
             )
         }
     }
@@ -898,6 +944,9 @@ private fun PendingBanner(count: Int, pushing: Boolean, onPush: () -> Unit) {
 private fun SourcesSheet(
     sources: List<Source>,
     onOpenSource: (Source) -> Unit,
+    onPreviewSource: (Source) -> Unit,
+    onHoldStart: (Source) -> Unit,
+    onHoldEnd: () -> Unit,
     onAskWhoShared: (Long) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -920,7 +969,16 @@ private fun SourcesSheet(
                 fontWeight = FontWeight.SemiBold,
                 color = c.onSurface,
             )
-            sources.forEach { s -> SourceCard(s, onOpenSource, onAskWhoShared) }
+            sources.forEach { s ->
+                SourceCard(
+                    source = s,
+                    onOpenSource = onOpenSource,
+                    onPreviewSource = onPreviewSource,
+                    onHoldStart = onHoldStart,
+                    onHoldEnd = onHoldEnd,
+                    onAskWhoShared = onAskWhoShared,
+                )
+            }
         }
     }
 }
@@ -929,15 +987,54 @@ private fun SourcesSheet(
 private fun SourceCard(
     source: Source,
     onOpenSource: (Source) -> Unit,
+    onPreviewSource: (Source) -> Unit,
+    onHoldStart: (Source) -> Unit,
+    onHoldEnd: () -> Unit,
     onAskWhoShared: (Long) -> Unit,
 ) {
     val c = reynaColors
+    val haptic = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+    var isPressed by remember { mutableStateOf(false) }
+
     Column(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(11.dp))
             .background(c.surface)
             .border(1.dp, c.border, RoundedCornerShape(11.dp))
+            .pointerInput(source.fileId, source.fileName) {
+                var isHeld = false
+                detectTapGestures(
+                    onTap = {
+                        if (!isHeld) {
+                            onPreviewSource(source)
+                        }
+                    },
+                    onLongPress = {
+                        // Consumed to prevent conflict with press detection
+                    },
+                    onPress = {
+                        isHeld = false
+                        isPressed = true
+                        val holdJob = scope.launch {
+                            delay(220)
+                            isHeld = true
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onHoldStart(source)
+                        }
+                        try {
+                            tryAwaitRelease()
+                        } finally {
+                            holdJob.cancel()
+                            isPressed = false
+                            if (isHeld) {
+                                onHoldEnd()
+                            }
+                        }
+                    },
+                )
+            }
             .padding(13.dp),
     ) {
         Text(
@@ -985,6 +1082,8 @@ private fun SourceCard(
 
         Spacer(Modifier.height(11.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
+            SheetAction("Preview") { onPreviewSource(source) }
+            Spacer(Modifier.width(8.dp))
             SheetAction("Open") { onOpenSource(source) }
             if (source.confidence < Attribution.MIN_NAMED) {
                 Spacer(Modifier.width(8.dp))

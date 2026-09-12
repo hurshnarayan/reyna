@@ -428,6 +428,16 @@ func (s *Store) GetUserByID(id int64) (*model.User, error) {
 	return u, nil
 }
 
+// GetPrimaryUserName returns the primary configured user's name if available.
+func (s *Store) GetPrimaryUserName() string {
+	var name string
+	err := s.db.QueryRow(`SELECT name FROM users WHERE name != '' AND name != 'You' ORDER BY id DESC LIMIT 1`).Scan(&name)
+	if err == nil {
+		return strings.TrimSpace(name)
+	}
+	return ""
+}
+
 func (s *Store) UpdateUserGoogle(userID int64, email, token, refresh, rootID string) error {
 	_, err := s.db.Exec(
 		`UPDATE users SET email=?, google_token=?, google_refresh=?, drive_root_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
@@ -1527,6 +1537,11 @@ func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *ti
 // one match was clear enough to answer from, or whether two were close enough
 // that the honest move is to ask which was meant.
 func (s *Store) SearchFilesNLPScored(groupIDs []int64, who, what string, sinceTime *time.Time, limit int) ([]ScoredFile, error) {
+	return s.SearchFilesNLPScoredWithPrimary(groupIDs, who, what, what, sinceTime, limit)
+}
+
+// SearchFilesNLPScoredWithPrimary is SearchFilesNLPScored with explicit primary query term prioritization.
+func (s *Store) SearchFilesNLPScoredWithPrimary(groupIDs []int64, who, searchWhat, primaryWhat string, sinceTime *time.Time, limit int) ([]ScoredFile, error) {
 	if len(groupIDs) == 0 {
 		return nil, nil
 	}
@@ -1563,7 +1578,13 @@ func (s *Store) SearchFilesNLPScored(groupIDs []int64, who, what string, sinceTi
 	whoRankExpr := "0"
 	var whoRankArgs []interface{}
 	if who != "" {
-		whoLower := strings.ToLower(strings.TrimSpace(who))
+		whoClean := strings.Map(func(r rune) rune {
+			if unicode.IsPunct(r) {
+				return ' '
+			}
+			return r
+		}, who)
+		whoLower := strings.ToLower(strings.TrimSpace(whoClean))
 		// First name token (handles "Mohit Singh" → match on "mohit")
 		first := whoLower
 		if fields := strings.Fields(whoLower); len(fields) > 0 {
@@ -1606,24 +1627,24 @@ func (s *Store) SearchFilesNLPScored(groupIDs []int64, who, what string, sinceTi
 	}
 
 	// WHAT filter — tokenized OR-match with weighted rank-by-hits.
-	tokens := TokenizeWhat(what)
+	tokens := TokenizeWhat(searchWhat)
 	rankExpr := "0"
 	var rankArgs []interface{}
-	if what != "" && len(tokens) > 0 {
-		cleanPhrase := strings.TrimSpace(strings.ToLower(what))
+	if searchWhat != "" && len(tokens) > 0 {
+		cleanPhrase := strings.TrimSpace(strings.ToLower(searchWhat))
 		var orParts []string
 		var rankParts []string
 
-		// 1. Exact phrase match boost in filename or subject (e.g. "c programming", "reyna script")
+		// 1. Exact phrase match boost in filename, summary, or subject (e.g. "c programming", "reyna script")
 		if strings.Contains(cleanPhrase, " ") {
 			phraseLike := "%" + cleanPhrase + "%"
-			orParts = append(orParts, "LOWER(f.file_name) LIKE ?", "LOWER(f.subject) LIKE ?")
-			args = append(args, phraseLike, phraseLike)
-			rankParts = append(rankParts, "(CASE WHEN LOWER(f.file_name) LIKE ? THEN 60 WHEN LOWER(f.subject) LIKE ? THEN 40 ELSE 0 END)")
-			rankArgs = append(rankArgs, phraseLike, phraseLike)
+			orParts = append(orParts, "LOWER(f.file_name) LIKE ?", "LOWER(f.content_summary) LIKE ?", "LOWER(f.subject) LIKE ?")
+			args = append(args, phraseLike, phraseLike, phraseLike)
+			rankParts = append(rankParts, "(CASE WHEN LOWER(f.file_name) LIKE ? THEN 60 WHEN LOWER(f.content_summary) LIKE ? THEN 50 WHEN LOWER(f.subject) LIKE ? THEN 40 ELSE 0 END)")
+			rankArgs = append(rankArgs, phraseLike, phraseLike, phraseLike)
 		}
 
-		// 2. Individual token matches with heavy weighting on filename and subject
+		// 2. Individual token matches with heavy weighting on filename, summary, and subject
 		for _, tok := range tokens {
 			like := "%" + tok + "%"
 			if len(tok) <= 2 {
@@ -1633,10 +1654,10 @@ func (s *Store) SearchFilesNLPScored(groupIDs []int64, who, what string, sinceTi
 				rankParts = append(rankParts, "(CASE WHEN LOWER(f.file_name) LIKE ? THEN 25 WHEN LOWER(f.subject) LIKE ? THEN 15 ELSE 0 END)")
 				rankArgs = append(rankArgs, like, like)
 			} else {
-				orParts = append(orParts, "(LOWER(f.file_name) LIKE ? OR LOWER(f.subject) LIKE ? OR LOWER(f.tags) LIKE ? OR LOWER(f.extracted_content) LIKE ? OR LOWER(f.content_summary) LIKE ?)")
+				orParts = append(orParts, "(LOWER(f.file_name) LIKE ? OR LOWER(f.subject) LIKE ? OR LOWER(f.tags) LIKE ? OR LOWER(f.content_summary) LIKE ? OR LOWER(f.extracted_content) LIKE ?)")
 				args = append(args, like, like, like, like, like)
-				rankParts = append(rankParts, "(CASE WHEN LOWER(f.file_name) LIKE ? THEN 25 WHEN LOWER(f.subject) LIKE ? THEN 15 WHEN LOWER(f.extracted_content) LIKE ? THEN 2 ELSE 0 END)")
-				rankArgs = append(rankArgs, like, like, like)
+				rankParts = append(rankParts, "(CASE WHEN LOWER(f.file_name) LIKE ? THEN 25 WHEN LOWER(f.content_summary) LIKE ? THEN 20 WHEN LOWER(f.subject) LIKE ? THEN 15 WHEN LOWER(f.extracted_content) LIKE ? THEN 4 ELSE 0 END)")
+				rankArgs = append(rankArgs, like, like, like, like)
 			}
 		}
 
@@ -1674,9 +1695,9 @@ func (s *Store) SearchFilesNLPScored(groupIDs []int64, who, what string, sinceTi
 	// `limit` here throws away the file the person asked for before anything
 	// has looked at it properly. Fetch a wide band and let rankByRelevance
 	// choose, bounded so a two word question cannot pull the whole library.
-	fetchLimit := limit * 8
-	if fetchLimit > 300 {
-		fetchLimit = 300
+	fetchLimit := limit * 12
+	if fetchLimit > 400 {
+		fetchLimit = 400
 	}
 	if fetchLimit < limit {
 		fetchLimit = limit
@@ -1729,7 +1750,8 @@ func (s *Store) SearchFilesNLPScored(groupIDs []int64, who, what string, sinceTi
 	// qualify for a question about module 1 ODE. So the query casts wide and
 	// deliberately over-fetches, and the decision about what is actually
 	// relevant is made here, on whole words, where it can be tested.
-	ranked := rankByRelevance(candidates, s.snippets(candidates), tokens)
+	primaryTokens := TokenizeWhat(primaryWhat)
+	ranked := rankByRelevance(candidates, s.snippets(candidates), tokens, primaryTokens)
 	if len(ranked) > limit {
 		ranked = ranked[:limit]
 	}
@@ -1748,7 +1770,12 @@ type ScoredFile struct {
 	Adjacent int
 }
 
-// snippets fetches each candidate's stored text, for relevance scoring.
+type docSnippet struct {
+	summary string
+	content string
+}
+
+// snippets fetches each candidate's stored summary and text, for relevance scoring.
 //
 // The whole of it, not the opening. A term the question is about can sit
 // anywhere in a document, and an earlier revision that read only the first few
@@ -1758,8 +1785,8 @@ type ScoredFile struct {
 //
 // Capped per file rather than per query, at a size no real document reaches,
 // so one pathological row cannot pull the whole table into memory.
-func (s *Store) snippets(files []model.File) map[int64]string {
-	out := make(map[int64]string, len(files))
+func (s *Store) snippets(files []model.File) map[int64]docSnippet {
+	out := make(map[int64]docSnippet, len(files))
 	if len(files) == 0 {
 		return out
 	}
@@ -1769,7 +1796,7 @@ func (s *Store) snippets(files []model.File) map[int64]string {
 	}
 	placeholders, args := buildInClause(ids)
 	rows, err := s.db.Query(
-		`SELECT id, substr(COALESCE(extracted_content,''),1,200000) FROM files WHERE id IN (`+placeholders+`)`,
+		`SELECT id, COALESCE(content_summary,''), substr(COALESCE(extracted_content,''),1,200000) FROM files WHERE id IN (`+placeholders+`)`,
 		args...,
 	)
 	if err != nil {
@@ -1778,9 +1805,9 @@ func (s *Store) snippets(files []model.File) map[int64]string {
 	defer rows.Close()
 	for rows.Next() {
 		var id int64
-		var snip string
-		if rows.Scan(&id, &snip) == nil {
-			out[id] = snip
+		var sum, snip string
+		if rows.Scan(&id, &sum, &snip) == nil {
+			out[id] = docSnippet{summary: sum, content: snip}
 		}
 	}
 	return out
@@ -1796,7 +1823,7 @@ func (s *Store) snippets(files []model.File) map[int64]string {
 // nothing accounts for the whole question, the best available is still the
 // best there is and must survive, or a library that plainly contains
 // something answers that it has never seen it.
-func rankByRelevance(files []model.File, snippets map[int64]string, tokens []string) []ScoredFile {
+func rankByRelevance(files []model.File, snippets map[int64]docSnippet, tokens []string, primaryTokens []string) []ScoredFile {
 	if len(files) == 0 {
 		return nil
 	}
@@ -1811,7 +1838,8 @@ func rankByRelevance(files []model.File, snippets map[int64]string, tokens []str
 	scored := make([]ScoredFile, 0, len(files))
 	best := 0.0
 	for _, f := range files {
-		r := relevance.Scored(f.FileName, f.Subject+" "+f.Tags, snippets[f.ID], tokens)
+		doc := snippets[f.ID]
+		r := relevance.ScoredWithPrimary(f.FileName, f.Subject+" "+f.Tags, doc.summary, doc.content, tokens, primaryTokens)
 		if r.Matched == 0 {
 			continue
 		}
@@ -1822,6 +1850,18 @@ func rankByRelevance(files []model.File, snippets map[int64]string, tokens []str
 	}
 
 	floor := relevance.Floor(best)
+	if len(tokens) > 3 {
+		// When tokens represent an expanded synonym list (e.g. flight, train, ticket, booking, travel),
+		// individual files match different subsets of synonyms (e.g. train ticket vs flight ticket).
+		// Don't let a file matching 5 synonyms eliminate files matching 3 or 4 valid synonyms.
+		expandedFloor := best - 0.35
+		if expandedFloor < 0.33 {
+			expandedFloor = 0.33
+		}
+		if expandedFloor < floor {
+			floor = expandedFloor
+		}
+	}
 	kept := scored[:0]
 	for _, sf := range scored {
 		if sf.Coverage >= floor {
@@ -1884,6 +1924,46 @@ func (s *Store) SearchFilesContent(groupIDs []int64, query string, limit int) ([
 		 FROM files WHERE %s
 		 ORDER BY %s LIMIT ?`,
 		strings.Join(conds, " AND "), orderBy,
+	)
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanFiles(rows)
+}
+
+// SearchFilesByRawDateTokens searches files whose extracted content or summary contains
+// any of the specified date strings (e.g. "12-Sept", "12-Sep", "12 Sep").
+func (s *Store) SearchFilesByRawDateTokens(groupIDs []int64, dateTokens []string, limit int) ([]model.File, error) {
+	if len(groupIDs) == 0 || len(dateTokens) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	placeholders, args := buildInClause(groupIDs)
+	var orParts []string
+	for _, dt := range dateTokens {
+		dtClean := strings.TrimSpace(strings.ToLower(dt))
+		if dtClean == "" {
+			continue
+		}
+		like := "%" + dtClean + "%"
+		orParts = append(orParts, "LOWER(f.extracted_content) LIKE ? OR LOWER(f.content_summary) LIKE ?")
+		args = append(args, like, like)
+	}
+	if len(orParts) == 0 {
+		return nil, nil
+	}
+	args = append(args, interface{}(limit))
+	q := fmt.Sprintf(
+		`SELECT f.id, f.group_id, f.user_id, f.shared_by_phone, f.shared_by_name, f.file_name, f.file_size,
+		  f.mime_type, f.drive_file_id, f.drive_folder_id, f.subject, f.tags, f.version, f.parent_file_id, f.wa_message_id, f.status, f.created_at, f.posted_at, COALESCE(f.attribution_method,''), COALESCE(f.attribution_confidence,0)
+		 FROM files f
+		 WHERE f.group_id IN (%s) AND f.status != 'deleted_in_drive' AND (%s)
+		 ORDER BY f.created_at DESC LIMIT ?`,
+		placeholders, strings.Join(orParts, " OR "),
 	)
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
@@ -2001,6 +2081,65 @@ func (s *Store) GetFileExtractedContent(fileIDs []int64) map[int64]string {
 		var content string
 		rows.Scan(&id, &content)
 		result[id] = content
+	}
+	return result
+}
+
+// GetFileContentSummaries returns just the content_summary for given file IDs
+func (s *Store) GetFileContentSummaries(fileIDs []int64) map[int64]string {
+	result := make(map[int64]string)
+	if len(fileIDs) == 0 {
+		return result
+	}
+	placeholders, args := buildInClause(fileIDs)
+	rows, err := s.db.Query(
+		`SELECT id, COALESCE(content_summary, '') FROM files WHERE id IN (`+placeholders+`)`,
+		args...,
+	)
+	if err != nil {
+		return result
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var summary string
+		if err := rows.Scan(&id, &summary); err == nil {
+			result[id] = summary
+		}
+	}
+	return result
+}
+
+// GetFileContentWithSummary returns the content summary and extracted content joined together for given file IDs
+func (s *Store) GetFileContentWithSummary(fileIDs []int64) map[int64]string {
+	result := make(map[int64]string)
+	if len(fileIDs) == 0 {
+		return result
+	}
+	placeholders, args := buildInClause(fileIDs)
+	rows, err := s.db.Query(
+		`SELECT id, COALESCE(content_summary, ''), COALESCE(extracted_content, '') FROM files WHERE id IN (`+placeholders+`)`,
+		args...,
+	)
+	if err != nil {
+		return result
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var summary, content string
+		if err := rows.Scan(&id, &summary, &content); err == nil {
+			var sb strings.Builder
+			if strings.TrimSpace(summary) != "" {
+				sb.WriteString("Summary: ")
+				sb.WriteString(strings.TrimSpace(summary))
+				sb.WriteString("\n")
+			}
+			if strings.TrimSpace(content) != "" {
+				sb.WriteString(strings.TrimSpace(content))
+			}
+			result[id] = sb.String()
+		}
 	}
 	return result
 }

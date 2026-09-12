@@ -247,12 +247,12 @@ sequenceDiagram
     Srv->>AI: ParseNLPQueryDetailed (Query + History)
     AI-->>Srv: ParsedNLPQuery { who, what, why: "qa", search_terms: ["departure", "Hyderabad", "Secunderabad"], cues: true }
     Srv->>DB: SearchFilesNLPScored with Unicode Tokenizer & search_terms
-    DB-->>Srv: Candidate files (including numeric WhatsApp PDFs like 4656526133.pdf)
-    Srv->>Srv: Relevance Ranker (Full 1.0 body credit; survives Floor)
-    Srv->>AI: Compute 768-dim query embedding
+    DB-->>Srv: Candidate files (matches across filename, AI summary, and body text)
+    Srv->>Srv: Relevance Ranker (AI content summary weighting & core entity prioritization)
+    Srv->>AI: Compute 768-dim query embedding (full conversational query)
     AI-->>Srv: 768-dim float vector
     Srv->>DB: GetAllEmbeddings & compute Cosine Similarities
-    Srv->>Srv: Hybrid Rerank: Boost lexical score with semantic similarity (+sim * 60.0)
+    Srv->>Srv: Hybrid Rerank: Boost lexical matches with semantic similarity (+sim * 60.0; retrieve dense matches sim >= 0.48)
     Note over Srv: isFactualQuestion == true: Skip Ambiguity Sheet!
     Srv->>AI: GenerateRetrievalReply (Query, Top Candidates Context)
     AI-->>Srv: JSON { found: true, answer: "...", quotes: [...] }
@@ -423,7 +423,7 @@ classDiagram
   * Emulator: `just point-at-emulator` then `just build`.
   * Release / Device: `just point-at <tunnel url>` before building release.
 
-### 10.3 The Twelve Invariants (Never Regress These)
+### 10.3 The Fourteen Invariants (Never Regress These)
 
 1. **Strict 0.70 Attribution Floor:** A file on disk carries no author. Reyna reconstructs senders from 4 signals. If confidence is below `0.70`, **never name a person**. Downgrade to chat name or "Found on your phone". A wrong name destroys user trust.
 2. **Whole-Word Matching Only:** Filename and token matching in `internal/relevance` and `android/.../data/Words.kt` must match on **whole words**, splitting on non-alphanumeric and letter/digit boundaries. Substring matching (e.g. "ode" matching "diode" or "1" matching "part1") is forbidden.
@@ -437,3 +437,5 @@ classDiagram
 10. **Smalltalk Precedes Retrieval:** `nlp.IsSmallTalk` must be evaluated **before** document search and before ambiguity branching so that messages like "thanks" or "hi" never consume document search quota.
 11. **Zero Hardcoded Entity Dictionaries:** Never hardcode city names, station codes, railway junctions, or academic acronyms in Go code. LLM query expansion and vector embeddings handle all domain entities and typos dynamically.
 12. **Direct Factual QA Routing:** Questions seeking factual answers or relations (e.g. departure time, bill total) must never trigger false ambiguity choice sheets. Candidate context is passed directly to the LLM for relation verification and answer synthesis.
+13. **Strict Temporal Calendar Grounding:** Prompts that synthesize answers across documents must provide the exact current real-world timestamp and calendar anchor (Today, Tomorrow, Yesterday in IST). LLMs must NEVER assume upcoming event dates (e.g. flights a month away) correspond to "tomorrow" or "today" relative to the user's question. If no event matches the relative date, Reyna explicitly states that nothing is scheduled for that date before mentioning upcoming events with their real calendar dates.
+14. **Identity & Passenger Grounding:** WhatsApp chats aggregate documents shared across family, friends, and group members. Reyna must NEVER assert "You are traveling" or "Your flight/bill" unless the passenger or recipient name explicitly matches the confirmed user identity. If the identity is unconfirmed or names other individuals, Reyna must verbatim name the passengers/recipients found in the document.

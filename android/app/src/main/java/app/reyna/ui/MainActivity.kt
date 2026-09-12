@@ -232,7 +232,7 @@ private fun MainShell(vm: ReynaViewModel) {
     val repairFile = remember(repairFor, files) {
         if (repairFor == null) null
         else {
-            val f = files.firstOrNull { it.id == repairFor }
+            val f = files.firstOrNull { it.id == repairFor || (it.remoteId > 0 && it.remoteId == repairFor) }
             f?.let {
                 app.reyna.search.SearchableFile(
                     id = it.id,
@@ -366,6 +366,7 @@ private fun MainShell(vm: ReynaViewModel) {
                                 }
                             },
                             loadPreviewPath = vm::chatPreviewPath,
+                            loadSourcePreviewPath = vm::sourcePreviewPath,
                         )
                         Tab.Search -> FilesScreen(
                             files = vm.searchableFiles(),

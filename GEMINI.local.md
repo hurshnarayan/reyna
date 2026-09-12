@@ -48,4 +48,6 @@ CRITICAL WORKSPACE & SCOPE DIRECTIVES FOR REYNA:
    - Zero Hardcoded Entities: Never hardcode cities, routes, station codes, course acronyms, or negative-reply phrases in Go. Let LLM handle semantics and return structured boolean found flag.
    - Direct Factual QA: Questions bypass ambiguity prompts and pass candidate context directly to LLM for relation/route resolution.
    - Fast-fail Quota Wall: Fast return amber Notice card on Gemini quota limits.
+   - Strict Calendar Anchoring: Prompts provide IST real-world timestamp and calendar anchor (Today, Tomorrow, Yesterday). LLM must verify document journey/event dates against real calendar dates and never claim a future month date is "tomorrow".
+   - Passenger & Identity Grounding: Never assume "You are traveling" or "Your flight" without matching confirmed user identity. State exact passenger/recipient names verbatim from documents.
    - Run/Build: Controlled via `justfile` (`just backend-bg`, `just tunnel-up`, `just build`).
