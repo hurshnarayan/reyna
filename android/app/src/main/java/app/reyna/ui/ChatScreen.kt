@@ -88,6 +88,7 @@ import app.reyna.ui.components.ConfidenceDot
 import app.reyna.ui.components.ReynaMascot
 import app.reyna.ui.components.ReynaMascotAnimated
 import app.reyna.ui.components.ReynaNavMascot
+import app.reyna.ui.components.ReynaPaw
 import app.reyna.ui.components.Bubble
 import app.reyna.ui.components.BubbleText
 import app.reyna.ui.components.BubbleTime
@@ -503,8 +504,8 @@ private fun MarkRow(sending: Boolean, stage: String) {
                 contentDescription = null,
             )
         } else {
-            ReynaMascot(
-                modifier = Modifier.size(22.dp),
+            ReynaPaw(
+                modifier = Modifier.size(19.dp),
                 contentDescription = null,
             )
         }

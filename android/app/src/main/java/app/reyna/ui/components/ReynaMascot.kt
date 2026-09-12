@@ -55,6 +55,20 @@ fun ReynaMascot(
     )
 }
 
+/** Reyna's signature paw print left at the end of answers. */
+@Composable
+fun ReynaPaw(
+    modifier: Modifier = Modifier,
+    contentDescription: String? = "Reyna",
+) {
+    Image(
+        painter = painterResource(R.drawable.reyna_paw),
+        contentDescription = contentDescription,
+        modifier = modifier,
+        contentScale = ContentScale.Fit,
+    )
+}
+
 /**
  * Navigation bar mascot.
  *
