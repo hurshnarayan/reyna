@@ -1,5 +1,11 @@
 package app.reyna.ui.components
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,10 +29,12 @@ import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -265,6 +273,73 @@ fun ConfidenceDot(confidence: Double) {
             .clip(CircleShape)
             .background(c.forConfidence(confidence)),
     )
+}
+
+/**
+ * Organic breathing blob for status (green for active/loading, red for error).
+ * Features a solid core with an animated pulsing outer aura.
+ */
+@Composable
+fun BreathingBlob(
+    color: Color,
+    isBreathing: Boolean = true,
+    size: Dp = 7.dp,
+    modifier: Modifier = Modifier,
+) {
+    if (!isBreathing) {
+        Box(
+            modifier = modifier
+                .size(size)
+                .clip(CircleShape)
+                .background(color)
+        )
+        return
+    }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "breathingBlob")
+    val scale by infiniteTransition.animateFloat(
+        initialValue = 0.85f,
+        targetValue = 1.45f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "scale",
+    )
+    val glowAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.2f,
+        targetValue = 0.65f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "glowAlpha",
+    )
+
+    Box(
+        modifier = modifier.size(size * 1.6f),
+        contentAlignment = Alignment.Center,
+    ) {
+        // Pulsing ambient aura
+        Box(
+            Modifier
+                .size(size * 1.45f)
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    alpha = glowAlpha
+                }
+                .clip(CircleShape)
+                .background(color)
+        )
+        // Solid core
+        Box(
+            Modifier
+                .size(size)
+                .clip(CircleShape)
+                .background(color)
+        )
+    }
 }
 
 /** Section header in a list. Quiet, left aligned, the way Signal groups chats. */

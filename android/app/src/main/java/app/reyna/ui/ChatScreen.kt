@@ -83,6 +83,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextOverflow
 import app.reyna.attribution.Attribution
+import app.reyna.ui.components.BreathingBlob
 import app.reyna.ui.components.ConfidenceDot
 import app.reyna.ui.components.ReynaMascot
 import app.reyna.ui.components.ReynaMascotAnimated
@@ -213,6 +214,7 @@ fun ChatScreen(
         ChatToolbar(
             watchingChats = watchingChats,
             fileCount = fileCount,
+            sending = sending,
             onOpenTracking = onOpenTracking,
             onClearChat = onClearChat,
             onOpenSettings = onOpenSettings,
@@ -362,6 +364,7 @@ fun ChatScreen(
 private fun ChatToolbar(
     watchingChats: Int,
     fileCount: Int,
+    sending: Boolean = false,
     onOpenTracking: () -> Unit,
     onClearChat: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -375,46 +378,56 @@ private fun ChatToolbar(
                 .padding(horizontal = Dimens.page, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                Modifier
-                    .size(38.dp)
+            // AppKittie-inspired brand lockup: flush mascot with bold modern typography
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onOpenTracking() }
+                    .padding(vertical = 2.dp, horizontal = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ReynaMascot(
+                    modifier = Modifier.size(27.dp),
+                    contentDescription = null,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "reyna",
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = (-0.4).sp,
+                    color = c.onSurface,
+                )
+            }
+
+            Spacer(Modifier.width(10.dp))
+
+            // AppKittie-style status capsule with breathing blob
+            Row(
+                modifier = Modifier
                     .clip(CircleShape)
                     .background(c.surfaceRaised)
                     .border(1.dp, c.border, CircleShape)
-                    .clickable { onOpenTracking() },
-                contentAlignment = Alignment.Center,
-            ) {
-                ReynaAvatar(size = 26.dp)
-            }
-            Spacer(Modifier.width(11.dp))
-            Column(
-                Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(6.dp))
                     .clickable { onOpenTracking() }
-                    .padding(vertical = 2.dp)
+                    .padding(horizontal = 9.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    "Reyna",
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = c.onSurface,
+                BreathingBlob(
+                    color = if (sending) Color(0xFF22C55E) else c.confident,
+                    isBreathing = sending,
+                    size = 6.dp,
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier
-                            .size(6.dp)
-                            .clip(CircleShape)
-                            .background(c.confident)
-                    )
-                    Spacer(Modifier.width(5.dp))
-                    Text(
-                        "Watching $watchingChats chats · $fileCount files",
-                        fontSize = 12.sp,
-                        color = c.onSurfaceMuted,
-                    )
-                }
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    if (sending) "Searching..." else "$fileCount files",
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = if (sending) c.onSurface else c.onSurfaceMuted,
+                )
             }
+
+            Spacer(Modifier.weight(1f))
+
             IconButton(Icons.Rounded.BarChart, "Tracking", onOpenTracking)
             Box {
                 IconButton(Icons.Rounded.MoreVert, "More") { menuOpen = true }
@@ -505,6 +518,12 @@ private fun MarkRow(sending: Boolean, stage: String) {
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Spacer(Modifier.width(10.dp))
+                BreathingBlob(
+                    color = Color(0xFF22C55E),
+                    isBreathing = true,
+                    size = 6.dp,
+                )
+                Spacer(Modifier.width(7.dp))
                 Text(
                     stage.ifBlank { "Looking through your files" },
                     fontSize = 14.sp,
@@ -959,16 +978,13 @@ private fun EmptyChatState(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
+            // Clean borderless mascot unboxed on dark canvas
             Box(
-                Modifier
-                    .size(80.dp)
-                    .clip(CircleShape)
-                    .background(c.surfaceRaised)
-                    .border(1.dp, c.border, CircleShape),
+                Modifier.size(76.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 ReynaMascot(
-                    modifier = Modifier.size(54.dp),
+                    modifier = Modifier.size(64.dp),
                     contentDescription = null,
                 )
             }

@@ -194,33 +194,42 @@ fun FilesScreen(
                             scaleX = btnScale
                             scaleY = btnScale
                         }
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (hasFilter) c.accent.copy(alpha = 0.12f) else c.surface)
+                        .clip(CircleShape)
+                        .background(if (hasFilter) c.surfaceRaised else c.surface)
                         .border(
                             1.dp,
-                            if (hasFilter) c.accent else c.border,
-                            RoundedCornerShape(8.dp),
+                            if (hasFilter) c.onSurface else c.border,
+                            CircleShape,
                         )
                         .clickable(interactionSource = interactionSource, indication = null) {
                             sortDrawerOpen = true
                         }
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                        .padding(horizontal = 11.dp, vertical = 5.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             Icons.Rounded.Tune,
                             contentDescription = "Sort & Filter",
-                            tint = if (hasFilter) c.accent else c.onSurface,
-                            modifier = Modifier.size(15.dp),
+                            tint = if (hasFilter) c.onSurface else c.onSurfaceMuted,
+                            modifier = Modifier.size(14.dp),
                         )
                         Spacer(Modifier.width(5.dp))
                         Text(
                             text = if (typeFilter != FileTypeFilter.ALL) typeFilter.label else "Filter",
                             fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = if (hasFilter) c.accent else c.onSurface,
+                            fontWeight = if (hasFilter) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (hasFilter) c.onSurface else c.onSurfaceMuted,
                         )
+                        if (hasFilter) {
+                            Spacer(Modifier.width(5.dp))
+                            Box(
+                                Modifier
+                                    .size(5.dp)
+                                    .clip(CircleShape)
+                                    .background(c.confident)
+                            )
+                        }
                     }
                 }
 
@@ -237,6 +246,41 @@ fun FilesScreen(
                     },
                     modifier = Modifier.weight(1f),
                 )
+            }
+
+            // AppKittie-style active filter dismiss tags
+            if (typeFilter != FileTypeFilter.ALL || chatFilter != null) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = Dimens.page, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    if (typeFilter != FileTypeFilter.ALL) {
+                        ActiveFilterTag(
+                            label = typeFilter.label,
+                            onDismiss = { typeFilter = FileTypeFilter.ALL },
+                        )
+                    }
+                    chatFilter?.let { chat ->
+                        ActiveFilterTag(
+                            label = chat,
+                            onDismiss = { chatFilter = null },
+                        )
+                    }
+                    Text(
+                        "Clear all",
+                        fontSize = 11.5.sp,
+                        color = c.onSurfaceMuted,
+                        modifier = Modifier
+                            .clickable {
+                                typeFilter = FileTypeFilter.ALL
+                                chatFilter = null
+                            }
+                            .padding(4.dp),
+                    )
+                }
             }
 
             if (query.isNotBlank() && allHits.isNotEmpty()) {
@@ -419,6 +463,34 @@ private fun Chip(label: String, count: Int, active: Boolean, onClick: () -> Unit
 }
 
 @Composable
+private fun ActiveFilterTag(label: String, onDismiss: () -> Unit) {
+    val c = reynaColors
+    Row(
+        Modifier
+            .clip(CircleShape)
+            .background(c.surfaceRaised)
+            .border(1.dp, c.border, CircleShape)
+            .clickable { onDismiss() }
+            .padding(start = 10.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = c.onSurface,
+        )
+        Spacer(Modifier.width(4.dp))
+        Icon(
+            Icons.Rounded.Close,
+            contentDescription = "Remove",
+            tint = c.onSurfaceMuted,
+            modifier = Modifier.size(13.dp),
+        )
+    }
+}
+
+@Composable
 private fun SortRow(
     currentMode: SortMode,
     ascending: Boolean,
@@ -451,22 +523,33 @@ private fun SortRow(
 
             Box(
                 Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(if (isActive) c.accent.copy(alpha = 0.16f) else c.surface)
+                    .clip(CircleShape)
+                    .background(if (isActive) c.surfaceRaised else Color.Transparent)
                     .border(
                         1.dp,
-                        if (isActive) c.accent else c.border,
-                        RoundedCornerShape(8.dp),
+                        if (isActive) c.onSurface else c.border,
+                        CircleShape,
                     )
                     .clickable { onSelectMode(mode) }
-                    .padding(horizontal = 9.dp, vertical = 5.dp),
+                    .padding(horizontal = 11.dp, vertical = 5.dp),
             ) {
-                Text(
-                    text = "${mode.label}$arrow",
-                    fontSize = 12.sp,
-                    fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (isActive) c.accent else c.onSurfaceMuted,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (isActive) {
+                        Box(
+                            Modifier
+                                .size(5.dp)
+                                .clip(CircleShape)
+                                .background(c.confident)
+                        )
+                        Spacer(Modifier.width(5.dp))
+                    }
+                    Text(
+                        text = "${mode.label}$arrow",
+                        fontSize = 12.sp,
+                        fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (isActive) c.onSurface else c.onSurfaceMuted,
+                    )
+                }
             }
         }
     }
@@ -537,14 +620,43 @@ private fun ResultRow(
         )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                highlight(f.fileName, hit.nameSpans, c.accent),
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-                color = c.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    highlight(f.fileName, hit.nameSpans, c.accent),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = c.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Spacer(Modifier.width(6.dp))
+                val kindLabel = when {
+                    f.isImage -> "IMAGE"
+                    f.fileName.endsWith(".pdf", ignoreCase = true) -> "PDF"
+                    f.fileName.endsWith(".txt", ignoreCase = true) -> "TXT"
+                    f.fileName.endsWith(".docx", ignoreCase = true) || f.fileName.endsWith(".doc", ignoreCase = true) -> "DOC"
+                    f.fileName.endsWith(".xlsx", ignoreCase = true) || f.fileName.endsWith(".csv", ignoreCase = true) -> "SHEET"
+                    else -> "FILE"
+                }
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(c.surfaceRaised)
+                        .padding(horizontal = 5.dp, vertical = 1.5.dp)
+                ) {
+                    Text(
+                        kindLabel,
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = c.onSurfaceMuted,
+                        letterSpacing = 0.5.sp,
+                    )
+                }
+            }
             Spacer(Modifier.height(3.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 ConfidenceDot(f.confidence)
