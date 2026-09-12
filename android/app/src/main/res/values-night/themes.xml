@@ -2,8 +2,8 @@
 <resources>
     <!-- Same as values/themes.xml; the colours come from the night resources. -->
     <style name="Theme.Reyna" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@color/ic_launcher_background</item>
-        <item name="android:windowSplashScreenBackground">@color/ic_launcher_background</item>
+        <item name="android:windowBackground">#0F0F10</item>
+        <item name="android:windowSplashScreenBackground">#0F0F10</item>
         <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
     </style>
 </resources>
