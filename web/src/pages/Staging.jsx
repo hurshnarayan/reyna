@@ -153,25 +153,29 @@ export function StagingView({ isModal = false, onClose }) {
   const readyCount = totalCount - classifyingCount
 
   return (
-    <div style={{
-      maxWidth: isModal ? '100%' : 1200,
-      margin: '0 auto',
-      padding: isModal ? '4px 0 20px' : '8px 4px 60px',
-    }}>
+    <div
+      style={{
+        maxWidth: isModal ? '100%' : 1100,
+        padding: isModal ? '4px 0 20px' : '40px 48px 60px',
+      }}
+      className={isModal ? '' : 'fade-in'}
+    >
       {/* ── Breadcrumb / Header Row ── */}
       <div style={{
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        marginBottom: 16,
+        marginBottom: 20,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#6b7280' }}>
           <span
-            style={{ cursor: 'pointer' }}
+            style={{ cursor: 'pointer', transition: 'color 0.15s' }}
             onClick={() => {
               if (isModal && onClose) onClose()
               else navigate('/dashboard')
             }}
+            onMouseEnter={e => e.currentTarget.style.color = '#111827'}
+            onMouseLeave={e => e.currentTarget.style.color = '#6b7280'}
           >
             reyna
           </span>
@@ -208,9 +212,9 @@ export function StagingView({ isModal = false, onClose }) {
       <div style={{
         background: '#ffffff',
         border: '1px solid #e5e7eb',
-        borderRadius: 16,
-        padding: '20px 22px',
-        boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
+        borderRadius: 18,
+        padding: '22px 26px',
+        boxShadow: '0 4px 20px -2px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.02)',
       }}>
         {/* Controls Bar */}
         <div style={{
@@ -220,6 +224,8 @@ export function StagingView({ isModal = false, onClose }) {
           alignItems: 'center',
           gap: 14,
           marginBottom: 18,
+          paddingBottom: 16,
+          borderBottom: '1px solid #f3f4f6',
         }}>
           {/* Left Title & Filter Tabs */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>

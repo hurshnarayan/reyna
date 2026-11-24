@@ -135,10 +135,17 @@ export default function Groups() {
   })
 
   return (
-    <div style={{ maxWidth: 1200, margin: '0 auto', padding: '8px 4px 60px' }}>
+    <div style={{ padding: '40px 48px 60px', maxWidth: 1100 }} className="fade-in">
       {/* ── Breadcrumb ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#6b7280', marginBottom: 20 }}>
-        <span style={{ cursor: 'pointer' }} onClick={() => navigate('/dashboard')}>reyna</span>
+        <span
+          style={{ cursor: 'pointer', transition: 'color 0.15s' }}
+          onClick={() => navigate('/dashboard')}
+          onMouseEnter={e => e.currentTarget.style.color = '#111827'}
+          onMouseLeave={e => e.currentTarget.style.color = '#6b7280'}
+        >
+          reyna
+        </span>
         <span style={{ color: '#d1d5db' }}>/</span>
         <span style={{ color: '#111827', fontWeight: 600 }}>all groups</span>
       </div>
@@ -147,9 +154,9 @@ export default function Groups() {
       <div style={{
         background: '#ffffff',
         border: '1px solid #e5e7eb',
-        borderRadius: 16,
-        padding: '20px 24px',
-        boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
+        borderRadius: 18,
+        padding: '22px 26px',
+        boxShadow: '0 4px 20px -2px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.02)',
       }}>
         {/* Controls Bar */}
         <div style={{
@@ -158,14 +165,36 @@ export default function Groups() {
           justifyContent: 'space-between',
           alignItems: 'center',
           gap: 14,
-          marginBottom: 20,
+          marginBottom: 18,
+          paddingBottom: 16,
+          borderBottom: '1px solid #f3f4f6',
         }}>
           {/* Left Title & Filter Tabs */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-            <h2 style={{ fontSize: 18, fontWeight: 700, color: '#111827', margin: 0, textTransform: 'lowercase', letterSpacing: '-0.01em' }}>
-              all groups
-            </h2>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <h2 style={{ fontSize: 18, fontWeight: 700, color: '#111827', margin: 0, textTransform: 'lowercase', letterSpacing: '-0.01em' }}>
+                all groups
+              </h2>
+              <span style={{
+                fontSize: 11,
+                fontWeight: 600,
+                color: '#15803d',
+                background: '#dcfce7',
+                padding: '2px 8px',
+                borderRadius: 9999,
+              }}>
+                {filteredGroups.length}
+              </span>
+            </div>
+
+            <div style={{
+              display: 'flex',
+              gap: 4,
+              background: '#f9fafb',
+              padding: 3,
+              borderRadius: 10,
+              border: '1px solid #f3f4f6',
+            }}>
               {[
                 { key: 'all', label: 'view all' },
                 { key: 'active', label: 'active' },
@@ -179,17 +208,18 @@ export default function Groups() {
                     key={tab.key}
                     onClick={() => setActiveTab(tab.key)}
                     style={{
-                      background: isSelected ? '#111827' : '#ffffff',
-                      color: isSelected ? '#ffffff' : '#6b7280',
-                      border: isSelected ? '1px solid #111827' : '1px solid #e5e7eb',
-                      borderRadius: 9999,
-                      padding: '5px 14px',
+                      background: isSelected ? '#ffffff' : 'transparent',
+                      color: isSelected ? '#111827' : '#6b7280',
+                      border: isSelected ? '1px solid rgba(0,0,0,0.06)' : '1px solid transparent',
+                      borderRadius: 7,
+                      padding: '5px 12px',
                       fontSize: 12,
-                      fontWeight: 500,
+                      fontWeight: isSelected ? 600 : 500,
                       cursor: 'pointer',
                       fontFamily: 'inherit',
                       textTransform: 'lowercase',
-                      transition: 'all 0.15s',
+                      boxShadow: isSelected ? '0 1px 2px rgba(0,0,0,0.04)' : 'none',
+                      transition: 'all 0.15s ease',
                     }}
                   >
                     {tab.label}
@@ -206,7 +236,7 @@ export default function Groups() {
               display: 'flex',
               alignItems: 'center',
             }}>
-              <Fa icon="fa-search" style={{ position: 'absolute', left: 12, fontSize: 12, color: '#9ca3af' }} />
+              <Fa icon="fa-search" style={{ position: 'absolute', left: 12, fontSize: 11, color: '#9ca3af' }} />
               <input
                 type="text"
                 placeholder="search groups..."
@@ -214,15 +244,24 @@ export default function Groups() {
                 onChange={e => setSearchQuery(e.target.value)}
                 style={{
                   padding: '7px 12px 7px 32px',
-                  fontSize: 13,
+                  fontSize: 12,
                   borderRadius: 9999,
                   border: '1px solid #e5e7eb',
                   background: '#f9fafb',
                   color: '#111827',
                   outline: 'none',
-                  width: 200,
+                  width: 190,
                   fontFamily: 'inherit',
                   textTransform: 'lowercase',
+                  transition: 'border-color 0.15s, box-shadow 0.15s',
+                }}
+                onFocus={e => {
+                  e.currentTarget.style.borderColor = '#111827'
+                  e.currentTarget.style.background = '#ffffff'
+                }}
+                onBlur={e => {
+                  e.currentTarget.style.borderColor = '#e5e7eb'
+                  e.currentTarget.style.background = '#f9fafb'
                 }}
               />
             </div>
@@ -241,6 +280,15 @@ export default function Groups() {
                 alignItems: 'center',
                 gap: 6,
                 textTransform: 'lowercase',
+                transition: 'all 0.15s',
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.borderColor = '#9ca3af'
+                e.currentTarget.style.background = '#f9fafb'
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.borderColor = '#e5e7eb'
+                e.currentTarget.style.background = '#ffffff'
               }}
             >
               <Fa icon={icons.refresh} style={{ fontSize: 10 }} />
