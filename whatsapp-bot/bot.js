@@ -304,29 +304,39 @@ async function refreshEnabledGroups() {
   }
 }
 
-// watchGroupStateChanges polls the backend every 10 seconds to detect when
-// the dashboard toggles or removes a group. Sends appropriate WhatsApp messages.
+// watchGroupStateChanges polls the backend every 2.5 seconds to detect when
+// the dashboard toggles, changes mode, or removes a group. Sends appropriate WhatsApp messages.
 const lastKnownHidden = new Map(); // groupJid → boolean
+const lastKnownMode = new Map();   // groupJid → string ("auto" | "reaction")
+const lastKnownEmoji = new Map();  // groupJid → string
 
 function startGroupStateWatcher(sock) {
   setInterval(async () => {
     try {
       const res = await backendFetch(`${BACKEND_URL}/api/bot/group-states`);
-      const states = await res.json(); // { "jid": { enabled: bool, hidden: bool }, ... }
+      const states = await res.json(); // { "jid": { enabled: bool, hidden: bool, tracking_mode: string, reaction_emoji: string }, ... }
 
-      for (const jid of syncedGroups) {
+      const allJids = new Set([...syncedGroups, ...Object.keys(states)]);
+      for (const jid of allJids) {
         const state = states[jid];
         if (!state) continue;
 
         const wasEnabled = lastKnownEnabled.get(jid);
         const wasHidden = lastKnownHidden.get(jid);
+        const wasMode = lastKnownMode.get(jid);
+        const wasEmoji = lastKnownEmoji.get(jid);
+
         const nowEnabled = state.enabled === true;
         const nowHidden = state.hidden === true;
+        const nowMode = state.tracking_mode || 'auto';
+        const nowEmoji = state.reaction_emoji || '📌';
 
         // First run — store state without sending messages
-        if (wasEnabled === undefined) {
+        if (wasEnabled === undefined || wasMode === undefined) {
           lastKnownEnabled.set(jid, nowEnabled);
           lastKnownHidden.set(jid, nowHidden);
+          lastKnownMode.set(jid, nowMode);
+          lastKnownEmoji.set(jid, nowEmoji);
           continue;
         }
 
@@ -347,6 +357,8 @@ function startGroupStateWatcher(sock) {
         if (wasHidden && !nowHidden) {
           lastKnownHidden.set(jid, false);
           lastKnownEnabled.set(jid, nowEnabled);
+          lastKnownMode.set(jid, nowMode);
+          lastKnownEmoji.set(jid, nowEmoji);
           continue;
         }
 
@@ -370,16 +382,48 @@ function startGroupStateWatcher(sock) {
             console.log(`  [WATCH] sent "tracking resumed" to ${jid}`);
           } catch {}
         }
-        else {
-          lastKnownEnabled.set(jid, nowEnabled);
-          lastKnownHidden.set(jid, nowHidden);
+        // Tracking mode changed while group is active (e.g. auto ↔ reaction)
+        else if (nowEnabled && !nowHidden && wasMode !== nowMode) {
+          lastKnownMode.set(jid, nowMode);
+          try {
+            if (nowMode === 'reaction') {
+              await sock.sendMessage(jid, {
+                text: `*Reyna:* Tracking mode switched to *reactions only*. ${nowEmoji}\n\nFiles shared in this group will only be staged when reacted with ${nowEmoji}. Other files will be ignored.`,
+              });
+              console.log(`  [WATCH] sent "reactions only mode" (${nowEmoji}) to ${jid}`);
+            } else {
+              await sock.sendMessage(jid, {
+                text: '*Reyna:* Tracking mode switched to *track all files*. 📂\n\nEvery document shared in this group will now be automatically staged and synced.',
+              });
+              console.log(`  [WATCH] sent "track all files mode" to ${jid}`);
+            }
+          } catch (err) {
+            console.error(`  [WATCH] failed to send mode switch to ${jid}:`, err.message);
+          }
         }
+        // Reaction emoji changed while in reaction mode
+        else if (nowEnabled && !nowHidden && nowMode === 'reaction' && wasEmoji !== nowEmoji) {
+          lastKnownEmoji.set(jid, nowEmoji);
+          try {
+            await sock.sendMessage(jid, {
+              text: `*Reyna:* Reaction trigger emoji updated to ${nowEmoji}. React with ${nowEmoji} to stage files in this group.`,
+            });
+            console.log(`  [WATCH] sent "emoji updated" (${nowEmoji}) to ${jid}`);
+          } catch (err) {
+            console.error(`  [WATCH] failed to send emoji update to ${jid}:`, err.message);
+          }
+        }
+
+        lastKnownEnabled.set(jid, nowEnabled);
+        lastKnownHidden.set(jid, nowHidden);
+        lastKnownMode.set(jid, nowMode);
+        lastKnownEmoji.set(jid, nowEmoji);
       }
 
       // Update enabledGroups set
       enabledGroups = new Set(Object.entries(states).filter(([,s]) => s.enabled).map(([jid]) => jid));
     } catch {}
-  }, 10000);
+  }, 2500);
 }
 
 // Returns { mode, enabled } — the bot must check BOTH.

@@ -587,6 +587,27 @@ func (s *Server) handleBotCommand(w http.ResponseWriter, r *http.Request) {
 			resp.Reply = "Group not found."
 		}
 
+	case "mode":
+		if groupID > 0 {
+			gs := s.store.GetGroupSettings(groupID)
+			targetMode := strings.ToLower(strings.TrimSpace(args))
+			if targetMode == "reaction" || targetMode == "reactions" || targetMode == "react" {
+				gs.TrackingMode = "reaction"
+				s.store.UpsertGroupSettings(gs)
+				emoji := gs.ReactionEmoji
+				if emoji == "" { emoji = "📌" }
+				resp.Reply = fmt.Sprintf("Tracking mode switched to *reactions only*. %s\n\nFiles shared in this group will only be staged when someone reacts with %s.", emoji, emoji)
+			} else if targetMode == "auto" || targetMode == "all" || targetMode == "track all" {
+				gs.TrackingMode = "auto"
+				s.store.UpsertGroupSettings(gs)
+				resp.Reply = "Tracking mode switched to *track all files*. 📂\n\nEvery document shared in this group will now be automatically staged and synced."
+			} else {
+				resp.Reply = fmt.Sprintf("Current tracking mode: *%s*.\n\nUsage: `/reyna mode auto` or `/reyna mode reaction`", gs.TrackingMode)
+			}
+		} else {
+			resp.Reply = "Group not found."
+		}
+
 	case "tracking":
 		// Handled by bot directly, but provide a fallback
 		resp.Reply = "📊 Use this in WhatsApp to see tracked/untracked files in real time."
@@ -1551,15 +1572,28 @@ func (s *Server) handleEnabledGroups(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"groups": ids})
 }
 
-// handleGroupStates returns enabled + hidden status for every known group.
-// Used by the bot's state-change watcher to detect dashboard toggles/removes
+// handleGroupStates returns enabled, hidden, tracking_mode, and reaction_emoji status for every known group.
+// Used by the bot's state-change watcher to detect dashboard toggles/removes/mode-switches
 // and send appropriate WhatsApp messages.
 func (s *Server) handleGroupStates(w http.ResponseWriter, r *http.Request) {
 	groups, _ := s.store.GetAllGroups()
-	states := make(map[string]map[string]bool)
+	states := make(map[string]map[string]interface{})
 	for _, g := range groups {
 		gs := s.store.GetGroupSettings(g.ID)
-		states[g.WAID] = map[string]bool{"enabled": gs.Enabled, "hidden": gs.Hidden}
+		mode := gs.TrackingMode
+		if mode == "" {
+			mode = "auto"
+		}
+		emoji := gs.ReactionEmoji
+		if emoji == "" {
+			emoji = "📌"
+		}
+		states[g.WAID] = map[string]interface{}{
+			"enabled":        gs.Enabled,
+			"hidden":         gs.Hidden,
+			"tracking_mode":  mode,
+			"reaction_emoji": emoji,
+		}
 	}
 	json.NewEncoder(w).Encode(states)
 }
