@@ -532,10 +532,10 @@ func (s *Store) AddFile(f *model.File) (*model.File, error) {
 	return f, nil
 }
 
-// CommitFiles marks staged files as committed in a group
+// CommitFiles marks staged files as committed in a group (excluding any still being classified)
 func (s *Store) CommitFiles(groupID int64) (int64, error) {
 	res, err := s.db.Exec(
-		`UPDATE files SET status='committed' WHERE group_id=? AND status='staged'`,
+		`UPDATE files SET status='committed' WHERE group_id=? AND status='staged' AND subject != 'classifying...'`,
 		groupID,
 	)
 	if err != nil {
@@ -547,7 +547,7 @@ func (s *Store) CommitFiles(groupID int64) (int64, error) {
 // CommitFileByName marks a specific staged file as committed
 func (s *Store) CommitFileByName(groupID int64, fileName string) error {
 	_, err := s.db.Exec(
-		`UPDATE files SET status='committed' WHERE group_id=? AND file_name LIKE ? AND status='staged'`,
+		`UPDATE files SET status='committed' WHERE group_id=? AND file_name LIKE ? AND status='staged' AND subject != 'classifying...'`,
 		groupID, "%"+fileName+"%",
 	)
 	return err

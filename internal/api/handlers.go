@@ -438,6 +438,12 @@ func (s *Server) handleBotCommand(w http.ResponseWriter, r *http.Request) {
 			for i, f := range staged {
 				log.Printf("[COMMIT][%d] file=%s id=%d size=%d subject=%s", i, f.FileName, f.ID, f.FileSize, f.Subject)
 
+				if f.Subject == "classifying..." {
+					log.Printf("[COMMIT][%d] SKIP still classifying", i)
+					skipped++
+					continue
+				}
+
 				canUpload := driveUser != nil && driveUser.GoogleRefresh != "" && s.drive.IsConfigured() && driveUser.DriveRootID != "" && !strings.HasPrefix(driveUser.DriveRootID, "local_")
 				log.Printf("[COMMIT][%d] canUpload=%v", i, canUpload)
 
@@ -1047,6 +1053,23 @@ func (s *Server) handleCommitStaged(w http.ResponseWriter, r *http.Request) {
 	for _, gid := range gids {
 		staged, _ := s.store.GetStagedFiles(gid)
 		if len(staged) == 0 { continue }
+
+		// Give async classification a brief grace window (up to 2.5s) to resolve
+		deadline := time.Now().Add(2500 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			hasPending := false
+			for _, f := range staged {
+				if f.Subject == "classifying..." {
+					hasPending = true
+					break
+				}
+			}
+			if !hasPending {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+			staged, _ = s.store.GetStagedFiles(gid)
+		}
 
 		driveUser := s.store.FindDriveConnectedUser(gid)
 		canUpload := driveUser != nil && driveUser.GoogleRefresh != "" && s.drive.IsConfigured() && driveUser.DriveRootID != "" && !strings.HasPrefix(driveUser.DriveRootID, "local_")
