@@ -1383,6 +1383,30 @@ async function startBot() {
     if (qr) {
       console.log('\n  Scan with WhatsApp → Linked Devices → Link a Device:\n');
       qrcode.generate(qr, { small: true });
+      try {
+        const QRCode = require('qrcode-terminal/vendor/QRCode');
+        const QRError = require('qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel');
+        const qrObj = new QRCode(-1, QRError.L);
+        qrObj.addData(qr);
+        qrObj.make();
+        const count = qrObj.getModuleCount();
+        let rects = '';
+        for (let r = 0; r < count; r++) {
+          for (let c = 0; c < count; c++) {
+            if (qrObj.modules[r][c]) {
+              rects += `<rect x="${c + 4}" y="${r + 4}" width="1" height="1" fill="#000"/>`;
+            }
+          }
+        }
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${count + 8} ${count + 8}" width="320" height="320"><rect width="100%" height="100%" fill="#fff"/>${rects}</svg>`;
+        fs.writeFileSync(path.join(__dirname, '../web/public/qr.svg'), svg);
+        const brainDir = '/home/bro/.gemini/antigravity-cli/brain/c52ec36a-86db-4987-b695-c7a2a5dc4b74';
+        if (fs.existsSync(brainDir)) {
+          fs.writeFileSync(path.join(brainDir, 'qr.svg'), svg);
+        }
+      } catch (err) {
+        console.error('QR SVG generation error:', err.message);
+      }
     }
     if (connection === 'open') {
       // Capture the linked WhatsApp account's phone number — used as the
