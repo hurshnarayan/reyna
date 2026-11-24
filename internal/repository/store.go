@@ -1222,6 +1222,36 @@ func postedAtArg(f *model.File) interface{} {
 	return f.PostedAt
 }
 
+// RecoverStuckClassifyingFiles resolves any files left in "classifying..." status from an interrupted restart
+func (s *Store) RecoverStuckClassifyingFiles(classify func(fileName string) string) {
+	rows, err := s.db.Query(`SELECT id, file_name FROM files WHERE subject='classifying...'`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	type item struct {
+		id   int64
+		name string
+	}
+	var items []item
+	for rows.Next() {
+		var it item
+		if err := rows.Scan(&it.id, &it.name); err == nil {
+			items = append(items, it)
+		}
+	}
+	for _, it := range items {
+		subj := "Notes"
+		if classify != nil {
+			if res := classify(it.name); res != "" && res != "classifying..." {
+				subj = res
+			}
+		}
+		s.UpdateFileSubject(it.id, subj)
+		log.Printf("🧹 Recovered stuck classifying file %d (%s) → %s", it.id, it.name, subj)
+	}
+}
+
 // UpdateFileSubject updates the subject/folder after async classification completes
 func (s *Store) UpdateFileSubject(fileID int64, subject string) error {
 	_, err := s.db.Exec(`UPDATE files SET subject=? WHERE id=?`, subject, fileID)

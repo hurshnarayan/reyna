@@ -61,6 +61,15 @@ func main() {
 		log.Printf("")
 	}
 
+	// ── Auto-Recovery for Interrupted Classifications ──
+	go func() {
+		time.Sleep(1 * time.Second)
+		store.RecoverStuckClassifyingFiles(func(name string) string {
+			s, _, _ := classifier.ClassifyFile(name, nil)
+			return s
+		})
+	}()
+
 	// ── Auto-Commit Scheduler ──
 	// Runs every 15 minutes, commits staged files older than AutoCommitHours
 	go func() {
