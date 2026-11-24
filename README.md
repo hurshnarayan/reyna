@@ -9,7 +9,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg?style=flat" alt="License"></a>
 </div>
 
-reyna is an autonomous document capture, semantic indexing, and conversational retrieval system for WhatsApp.
+Reyna is an autonomous document capture, semantic indexing, and conversational retrieval system for WhatsApp.
 
 Every day, countless critical documents—research papers, project decks, technical specs, financial reports, spreadsheets, contracts, and notes—get dumped into WhatsApp group chats, only to be buried under thousands of messages within hours. Reyna transforms WhatsApp into an intelligent, self-organizing document intelligence hub.
 
