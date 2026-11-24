@@ -147,47 +147,6 @@ export default function Groups() {
     return true
   })
 
-  // Stats
-  const totalCount = groupSettings.length
-  const activeCount = groupSettings.filter(g => g.settings?.enabled).length
-  const autoCount = groupSettings.filter(g => g.settings?.tracking_mode === 'auto' || !g.settings?.tracking_mode).length
-  const reactionCount = groupSettings.filter(g => g.settings?.tracking_mode === 'reaction').length
-
-  const quickCards = [
-    {
-      title: 'monitored groups',
-      count: `${totalCount} group${totalCount === 1 ? '' : 's'}`,
-      desc: 'connected whatsapp groups',
-      icon: icons.groups,
-      iconBg: '#111827',
-      iconColor: '#ffffff',
-    },
-    {
-      title: 'active bot tracking',
-      count: `${activeCount} active`,
-      desc: 'listening for incoming files',
-      icon: 'fa-robot',
-      iconBg: '#f0fdf4',
-      iconColor: '#16a34a',
-    },
-    {
-      title: 'track all files',
-      count: `${autoCount} group${autoCount === 1 ? '' : 's'}`,
-      desc: 'auto-stages every document',
-      icon: icons.trackAll,
-      iconBg: '#eff6ff',
-      iconColor: '#2563eb',
-    },
-    {
-      title: 'reactions only',
-      count: `${reactionCount} group${reactionCount === 1 ? '' : 's'}`,
-      desc: 'stages files with 📌 pin',
-      icon: icons.trackReact,
-      iconBg: '#fef3c7',
-      iconColor: '#d97706',
-    },
-  ]
-
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto', padding: '8px 4px 60px' }}>
       {/* ── Breadcrumb ── */}
@@ -196,167 +155,6 @@ export default function Groups() {
         <span style={{ color: '#d1d5db' }}>/</span>
         <span style={{ color: '#111827', fontWeight: 600 }}>all groups</span>
       </div>
-
-      {/* ── Top Metric Cards (Untitled UI 4-card header grid) ── */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-        gap: 16,
-        marginBottom: 28,
-      }}>
-        {quickCards.map((qc, i) => (
-          <div
-            key={i}
-            style={{
-              background: '#ffffff',
-              border: '1px solid #e5e7eb',
-              borderRadius: 14,
-              padding: '18px 20px',
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'space-between',
-              boxShadow: '0 1px 2px rgba(0,0,0,0.03)',
-              transition: 'transform 0.15s, box-shadow 0.15s',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-              <div style={{
-                width: 36,
-                height: 36,
-                borderRadius: 10,
-                background: qc.iconBg,
-                color: qc.iconColor,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: 14,
-              }}>
-                <Fa icon={qc.icon} />
-              </div>
-              <span style={{ color: '#9ca3af', fontSize: 14, fontWeight: 500 }}>+</span>
-            </div>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 500, color: '#6b7280', textTransform: 'lowercase', marginBottom: 4 }}>
-                {qc.title}
-              </div>
-              <div style={{ fontSize: 20, fontWeight: 700, color: '#111827', letterSpacing: '-0.02em', textTransform: 'lowercase' }}>
-                {qc.count}
-              </div>
-              <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>
-                {qc.desc}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* ── Recent Groups Section (Untitled UI "Recent" cards) ── */}
-      {groupSettings.length > 0 && (
-        <div style={{ marginBottom: 32 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', textTransform: 'lowercase', marginBottom: 12 }}>
-            recent
-          </div>
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
-            gap: 14,
-          }}>
-            {groupSettings.slice(0, 3).map((gs, i) => {
-              const enabled = gs.settings?.enabled || false
-              const mode = gs.settings?.tracking_mode || 'auto'
-              return (
-                <div
-                  key={i}
-                  onClick={() => openConfig(gs)}
-                  style={{
-                    background: '#ffffff',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: 12,
-                    padding: '14px 18px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    cursor: 'pointer',
-                    boxShadow: '0 1px 2px rgba(0,0,0,0.02)',
-                    transition: 'border-color 0.15s, box-shadow 0.15s',
-                  }}
-                  onMouseEnter={e => {
-                    e.currentTarget.style.borderColor = '#d1d5db'
-                    e.currentTarget.style.boxShadow = '0 2px 6px rgba(0,0,0,0.05)'
-                  }}
-                  onMouseLeave={e => {
-                    e.currentTarget.style.borderColor = '#e5e7eb'
-                    e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.02)'
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
-                    <div style={{
-                      width: 32,
-                      height: 32,
-                      borderRadius: 8,
-                      background: enabled ? '#f0fdf4' : '#f3f4f6',
-                      border: `1px solid ${enabled ? '#dcfce7' : '#e5e7eb'}`,
-                      color: enabled ? '#15803d' : '#6b7280',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: 12,
-                      flexShrink: 0,
-                    }}>
-                      <Fa icon={icons.groups} />
-                    </div>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{
-                        fontSize: 14,
-                        fontWeight: 600,
-                        color: '#111827',
-                        textTransform: 'lowercase',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}>
-                        {(gs.group?.name || 'whatsapp group').toLowerCase()}
-                      </div>
-                      <div style={{ fontSize: 12, color: '#6b7280', textTransform: 'lowercase' }}>
-                        {mode === 'auto' ? 'track all files' : 'reactions only'} · {enabled ? 'active' : 'paused'}
-                      </div>
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                    <span style={{
-                      fontSize: 11,
-                      fontWeight: 600,
-                      color: enabled ? '#15803d' : '#6b7280',
-                      background: enabled ? '#dcfce7' : '#f3f4f6',
-                      padding: '2px 8px',
-                      borderRadius: 9999,
-                      textTransform: 'lowercase',
-                    }}>
-                      {enabled ? 'active' : 'paused'}
-                    </span>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        openConfig(gs)
-                      }}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        cursor: 'pointer',
-                        color: '#9ca3af',
-                        padding: 6,
-                        fontSize: 14,
-                      }}
-                    >
-                      <Fa icon="fa-ellipsis-v" />
-                    </button>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
 
       {/* ── Main All Groups Section ── */}
       <div style={{
@@ -715,7 +513,10 @@ export default function Groups() {
                             }}
                           >
                             <button
-                              onClick={() => openConfig(gs)}
+                              onClick={() => {
+                                setOpenMenuGroupId(null)
+                                openConfig(gs)
+                              }}
                               style={{
                                 width: '100%',
                                 background: 'none',
@@ -737,62 +538,13 @@ export default function Groups() {
                               configure bot
                             </button>
 
-                            <button
-                              onClick={() => {
-                                setOpenMenuGroupId(null)
-                                setTrackingMode(gid, mode === 'auto' ? 'reaction' : 'auto')
-                              }}
-                              style={{
-                                width: '100%',
-                                background: 'none',
-                                border: 'none',
-                                padding: '8px 12px',
-                                fontSize: 13,
-                                color: '#111827',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 10,
-                                cursor: 'pointer',
-                                borderRadius: 6,
-                                textTransform: 'lowercase',
-                              }}
-                              onMouseEnter={e => e.currentTarget.style.background = '#f9fafb'}
-                              onMouseLeave={e => e.currentTarget.style.background = 'none'}
-                            >
-                              <Fa icon={icons.refresh} style={{ fontSize: 12, color: '#6b7280' }} />
-                              switch to {mode === 'auto' ? 'reactions' : 'auto'}
-                            </button>
-
-                            <button
-                              onClick={() => {
-                                setOpenMenuGroupId(null)
-                                navigate('/files')
-                              }}
-                              style={{
-                                width: '100%',
-                                background: 'none',
-                                border: 'none',
-                                padding: '8px 12px',
-                                fontSize: 13,
-                                color: '#111827',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 10,
-                                cursor: 'pointer',
-                                borderRadius: 6,
-                                textTransform: 'lowercase',
-                              }}
-                              onMouseEnter={e => e.currentTarget.style.background = '#f9fafb'}
-                              onMouseLeave={e => e.currentTarget.style.background = 'none'}
-                            >
-                              <Fa icon={icons.files} style={{ fontSize: 12, color: '#6b7280' }} />
-                              view staged files
-                            </button>
-
                             <div style={{ height: 1, background: '#f3f4f6', margin: '4px 0' }} />
 
                             <button
-                              onClick={() => removeGroup(gid)}
+                              onClick={() => {
+                                setOpenMenuGroupId(null)
+                                removeGroup(gid)
+                              }}
                               style={{
                                 width: '100%',
                                 background: 'none',
