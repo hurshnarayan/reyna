@@ -476,31 +476,7 @@ export default function Dashboard() {
               <Fa icon={icons.staging} style={{ fontSize: 15, color: 'var(--text-color, #111827)' }} /> staging area
             </h2>
             {stagedFiles.length > 0 && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                {stagedFiles.length > 3 && (
-                  <button
-                    onClick={() => setShowStagingModal(true)}
-                    style={{
-                      background: '#ffffff',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: 9999,
-                      padding: '4px 12px',
-                      fontSize: 12,
-                      fontWeight: 500,
-                      color: '#111827',
-                      cursor: 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 4,
-                      textTransform: 'lowercase',
-                      transition: 'all 0.15s',
-                    }}
-                    onMouseEnter={e => e.currentTarget.style.borderColor = '#9ca3af'}
-                    onMouseLeave={e => e.currentTarget.style.borderColor = '#e5e7eb'}
-                  >
-                    view all ({stagedFiles.length}) <span style={{ fontSize: 12, lineHeight: 1 }}>&rarr;</span>
-                  </button>
-                )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <button
                   onClick={async () => {
                     for (const f of stagedFiles) await removeFromStaging(f.id)
@@ -703,7 +679,7 @@ export default function Dashboard() {
                       e.currentTarget.style.borderColor = '#e5e7eb'
                     }}
                   >
-                    +{stagedFiles.length - 3} more files in staging · view all in staging <span style={{ fontSize: 13, lineHeight: 1 }}>&rarr;</span>
+                    +{stagedFiles.length - 3} more files in staging
                   </button>
                 )}
               </div>
