@@ -1,6 +1,7 @@
 <div align="center">
-  <h1>reyna</h1>
-  <p>autonomous study-group document capture, classification, and retrieval for whatsapp</p>
+  <img src="docs/reyna-badge.png" width="460" alt="reyna - autonomous document capture and retrieval">
+  <br/>
+  <br/>
   <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go" alt="Go Version"></a>
   <a href="https://react.dev"><img src="https://img.shields.io/badge/React-18-61DAFB?style=flat&logo=react" alt="React"></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node-20+-339933?style=flat&logo=node.js" alt="Node.js"></a>
@@ -8,17 +9,22 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg?style=flat" alt="License"></a>
 </div>
 
-reyna is an autonomous document capture bot, semantic indexing pipeline, and web dashboard for WhatsApp. When documents are shared in student groups, reyna extracts their text, determines subject categorization via Gemini, uploads them into organized Google Drive folders, and provides natural-language search and multi-turn Q&A in WhatsApp direct messages and a web interface.
+reyna is an autonomous document capture, semantic indexing, and conversational retrieval system for WhatsApp.
+
+Every day, countless critical documents—research papers, project decks, technical specs, financial reports, spreadsheets, contracts, and notes—get dumped into WhatsApp group chats, only to be buried under thousands of messages within hours. Reyna transforms WhatsApp into an intelligent, self-organizing document intelligence hub.
+
+The moment a document is shared in any monitored chat, Reyna intercepts it, analyzes the inner contents, organizes it into structured Google Drive folders, and indexes its text in a local SQLite database. When you need that file days or months later, ask Reyna naturally in WhatsApp DM or through the web dashboard—Reyna retrieves the exact file, drops a direct Google Drive link, and answers specific questions cited directly from the document.
 
 Highlights
 ----------
 
-- **Automated Capture** // Ingests shared PDFs, Word documents, PowerPoint presentations, and spreadsheets directly from WhatsApp groups
-- **Content-Aware Classification** // Reads inner document text to determine subject folders rather than relying on arbitrary file names
-- **Zero-Dependency Office Parsing** // Unzips and extracts text from DOCX, PPTX, and XLSX files using the Go standard library without external dependencies
-- **Ranked SQL Search** // Performs sub-millisecond keyword matching and ranking directly in SQLite with multilingual stopword filtering
-- **Multilingual Retrieval** // Supports conversational search and contextual Q&A across English, Hindi, Hinglish, and regional scripts
-- **Self-Hosted Privacy** // All files are stored directly in your own Google Drive and local SQLite database; no third-party data tracking
+- **Autonomous Ingestion** // Intercepts and captures PDFs, Word documents, PowerPoint presentations, spreadsheets, and files from WhatsApp chats with zero manual effort
+- **Deep Content Analysis** // Reads inside document text to determine intelligent categorization instead of guessing from arbitrary file names
+- **Instant Conversational Retrieval** // Search documents and ask questions in plain language via WhatsApp DM or web interface with verified citations and direct Drive links
+- **Multilingual Intelligence** // Understands queries and answers fluently across English, Hindi, Hinglish, and regional languages
+- **Zero-Dependency Office Engine** // Unpacks and parses DOCX, PPTX, and XLSX archives using the Go standard library with zero external binaries
+- **Ranked SQL Search Engine** // Sub-millisecond token matching and relevance scoring directly in SQLite with intelligent stopword filtering
+- **100% Self-Hosted & Private** // Every file and extracted summary remains strictly in your personal Google Drive and local SQLite database; no third-party data tracking
 
 Table of Contents
 -----------------
@@ -47,13 +53,13 @@ Table of Contents
 Architecture and Pipeline
 -------------------------
 
-Every file shared in an enabled WhatsApp group traverses a seven-stage pipeline before being synchronized with Google Drive:
+Every file ingested by Reyna traverses a seven-stage processing pipeline before landing in Google Drive:
 
-1. **Hash Deduplication**: Computes SHA-256 file hashes to detect identical uploads across groups. Same file shared multiple times is stored once; modified versions with identical names receive automatic version incrementing (`v2`).
-2. **Office Document Parsing**: DOCX, PPTX, and XLSX archives are unpacked in memory using Go standard library `archive/zip` and `encoding/xml`. Inner document XML is parsed to extract text with zero external binaries.
+1. **Hash Deduplication**: Computes SHA-256 byte hashes to identify duplicate uploads across all monitored groups. The same file shared across multiple channels is stored once, while revised files sharing an identical name are automatically versioned (`v2`).
+2. **Office Document Parsing**: Ingests DOCX, PPTX, and XLSX archives in memory using Go standard library `archive/zip` and `encoding/xml`. Inner XML files are parsed into plain text with zero external toolchain requirements.
 3. **Tokenization and Normalization**: Strips conversational stopwords across English and Hinglish to isolate substantive search tokens.
-4. **Ranked SQL Search**: Scores documents against user queries using custom token matches executed inside SQLite.
-5. **Fuzzy Folder Matching**: Computes Jaccard similarity between suggested subject names and existing Google Drive directories to prevent duplicate or near-identical folders.
+4. **Ranked SQL Search**: Scores documents against queries using custom token matches executed inside SQLite.
+5. **Fuzzy Folder Matching**: Computes Jaccard similarity between suggested category names and existing Google Drive directories to prevent duplicate or near-identical folders.
 6. **Gemini Classification**: Analyzes document contents alongside sender metadata, timestamps, and current folder hierarchies to determine the optimal destination folder.
 7. **Google Drive Synchronization**: Streams file bytes to Google Drive v3, resolves destination folders, and applies view permissions so generated links work seamlessly.
 
@@ -101,7 +107,7 @@ Running Reyna
 
 ### Service Execution
 
-Reyna comprises three core components that should be executed in separate terminals:
+Reyna comprises three core components that run in separate terminals:
 
 ```sh
 # Terminal 1: Go backend API server (runs on http://localhost:8080)
@@ -155,7 +161,7 @@ Usage
 
 Add the bot's WhatsApp account to any group and issue commands in the group chat:
 
-- `/reyna init`: Enables file tracking in the current group.
+- `/reyna init`: Enables document capture in the current group.
 - `/reyna mode auto`: Switches to automatic mode, capturing every document shared in the group.
 - `/reyna mode reaction`: Switches to reaction mode, staging only documents that receive the trigger reaction.
 - `/reyna emoji [emoji]`: Sets the trigger emoji for reaction staging (default: 📌).
@@ -166,14 +172,14 @@ Add the bot's WhatsApp account to any group and issue commands in the group chat
 Send direct messages to the bot number to search and ask questions:
 
 ```
-User:  reyna find probability notes
+User:  reyna find q3 financial report
 Reyna: Found 2 files:
-       1. Probability Mod 1_scribs.pdf (Mathematics) - https://drive.google.com/...
-       2. CSE Sem 3 Mod 3 Joint Prob.pdf (Notes) - https://drive.google.com/...
+       1. Q3_FY25_Financial_Review.pdf (Finance) - https://drive.google.com/...
+       2. Board_Meeting_Deck_Q3.pptx (Executive) - https://drive.google.com/...
 
-User:  explain bayes theorem from mod 1
-Reyna: According to Probability Mod 1_scribs.pdf (page 4), Bayes' theorem calculates
-       conditional probability: P(A|B) = [P(B|A) * P(A)] / P(B).
+User:  what was the net margin in q3?
+Reyna: According to Q3_FY25_Financial_Review.pdf (page 6), the operating net margin
+       was 24.3%, an increase of 180 basis points over Q2.
 ```
 
 Follow-up questions do not require the `reyna` prefix for 10 minutes following a reply.
@@ -182,7 +188,7 @@ Follow-up questions do not require the `reyna` prefix for 10 minutes following a
 
 Access the interface at `http://localhost:5173`:
 
-- **Dashboard**: High-level overview displaying committed storage, group counts, active tracking status, and recent files.
+- **Dashboard**: High-level overview displaying committed storage, group counts, active tracking status, and recent documents.
 - **Files**: Complete file repository featuring subject pill filters, sort toggles, live document preview, download links, and batch deletion.
 - **Groups**: Central management for connected groups. Toggle tracking on or off, switch between auto and reaction capture, customize reaction emojis, and remove groups.
 - **Staging**: Staging queue for reaction-mode documents awaiting batch commit to Google Drive.
