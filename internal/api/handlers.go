@@ -281,7 +281,15 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	gids := s.store.GetUserGroupIDs(uid)
 	if len(gids) == 0 {
 		user, _ := s.store.GetUserByID(uid)
-		if user != nil { s.store.AutoLinkUserToGroups(uid, user.Phone) }
+		if user != nil {
+			s.store.AutoLinkUserToGroups(uid, user.Phone)
+			if user.GoogleRefresh != "" {
+				allGroups, _ := s.store.GetAllGroups()
+				for _, g := range allGroups {
+					s.store.AddGroupMember(g.ID, uid, user.Phone, "admin")
+				}
+			}
+		}
 		gids = s.store.GetUserGroupIDs(uid)
 	}
 

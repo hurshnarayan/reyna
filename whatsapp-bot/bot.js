@@ -456,7 +456,9 @@ function phoneFromJid(jid) {
 function isRealPhoneNumber(phone) {
   if (!phone) return false;
   const cleaned = phone.replace(/\D/g, '');
-  return cleaned.length >= 10;
+  // WhatsApp LIDs are 15-digit internal identifiers (e.g. 144250905870440)
+  if (cleaned.length >= 14 && (cleaned.startsWith('1') || cleaned.startsWith('2'))) return false;
+  return cleaned.length >= 10 && cleaned.length <= 13;
 }
 
 // ─── Natural Language Intent Detection ───

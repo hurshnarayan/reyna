@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -256,8 +257,11 @@ func (g *geminiProvider) Complete(prompt string, maxTokens int) (string, error) 
 		maxTokens = 300
 	}
 
-	// Gemini API: POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=%s", g.apiKey)
+	model := os.Getenv("GEMINI_MODEL")
+	if model == "" {
+		model = "gemini-3.8-flash"
+	}
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", model, g.apiKey)
 
 	// Only force application/json output when the prompt explicitly asks for
 	// JSON. Free-form answers (Q&A, NLP reply generation) must stay plain text
@@ -319,7 +323,11 @@ func (g *geminiProvider) CompleteWithDoc(prompt string, fileData []byte, mimeTyp
 		maxTokens = 500
 	}
 
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=%s", g.apiKey)
+	model := os.Getenv("GEMINI_MODEL")
+	if model == "" {
+		model = "gemini-3.8-flash"
+	}
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", model, g.apiKey)
 
 	b64 := base64.StdEncoding.EncodeToString(fileData)
 
