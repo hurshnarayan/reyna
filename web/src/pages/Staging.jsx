@@ -30,7 +30,6 @@ export function StagingView({ isModal = false, onClose }) {
   const [searchQuery, setSearchQuery] = useState('')
   const [activeTab, setActiveTab] = useState('all') // 'all' | 'ready' | 'classifying' | 'pdf' | 'images' | 'others'
   const [selectedIds, setSelectedIds] = useState(new Set())
-  const [openMenuId, setOpenMenuId] = useState(null)
 
   const fetchStaged = async () => {
     try {
@@ -48,16 +47,6 @@ export function StagingView({ isModal = false, onClose }) {
     fetchStaged()
     const interval = setInterval(fetchStaged, 5000)
     return () => clearInterval(interval)
-  }, [])
-
-  useEffect(() => {
-    const handleOutsideClick = (e) => {
-      if (!e.target.closest('.staging-menu-trigger') && !e.target.closest('.staging-action-menu')) {
-        setOpenMenuId(null)
-      }
-    }
-    window.addEventListener('click', handleOutsideClick)
-    return () => window.removeEventListener('click', handleOutsideClick)
   }, [])
 
   const removeFromStaging = async (fileId) => {
@@ -160,44 +149,8 @@ export function StagingView({ isModal = false, onClose }) {
 
   // Stats
   const totalCount = stagedFiles.length
-  const totalBytes = stagedFiles.reduce((acc, f) => acc + (f.file_size || 0), 0)
   const classifyingCount = stagedFiles.filter(f => f.subject === 'classifying...').length
   const readyCount = totalCount - classifyingCount
-
-  const metricCards = [
-    {
-      title: 'files in staging',
-      count: `${totalCount} file${totalCount === 1 ? '' : 's'}`,
-      desc: 'queued for drive commit',
-      icon: icons.staging,
-      iconBg: '#111827',
-      iconColor: '#ffffff',
-    },
-    {
-      title: 'total staged size',
-      count: formatBytes(totalBytes),
-      desc: 'pending commit payload',
-      icon: icons.storage,
-      iconBg: '#eff6ff',
-      iconColor: '#2563eb',
-    },
-    {
-      title: 'ai classification',
-      count: `${readyCount} ready · ${classifyingCount} classifying`,
-      desc: 'gemini automatic categorization',
-      icon: icons.brain,
-      iconBg: '#f0fdf4',
-      iconColor: '#16a34a',
-    },
-    {
-      title: 'auto-commit window',
-      count: '24 hours',
-      desc: 'scheduled drive upload',
-      icon: icons.timer,
-      iconBg: '#fef3c7',
-      iconColor: '#d97706',
-    },
-  ]
 
   return (
     <div style={{
@@ -210,7 +163,7 @@ export function StagingView({ isModal = false, onClose }) {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        marginBottom: 20,
+        marginBottom: 16,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#6b7280' }}>
           <span
@@ -249,58 +202,6 @@ export function StagingView({ isModal = false, onClose }) {
             <Fa icon={icons.close} />
           </button>
         )}
-      </div>
-
-      {/* ── Metric Cards Grid (Untitled UI style) ── */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-        gap: 14,
-        marginBottom: 24,
-      }}>
-        {metricCards.map((mc, i) => (
-          <div
-            key={i}
-            style={{
-              background: '#ffffff',
-              border: '1px solid #e5e7eb',
-              borderRadius: 14,
-              padding: '16px 18px',
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'space-between',
-              boxShadow: '0 1px 2px rgba(0,0,0,0.02)',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <div style={{
-                width: 34,
-                height: 34,
-                borderRadius: 9,
-                background: mc.iconBg,
-                color: mc.iconColor,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: 13,
-              }}>
-                <Fa icon={mc.icon} />
-              </div>
-              <span style={{ color: '#9ca3af', fontSize: 13, fontWeight: 500 }}>+</span>
-            </div>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 500, color: '#6b7280', textTransform: 'lowercase', marginBottom: 3 }}>
-                {mc.title}
-              </div>
-              <div style={{ fontSize: 18, fontWeight: 700, color: '#111827', letterSpacing: '-0.02em', textTransform: 'lowercase' }}>
-                {mc.count}
-              </div>
-              <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 3 }}>
-                {mc.desc}
-              </div>
-            </div>
-          </div>
-        ))}
       </div>
 
       {/* ── Main Staged Files Table Container ── */}
@@ -552,7 +453,6 @@ export function StagingView({ isModal = false, onClose }) {
               <tbody>
                 {filteredFiles.map((f) => {
                   const isChecked = selectedIds.has(f.id)
-                  const isMenuOpen = openMenuId === f.id
                   const isClassifying = f.subject === 'classifying...'
 
                   return (
@@ -658,99 +558,34 @@ export function StagingView({ isModal = false, onClose }) {
                       </td>
 
                       {/* Actions */}
-                      <td style={{ padding: '14px 12px', textAlign: 'right', position: 'relative' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
-                          <button
-                            onClick={() => removeFromStaging(f.id)}
-                            title="Remove from staging"
-                            style={{
-                              background: '#ffffff',
-                              border: '1px solid #e5e7eb',
-                              borderRadius: 9999,
-                              padding: '2px 8px',
-                              fontSize: 11,
-                              color: '#6b7280',
-                              cursor: 'pointer',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              transition: 'all 0.15s',
-                            }}
-                            onMouseEnter={e => {
-                              e.currentTarget.style.borderColor = '#dc2626'
-                              e.currentTarget.style.color = '#dc2626'
-                            }}
-                            onMouseLeave={e => {
-                              e.currentTarget.style.borderColor = '#e5e7eb'
-                              e.currentTarget.style.color = '#6b7280'
-                            }}
-                          >
-                            <Fa icon={icons.close} style={{ fontSize: 9 }} />
-                          </button>
-
-                          <button
-                            className="staging-menu-trigger"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setOpenMenuId(isMenuOpen ? null : f.id)
-                            }}
-                            style={{
-                              background: 'none',
-                              border: 'none',
-                              cursor: 'pointer',
-                              color: '#9ca3af',
-                              padding: '6px 8px',
-                              fontSize: 13,
-                              borderRadius: 6,
-                            }}
-                          >
-                            <Fa icon="fa-ellipsis-v" />
-                          </button>
-                        </div>
-
-                        {/* Dropdown Menu */}
-                        {isMenuOpen && (
-                          <div
-                            className="staging-action-menu"
-                            style={{
-                              position: 'absolute',
-                              right: 12,
-                              top: 40,
-                              background: '#ffffff',
-                              border: '1px solid #e5e7eb',
-                              borderRadius: 12,
-                              padding: '6px',
-                              width: 190,
-                              boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05)',
-                              zIndex: 100,
-                              textAlign: 'left',
-                              animation: 'fadeIn 0.15s ease',
-                            }}
-                          >
-                            <button
-                              onClick={() => removeFromStaging(f.id)}
-                              style={{
-                                width: '100%',
-                                background: 'none',
-                                border: 'none',
-                                padding: '8px 12px',
-                                fontSize: 13,
-                                color: '#dc2626',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 10,
-                                cursor: 'pointer',
-                                borderRadius: 6,
-                                textTransform: 'lowercase',
-                              }}
-                              onMouseEnter={e => e.currentTarget.style.background = '#fef2f2'}
-                              onMouseLeave={e => e.currentTarget.style.background = 'none'}
-                            >
-                              <Fa icon={icons.delete} style={{ fontSize: 11, color: '#dc2626' }} />
-                              remove from staging
-                            </button>
-                          </div>
-                        )}
+                      <td style={{ padding: '14px 12px', textAlign: 'right' }}>
+                        <button
+                          onClick={() => removeFromStaging(f.id)}
+                          title="Remove from staging"
+                          style={{
+                            background: '#ffffff',
+                            border: '1px solid #e5e7eb',
+                            borderRadius: 9999,
+                            padding: '2px 8px',
+                            fontSize: 11,
+                            color: '#6b7280',
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            transition: 'all 0.15s',
+                          }}
+                          onMouseEnter={e => {
+                            e.currentTarget.style.borderColor = '#dc2626'
+                            e.currentTarget.style.color = '#dc2626'
+                          }}
+                          onMouseLeave={e => {
+                            e.currentTarget.style.borderColor = '#e5e7eb'
+                            e.currentTarget.style.color = '#6b7280'
+                          }}
+                        >
+                          <Fa icon={icons.close} style={{ fontSize: 9 }} />
+                        </button>
                       </td>
                     </tr>
                   )
