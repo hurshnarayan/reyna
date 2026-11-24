@@ -1446,10 +1446,14 @@ async function startBot() {
     if (connection === 'close') {
       const code = lastDisconnect?.error?.output?.statusCode;
       console.log(`  Disconnected (${code})`);
-      if ([401, 403, 405].includes(code)) {
+      if (code === DisconnectReason.loggedOut) {
+        console.log('  Permanent logout detected. Clearing auth_state and restarting for new QR scan.');
         fs.rmSync(AUTH_DIR, { recursive: true, force: true });
         setTimeout(startBot, 2000);
-      } else { setTimeout(startBot, 5000); }
+      } else {
+        console.log(`  Transient disconnect (${code}). Reconnecting in 5s with existing session...`);
+        setTimeout(startBot, 5000);
+      }
     }
   });
 
