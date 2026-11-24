@@ -4,6 +4,8 @@ import { api, getUser } from '../lib/api'
 import { useNavigate } from 'react-router-dom'
 import { notify } from '../components/Notifications'
 import { Fa, icons, fileIconClass, IconBox } from '../components/icons'
+import Modal from '../components/Modal'
+import { StagingView } from './Staging'
 
 function formatBytes(b) {
   if (!b || b <= 0) return '0 B'
@@ -175,6 +177,7 @@ export default function Dashboard() {
   const [createError, setCreateError] = useState('')
   const [groupSettings, setGroupSettings] = useState([])
   const [stagedFiles, setStagedFiles] = useState([])
+  const [showStagingModal, setShowStagingModal] = useState(false)
   const [committing, setCommitting] = useState(false)
   const [llmStatus, setLlmStatus] = useState(null)
   const user = getUser()
@@ -473,7 +476,31 @@ export default function Dashboard() {
               <Fa icon={icons.staging} style={{ fontSize: 15, color: 'var(--text-color, #111827)' }} /> staging area
             </h2>
             {stagedFiles.length > 0 && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {stagedFiles.length > 3 && (
+                  <button
+                    onClick={() => setShowStagingModal(true)}
+                    style={{
+                      background: '#ffffff',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: 9999,
+                      padding: '4px 12px',
+                      fontSize: 12,
+                      fontWeight: 500,
+                      color: '#111827',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      textTransform: 'lowercase',
+                      transition: 'all 0.15s',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.borderColor = '#9ca3af'}
+                    onMouseLeave={e => e.currentTarget.style.borderColor = '#e5e7eb'}
+                  >
+                    view all ({stagedFiles.length}) <span style={{ fontSize: 12, lineHeight: 1 }}>&rarr;</span>
+                  </button>
+                )}
                 <button
                   onClick={async () => {
                     for (const f of stagedFiles) await removeFromStaging(f.id)
@@ -559,7 +586,7 @@ export default function Dashboard() {
                 auto-commit in 24 hours. push now or remove files below.
               </div>
               <div style={{ display: 'flex', flexDirection: 'column' }}>
-                {stagedFiles.slice(0, 6).map((f, i) => (
+                {stagedFiles.slice(0, 3).map((f, i) => (
                   <div
                     key={f.id}
                     style={{
@@ -567,7 +594,7 @@ export default function Dashboard() {
                       alignItems: 'center',
                       gap: 12,
                       padding: '12px 0',
-                      borderBottom: i < Math.min(stagedFiles.length, 6) - 1 ? '1px solid #f3f4f6' : 'none',
+                      borderBottom: i < Math.min(stagedFiles.length, 3) - 1 ? '1px solid #f3f4f6' : 'none',
                     }}
                   >
                     <div style={{
@@ -594,9 +621,10 @@ export default function Dashboard() {
                           textOverflow: 'ellipsis',
                           whiteSpace: 'nowrap',
                           lineHeight: 1.3,
+                          textTransform: 'lowercase',
                         }}
                       >
-                        {shortenFilename(f.file_name)}
+                        {shortenFilename(f.file_name).toLowerCase()}
                       </div>
                       <div style={{ fontSize: 13, color: '#71717a', marginTop: 2, display: 'flex', alignItems: 'center', gap: 5 }}>
                         {f.subject === 'classifying...' ? (
@@ -604,7 +632,7 @@ export default function Dashboard() {
                             <Fa icon={icons.loading} spin style={{ fontSize: 10 }} /> classifying...
                           </span>
                         ) : (
-                          <span>{f.subject || 'General'}</span>
+                          <span style={{ textTransform: 'lowercase' }}>{(f.subject || 'general').toLowerCase()}</span>
                         )}
                         <span>·</span>
                         <span>{formatBytes(f.file_size)}</span>
@@ -644,10 +672,39 @@ export default function Dashboard() {
                     </button>
                   </div>
                 ))}
-                {stagedFiles.length > 6 && (
-                  <div style={{ fontSize: 13, color: '#6b7280', textAlign: 'center', padding: '10px 0 2px' }}>
-                    +{stagedFiles.length - 6} more
-                  </div>
+                {stagedFiles.length > 3 && (
+                  <button
+                    onClick={() => setShowStagingModal(true)}
+                    style={{
+                      background: '#f9fafb',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: 10,
+                      padding: '8px 14px',
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: '#374151',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6,
+                      marginTop: 8,
+                      width: '100%',
+                      fontFamily: 'inherit',
+                      textTransform: 'lowercase',
+                      transition: 'all 0.15s',
+                    }}
+                    onMouseEnter={e => {
+                      e.currentTarget.style.background = '#f3f4f6'
+                      e.currentTarget.style.borderColor = '#d1d5db'
+                    }}
+                    onMouseLeave={e => {
+                      e.currentTarget.style.background = '#f9fafb'
+                      e.currentTarget.style.borderColor = '#e5e7eb'
+                    }}
+                  >
+                    +{stagedFiles.length - 3} more files in staging · view all in staging <span style={{ fontSize: 13, lineHeight: 1 }}>&rarr;</span>
+                  </button>
                 )}
               </div>
             </div>
@@ -847,8 +904,8 @@ export default function Dashboard() {
             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderBottom: i < 7 ? '1px solid var(--card-border)' : 'none' }}>
               <IconBox icon={fileIconClass(f.mime_type, f.file_name)} color="var(--reyna-accent)" bg="var(--reyna-accent-dim)" size={34} iconSize={13} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-color)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.file_name}</div>
-                <div style={{ fontSize: 13, color: 'var(--sub-color)' }}>{f.subject || 'General'} · v{f.version} · by {f.shared_by_name || 'unknown'}</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-color)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textTransform: 'lowercase' }}>{(f.file_name || '').toLowerCase()}</div>
+                <div style={{ fontSize: 13, color: 'var(--sub-color)', textTransform: 'lowercase' }}>{(f.subject || 'general').toLowerCase()} · v{f.version} · by {(f.shared_by_name || 'unknown').toLowerCase()}</div>
               </div>
               <div style={{ fontSize: 13, color: 'var(--sub-color)', flexShrink: 0 }}>{timeAgo(f.created_at)}</div>
             </div>
@@ -967,6 +1024,33 @@ export default function Dashboard() {
           </div>
         </div>,
         document.body
+      )}
+      {/* ── Staging View Modal Popup ── */}
+      {showStagingModal && (
+        <Modal onClose={() => setShowStagingModal(false)}>
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: '#ffffff',
+              borderRadius: 20,
+              width: '95vw',
+              maxWidth: 1100,
+              maxHeight: '92vh',
+              overflowY: 'auto',
+              padding: '24px 28px',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+              position: 'relative',
+            }}
+          >
+            <StagingView
+              isModal={true}
+              onClose={() => {
+                setShowStagingModal(false)
+                refreshStaged()
+              }}
+            />
+          </div>
+        </Modal>
       )}
     </div>
   )
