@@ -78,3 +78,4 @@ logs/
 *.zip
 *.bak
 *.pptx
+web/public/qr.svg
