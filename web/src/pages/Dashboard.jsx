@@ -761,41 +761,23 @@ export default function Dashboard() {
 
                     {/* Top row: Name, active badge, toggle */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'relative', zIndex: 1 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                        <div style={{
-                          width: 24,
-                          height: 24,
-                          borderRadius: 6,
-                          background: enabled ? '#f4f4f5' : '#f3f4f6',
-                          border: '1px solid #e4e4e7',
-                          color: enabled ? '#000000' : '#9ca3af',
-                          display: 'flex',
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 15, fontWeight: 700, color: '#111827', letterSpacing: '-0.01em', textTransform: 'lowercase' }}>
+                          {(gs.group?.name || 'whatsapp group').toLowerCase()}
+                        </span>
+                        <span style={{
+                          fontSize: 11,
+                          fontWeight: 600,
+                          color: enabled ? '#15803d' : '#6b7280',
+                          background: enabled ? '#dcfce7' : '#f3f4f6',
+                          padding: '2px 8px',
+                          borderRadius: 9999,
+                          display: 'inline-flex',
                           alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: 12,
-                          flexShrink: 0,
-                          transition: 'all 0.2s',
+                          lineHeight: 1.2,
                         }}>
-                          <Fa icon={icons.snowflake} />
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <span style={{ fontSize: 15, fontWeight: 700, color: '#111827', letterSpacing: '-0.01em', textTransform: 'lowercase' }}>
-                            {(gs.group?.name || 'whatsapp group').toLowerCase()}
-                          </span>
-                          <span style={{
-                            fontSize: 11,
-                            fontWeight: 600,
-                            color: enabled ? '#15803d' : '#6b7280',
-                            background: enabled ? '#dcfce7' : '#f3f4f6',
-                            padding: '2px 8px',
-                            borderRadius: 9999,
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            lineHeight: 1.2,
-                          }}>
-                            {enabled ? 'active' : 'inactive'}
-                          </span>
-                        </div>
+                          {enabled ? 'active' : 'inactive'}
+                        </span>
                       </div>
                       <label style={{ position: 'relative', display: 'inline-block', width: 38, height: 22, cursor: 'pointer', flexShrink: 0 }}>
                         <input
@@ -885,7 +867,8 @@ export default function Dashboard() {
                         fontSize: 12,
                         color: '#4b5563',
                         marginTop: 11,
-                        lineHeight: 1.4,
+                        lineHeight: 1.45,
+                        maxWidth: 280,
                         position: 'relative',
                         zIndex: 1,
                       }}>

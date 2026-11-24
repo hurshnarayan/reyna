@@ -391,19 +391,19 @@ export default function Groups() {
                           style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}
                         >
                           <div style={{
-                            width: 34,
-                            height: 34,
+                            width: 36,
+                            height: 36,
                             borderRadius: 10,
-                            background: enabled ? '#f4f4f5' : '#f9fafb',
-                            border: `1px solid ${enabled ? '#e4e4e7' : '#e5e7eb'}`,
-                            color: enabled ? '#000000' : '#9ca3af',
+                            background: enabled ? '#f0fdf4' : '#f3f4f6',
+                            border: `1px solid ${enabled ? '#dcfce7' : '#e5e7eb'}`,
+                            color: enabled ? '#15803d' : '#6b7280',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
-                            fontSize: 15,
+                            fontSize: 13,
                             flexShrink: 0,
                           }}>
-                            <Fa icon={icons.snowflake} />
+                            <Fa icon={icons.groups} />
                           </div>
                           <div>
                             <div style={{
@@ -598,15 +598,14 @@ export default function Groups() {
                     width: 32,
                     height: 32,
                     borderRadius: 8,
-                    background: '#f4f4f5',
-                    border: '1px solid #e4e4e7',
-                    color: '#000000',
+                    background: '#f0fdf4',
+                    color: '#15803d',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     fontSize: 13,
                   }}>
-                    <Fa icon={icons.snowflake} />
+                    <Fa icon={icons.groups} />
                   </div>
                   <h2 style={{ fontSize: 19, fontWeight: 700, color: '#111827', margin: 0, textTransform: 'lowercase', letterSpacing: '-0.02em' }}>
                     configure bot — {(configGroup.group?.name || 'group').toLowerCase()}
