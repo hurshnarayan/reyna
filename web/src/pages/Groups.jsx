@@ -12,7 +12,6 @@ export default function Groups() {
   const [searchQuery, setSearchQuery] = useState('')
   const [activeTab, setActiveTab] = useState('all') // 'all' | 'active' | 'paused' | 'auto' | 'reaction'
   const [selectedGroupIds, setSelectedGroupIds] = useState(new Set())
-  const [openMenuGroupId, setOpenMenuGroupId] = useState(null)
 
   // Configure Modal State
   const [configGroup, setConfigGroup] = useState(null)
@@ -39,17 +38,6 @@ export default function Groups() {
     return () => clearInterval(interval)
   }, [])
 
-  // Close popup menu on outside click
-  useEffect(() => {
-    const handleOutsideClick = (e) => {
-      if (!e.target.closest('.group-menu-trigger') && !e.target.closest('.group-action-menu')) {
-        setOpenMenuGroupId(null)
-      }
-    }
-    window.addEventListener('click', handleOutsideClick)
-    return () => window.removeEventListener('click', handleOutsideClick)
-  }, [])
-
   const toggleGroupEnabled = async (groupId, enabled) => {
     setGroupSettings(prev => prev.map(g => g.group?.id === groupId ? { ...g, settings: { ...g.settings, enabled } } : g))
     await api.updateGroupSettings(groupId, { enabled })
@@ -68,7 +56,6 @@ export default function Groups() {
     setConfigMode(gs.settings?.tracking_mode || 'auto')
     setConfigEmoji(gs.settings?.reaction_emoji || '📌')
     setConfigHours(gs.settings?.auto_commit_hours || 24)
-    setOpenMenuGroupId(null)
   }
 
   const saveConfig = async () => {
@@ -102,7 +89,7 @@ export default function Groups() {
   }
 
   const removeGroup = async (groupId) => {
-    setOpenMenuGroupId(null)
+    if (!window.confirm('Remove this group from tracking?')) return
     try {
       await api.updateGroupSettings(groupId, { enabled: false, hidden: true })
       setGroupSettings(prev => prev.filter(g => g.group?.id !== groupId))
@@ -327,7 +314,6 @@ export default function Groups() {
                   const mode = gs.settings?.tracking_mode || 'auto'
                   const emoji = gs.settings?.reaction_emoji || '📌'
                   const isChecked = selectedGroupIds.has(gid)
-                  const isMenuOpen = openMenuGroupId === gid
 
                   return (
                     <tr
@@ -471,102 +457,64 @@ export default function Groups() {
                         </span>
                       </td>
 
-                      {/* Action Menu (⋮ Untitled UI style dropdown) */}
-                      <td style={{ padding: '14px 12px', textAlign: 'right', position: 'relative' }}>
-                        <button
-                          className="group-menu-trigger"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setOpenMenuGroupId(isMenuOpen ? null : gid)
-                          }}
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            cursor: 'pointer',
-                            color: '#9ca3af',
-                            padding: '6px 10px',
-                            fontSize: 14,
-                            borderRadius: 6,
-                            transition: 'color 0.15s',
-                          }}
-                        >
-                          <Fa icon="fa-ellipsis-v" />
-                        </button>
-
-                        {/* Dropdown Menu */}
-                        {isMenuOpen && (
-                          <div
-                            className="group-action-menu"
+                      {/* Direct Actions: configure bot & remove group */}
+                      <td style={{ padding: '14px 12px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <button
+                            onClick={() => openConfig(gs)}
+                            title="configure bot"
                             style={{
-                              position: 'absolute',
-                              right: 12,
-                              top: 40,
                               background: '#ffffff',
                               border: '1px solid #e5e7eb',
-                              borderRadius: 12,
-                              padding: '6px',
-                              width: 210,
-                              boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05)',
-                              zIndex: 100,
-                              textAlign: 'left',
-                              animation: 'fadeIn 0.15s ease',
+                              borderRadius: 9999,
+                              padding: '4px 8px',
+                              fontSize: 11,
+                              color: '#6b7280',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              transition: 'all 0.15s',
+                            }}
+                            onMouseEnter={e => {
+                              e.currentTarget.style.borderColor = '#111827'
+                              e.currentTarget.style.color = '#111827'
+                            }}
+                            onMouseLeave={e => {
+                              e.currentTarget.style.borderColor = '#e5e7eb'
+                              e.currentTarget.style.color = '#6b7280'
                             }}
                           >
-                            <button
-                              onClick={() => {
-                                setOpenMenuGroupId(null)
-                                openConfig(gs)
-                              }}
-                              style={{
-                                width: '100%',
-                                background: 'none',
-                                border: 'none',
-                                padding: '8px 12px',
-                                fontSize: 13,
-                                color: '#111827',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 10,
-                                cursor: 'pointer',
-                                borderRadius: 6,
-                                textTransform: 'lowercase',
-                              }}
-                              onMouseEnter={e => e.currentTarget.style.background = '#f9fafb'}
-                              onMouseLeave={e => e.currentTarget.style.background = 'none'}
-                            >
-                              <Fa icon={icons.settings} style={{ fontSize: 12, color: '#6b7280' }} />
-                              configure bot
-                            </button>
-
-                            <div style={{ height: 1, background: '#f3f4f6', margin: '4px 0' }} />
-
-                            <button
-                              onClick={() => {
-                                setOpenMenuGroupId(null)
-                                removeGroup(gid)
-                              }}
-                              style={{
-                                width: '100%',
-                                background: 'none',
-                                border: 'none',
-                                padding: '8px 12px',
-                                fontSize: 13,
-                                color: '#dc2626',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 10,
-                                cursor: 'pointer',
-                                borderRadius: 6,
-                                textTransform: 'lowercase',
-                              }}
-                              onMouseEnter={e => e.currentTarget.style.background = '#fef2f2'}
-                              onMouseLeave={e => e.currentTarget.style.background = 'none'}
-                            >
-                              <Fa icon={icons.delete} style={{ fontSize: 12, color: '#dc2626' }} />
-                              remove group
-                            </button>
-                          </div>
-                        )}
+                            <Fa icon={icons.settings} style={{ fontSize: 10 }} />
+                          </button>
+                          <button
+                            onClick={() => removeGroup(gid)}
+                            title="remove group"
+                            style={{
+                              background: '#ffffff',
+                              border: '1px solid #e5e7eb',
+                              borderRadius: 9999,
+                              padding: '4px 8px',
+                              fontSize: 11,
+                              color: '#6b7280',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              transition: 'all 0.15s',
+                            }}
+                            onMouseEnter={e => {
+                              e.currentTarget.style.borderColor = '#dc2626'
+                              e.currentTarget.style.color = '#dc2626'
+                            }}
+                            onMouseLeave={e => {
+                              e.currentTarget.style.borderColor = '#e5e7eb'
+                              e.currentTarget.style.color = '#6b7280'
+                            }}
+                          >
+                            <Fa icon={icons.close} style={{ fontSize: 10 }} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   )
