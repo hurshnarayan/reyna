@@ -142,6 +142,15 @@ button { font-family: var(--font); transition: border-color 0.15s, box-shadow 0.
 @keyframes reynaMusicPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 .reyna-music-dot { animation: reynaMusicPulse 1.5s ease infinite; }
 
+/* ── Staging waiting dots pulse ── */
+@keyframes stagingDotPulse {
+  0%, 100% { opacity: 0.4; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+.staging-dot-1 { animation: stagingDotPulse 1.8s ease-in-out infinite 0s; }
+.staging-dot-2 { animation: stagingDotPulse 1.8s ease-in-out infinite 0.3s; }
+.staging-dot-3 { animation: stagingDotPulse 1.8s ease-in-out infinite 0.6s; }
+
 /* ── Pill hover ── */
 .reyna-pill:hover { opacity: 0.85; }
 

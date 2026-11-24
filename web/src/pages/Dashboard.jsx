@@ -465,116 +465,251 @@ export default function Dashboard() {
       </div>
 
       {/* ── staging area + Group Management ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 12, marginBottom: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 16, marginBottom: 20 }}>
         {/* staging area */}
-        <div style={{ ...cardStyle, minWidth: 0, overflow: 'hidden' }}>
+        <div style={{ ...cardStyle, padding: '18px 22px', borderRadius: 16, minWidth: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-            <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-color)', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Fa icon={icons.staging} style={{ fontSize: 13 }} /> staging area
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-color, #111827)', display: 'flex', alignItems: 'center', gap: 10, margin: 0, letterSpacing: '-0.01em' }}>
+              <Fa icon={icons.staging} style={{ fontSize: 15, color: 'var(--text-color, #111827)' }} /> staging area
             </h2>
             {stagedFiles.length > 0 && (
               <div style={{ display: 'flex', gap: 6 }}>
                 <button onClick={async () => {
                   for (const f of stagedFiles) await removeFromStaging(f.id)
-                }} style={{ ...btnBase, fontSize: 11, color: 'var(--error-color)' }}>
+                }} style={{ ...btnBase, padding: '4px 10px', fontSize: 11, borderRadius: 20, color: 'var(--error-color)' }}>
                   <Fa icon={icons.close} style={{ fontSize: 8 }} /> clear all
                 </button>
-                <button onClick={commitAllStaged} disabled={committing} style={{ ...btnPrimary, fontSize: 11, opacity: committing ? 0.6 : 1 }}>
+                <button onClick={commitAllStaged} disabled={committing} style={{ ...btnPrimary, padding: '4px 12px', fontSize: 11, borderRadius: 20, opacity: committing ? 0.6 : 1 }}>
                   {committing ? <><Fa icon={icons.loading} spin style={{ fontSize: 9 }} /> pushing...</> : <>push all to drive <Fa icon={icons.arrowRight} style={{ fontSize: 9 }} /></>}
                 </button>
               </div>
             )}
           </div>
           {stagedFiles.length === 0 ? (
-            <p style={{ fontSize: 13, color: 'var(--sub-color)', textAlign: 'center', padding: 20 }}>no files staged. files appear here when shared in your groups.</p>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px 12px 18px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 14 }}>
+                <span className="staging-dot-1" style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', display: 'inline-block' }} />
+                <span className="staging-dot-2" style={{ width: 8, height: 8, borderRadius: '50%', background: '#6ee7b7', display: 'inline-block' }} />
+                <span className="staging-dot-3" style={{ width: 8, height: 8, borderRadius: '50%', background: '#a7f3d0', display: 'inline-block' }} />
+              </div>
+              <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-color, #111827)', marginBottom: 6, letterSpacing: '-0.01em' }}>
+                awaiting files
+              </div>
+              <div style={{ fontSize: 13, color: '#6b7280', textAlign: 'center' }}>
+                files once fetched will appear here..
+              </div>
+            </div>
           ) : (
-            <div>
-              <div style={{ fontSize: 13, color: 'var(--sub-color)', marginBottom: 8 }}>auto-commit in 24 hours. push now or remove files below.</div>
-              {stagedFiles.slice(0, 6).map((f, i) => (
-                <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderBottom: i < Math.min(stagedFiles.length, 6) - 1 ? '1px solid var(--card-border)' : 'none' }}>
-                  <IconBox icon={icons.staging} color="var(--main-color)" bg="rgba(37,211,102,0.08)" size={30} iconSize={12} />
-                  <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
-                    <div title={f.file_name} style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-color)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>{shortenFilename(f.file_name)}</div>
-                    <div style={{ fontSize: 13, color: 'var(--sub-color)' }}>
-                      {f.subject === 'classifying...' ? (
-                        <span style={{ color: '#d97706' }}><Fa icon={icons.loading} spin style={{ fontSize: 9, marginRight: 3 }} />classifying...</span>
-                      ) : (
-                        <span>{f.subject || 'General'}</span>
-                      )} · {formatBytes(f.file_size)}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+              <div style={{ fontSize: 12, color: 'var(--sub-color, #6b7280)', marginBottom: 8 }}>auto-commit in 24 hours. push now or remove files below.</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {stagedFiles.slice(0, 5).map((f, i) => (
+                  <div key={f.id} style={{
+                    display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px',
+                    background: 'var(--bg-color, #f9fafb)', borderRadius: 10, border: '1px solid var(--card-border, #e5e7eb)',
+                  }}>
+                    <IconBox icon={icons.staging} color="var(--reyna-accent, #10b981)" bg="rgba(16, 185, 129, 0.1)" size={28} iconSize={12} rounded={6} />
+                    <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+                      <div title={f.file_name} style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-color, #111827)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {shortenFilename(f.file_name)}
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--sub-color, #6b7280)' }}>
+                        {f.subject === 'classifying...' ? (
+                          <span style={{ color: '#d97706' }}><Fa icon={icons.loading} spin style={{ fontSize: 9, marginRight: 3 }} />classifying...</span>
+                        ) : (
+                          <span>{f.subject || 'General'}</span>
+                        )} · {formatBytes(f.file_size)}
+                      </div>
                     </div>
+                    <div style={{ fontSize: 11, color: 'var(--main-color, #10b981)', fontWeight: 500, flexShrink: 0 }}>
+                      {hoursUntilCommit(f.created_at)}
+                    </div>
+                    <button onClick={() => removeFromStaging(f.id)} title="Remove from staging" style={{ ...btnBase, padding: '3px 7px', fontSize: 10, borderRadius: 6 }}>
+                      <Fa icon={icons.close} style={{ fontSize: 8 }} />
+                    </button>
                   </div>
-                  <div style={{ fontSize: 10, color: 'var(--main-color)', fontWeight: 500, flexShrink: 0 }}>{hoursUntilCommit(f.created_at)}</div>
-                  <button onClick={() => removeFromStaging(f.id)} title="Remove from staging" style={{ ...btnBase, padding: '2px 6px', fontSize: 10 }}><Fa icon={icons.close} style={{ fontSize: 8 }} /></button>
-                </div>
-              ))}
-              {stagedFiles.length > 6 && <div style={{ fontSize: 13, color: 'var(--sub-color)', textAlign: 'center', padding: 6 }}>+{stagedFiles.length - 6} more</div>}
+                ))}
+                {stagedFiles.length > 5 && (
+                  <div style={{ fontSize: 12, color: 'var(--sub-color, #6b7280)', textAlign: 'center', padding: '4px 0' }}>
+                    +{stagedFiles.length - 5} more
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
 
         {/* Group Management */}
-        <div style={{ ...cardStyle, minWidth: 0 }}>
-          <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-color)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Fa icon={icons.groups} style={{ fontSize: 13 }} /> active groups
-          </h2>
-          <p style={{ fontSize: 13, color: 'var(--sub-color)', marginBottom: 14 }}>choose which groups reyna monitors and how files are tracked.</p>
+        <div style={{ ...cardStyle, padding: '18px 22px', borderRadius: 16, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-color, #111827)', display: 'flex', alignItems: 'center', gap: 10, margin: 0, letterSpacing: '-0.01em' }}>
+              <Fa icon={icons.groups} style={{ fontSize: 15, color: 'var(--text-color, #111827)' }} /> active groups
+            </h2>
+            <button
+              onClick={() => {}}
+              style={{
+                background: '#fff',
+                border: '1px solid #e5e7eb',
+                borderRadius: 9999,
+                padding: '4px 14px',
+                fontSize: 12,
+                fontWeight: 500,
+                color: '#111827',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                transition: 'all 0.15s',
+              }}
+              onMouseEnter={e => e.currentTarget.style.borderColor = '#9ca3af'}
+              onMouseLeave={e => e.currentTarget.style.borderColor = '#e5e7eb'}
+            >
+              view all groups <span style={{ fontSize: 12, lineHeight: 1 }}>&rarr;</span>
+            </button>
+          </div>
+          <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 14px 0', lineHeight: 1.4 }}>
+            choose which groups reyna monitors and how files are tracked.
+          </p>
           {groupSettings.length === 0 ? (
-            <p style={{ fontSize: 13, color: 'var(--sub-color)', textAlign: 'center', padding: 20 }}>no groups yet. send a message in a WhatsApp group where reyna is added.</p>
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+              <p style={{ fontSize: 13, color: '#6b7280', textAlign: 'center', margin: 0 }}>
+                no groups yet. send a message in a WhatsApp group where reyna is added.
+              </p>
+            </div>
           ) : (
-            <div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {groupSettings.map((gs, i) => {
                 const enabled = gs.settings?.enabled || false
                 const mode = gs.settings?.tracking_mode || 'auto'
                 return (
-                <div key={i} style={{ padding: '16px 18px', marginBottom: 8, background: 'var(--bg-color)', border: '1px solid var(--card-border)', borderRadius: 'var(--roundness)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
-                      <span style={{ fontSize: 15, fontWeight: 600, color: '#1a1a1a', lineHeight: 1 }}>{gs.group?.name || 'WhatsApp Group'}</span>
-                      <span style={{ fontSize: 10, fontWeight: 600, color: enabled ? '#1a1a1a' : '#aaa', marginLeft: 8, background: enabled ? 'rgba(0,0,0,0.06)' : '#f3f3f3', padding: '3px 8px', borderRadius: 4, lineHeight: 1, display: 'inline-flex', alignItems: 'center' }}>{enabled ? 'active' : 'inactive'}</span>
-                    </div>
-                    <label style={{ position: 'relative', display: 'inline-block', width: 36, height: 20, cursor: 'pointer', flexShrink: 0 }}>
-                      <input type="checkbox" checked={enabled} onChange={e => toggleGroupEnabled(gs.group?.id, e.target.checked)} style={{ opacity: 0, width: 0, height: 0, position: 'absolute' }} />
-                      <span style={{
-                        position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 10,
-                        background: enabled ? '#1a1a1a' : 'var(--sub-color)', transition: 'background 0.2s',
-                      }}>
+                  <div key={i} style={{
+                    position: 'relative',
+                    overflow: 'hidden',
+                    padding: '16px 20px',
+                    background: '#f0fdf4',
+                    border: '1px solid #dcfce7',
+                    borderRadius: 14,
+                  }}>
+                    {/* Subtle bottom-left polygon accent from screenshot */}
+                    <div style={{
+                      position: 'absolute',
+                      bottom: 0,
+                      left: 0,
+                      width: 140,
+                      height: 80,
+                      background: 'linear-gradient(135deg, rgba(209, 250, 229, 0.65) 0%, rgba(240, 253, 244, 0) 70%)',
+                      pointerEvents: 'none',
+                      clipPath: 'polygon(0 100%, 0 0, 100% 100%)',
+                    }} />
+
+                    {/* Top row: Name, active badge, toggle */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'relative', zIndex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 15, fontWeight: 700, color: '#111827', letterSpacing: '-0.01em' }}>
+                          {gs.group?.name || 'WhatsApp Group'}
+                        </span>
                         <span style={{
-                          position: 'absolute', width: 16, height: 16, borderRadius: '50%', background: '#fff', top: 2,
-                          left: enabled ? 18 : 2, transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
-                        }} />
-                      </span>
-                    </label>
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, opacity: enabled ? 1 : 0.4, pointerEvents: enabled ? 'auto' : 'none' }}>
-                    {[{ value: 'auto', label: 'track all files', icon: icons.trackAll }, { value: 'reaction', label: 'reactions only', icon: icons.trackReact }].map((opt) => (
-                      <button key={opt.value} onClick={() => setTrackingMode(gs.group?.id, opt.value)}
-                        className="reyna-pill"
-                        style={{
-                          padding: '6px 14px', fontSize: 12, fontWeight: 500, cursor: 'pointer',
-                          borderRadius: 20, display: 'inline-flex', alignItems: 'center', gap: 5,
-                          border: mode === opt.value ? '1px solid #1a1a1a' : '1px solid var(--card-border)',
-                          background: mode === opt.value ? '#1a1a1a' : '#fff',
-                          color: mode === opt.value ? '#fff' : '#888',
-                          transition: 'all 0.15s', fontFamily: 'inherit',
-                        }}><Fa icon={opt.icon} style={{ fontSize: 9 }} /> {opt.label}</button>
-                    ))}
-                  </div>
-                  {enabled && (
-                    <div style={{ fontSize: 12, color: '#aaa', marginTop: 10, lineHeight: 1.5 }}>
-                      {mode === 'auto'
-                        ? 'every document shared in this group is automatically staged and synced.'
-                        : 'only files that get a pin reaction are staged. everything else is ignored.'}
+                          fontSize: 11,
+                          fontWeight: 600,
+                          color: enabled ? '#15803d' : '#6b7280',
+                          background: enabled ? '#dcfce7' : '#f3f4f6',
+                          padding: '2px 8px',
+                          borderRadius: 9999,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          lineHeight: 1.2,
+                        }}>
+                          {enabled ? 'active' : 'inactive'}
+                        </span>
+                      </div>
+                      <label style={{ position: 'relative', display: 'inline-block', width: 38, height: 22, cursor: 'pointer', flexShrink: 0 }}>
+                        <input
+                          type="checkbox"
+                          checked={enabled}
+                          onChange={e => toggleGroupEnabled(gs.group?.id, e.target.checked)}
+                          style={{ opacity: 0, width: 0, height: 0, position: 'absolute' }}
+                        />
+                        <span style={{
+                          position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 9999,
+                          background: enabled ? '#064e3b' : '#d1d5db',
+                          transition: 'background 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                        }}>
+                          <span style={{
+                            position: 'absolute', width: 18, height: 18, borderRadius: '50%', background: '#fff', top: 2,
+                            left: enabled ? 18 : 2, transition: 'left 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                            boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                          }} />
+                        </span>
+                      </label>
                     </div>
-                  )}
-                  <button onClick={async () => {
-                    await api.updateGroupSettings(gs.group?.id, { enabled: false, hidden: true })
-                    setGroupSettings(prev => prev.filter(g => g.group?.id !== gs.group?.id))
-                    notify.success('Group removed. Use /reyna init in WhatsApp to add it back.')
-                  }} style={{ ...btnBase, fontSize: 10, color: '#aaa', marginTop: 10, padding: '4px 10px' }}>
-                    <Fa icon={icons.close} style={{ fontSize: 8 }} /> remove group
-                  </button>
-                </div>
-              )})}
+
+                    {/* Mode pills */}
+                    <div style={{
+                      display: 'flex',
+                      gap: 8,
+                      marginTop: 13,
+                      opacity: enabled ? 1 : 0.45,
+                      pointerEvents: enabled ? 'auto' : 'none',
+                      position: 'relative',
+                      zIndex: 1,
+                    }}>
+                      {[
+                        { value: 'auto', label: 'track all files', icon: icons.trackAll },
+                        { value: 'reaction', label: 'reactions only', icon: icons.trackReact },
+                      ].map((opt) => {
+                        const isSelected = mode === opt.value
+                        return (
+                          <button
+                            key={opt.value}
+                            onClick={() => setTrackingMode(gs.group?.id, opt.value)}
+                            style={{
+                              padding: '6px 14px',
+                              fontSize: 12,
+                              fontWeight: 500,
+                              cursor: 'pointer',
+                              borderRadius: 9999,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 6,
+                              border: isSelected ? '1px solid #0d3824' : '1px solid #bbf7d0',
+                              background: isSelected ? '#0d3824' : '#ffffff',
+                              color: isSelected ? '#ffffff' : '#064e3b',
+                              transition: 'all 0.15s ease',
+                              fontFamily: 'inherit',
+                              boxShadow: isSelected ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+                            }}
+                          >
+                            <Fa
+                              icon={opt.icon}
+                              style={{
+                                fontSize: 11,
+                                color: isSelected ? '#ffffff' : '#064e3b',
+                              }}
+                            />
+                            {opt.label}
+                          </button>
+                        )
+                      })}
+                    </div>
+
+                    {/* Caption */}
+                    {enabled && (
+                      <div style={{
+                        fontSize: 12,
+                        color: '#4b5563',
+                        marginTop: 11,
+                        lineHeight: 1.4,
+                        position: 'relative',
+                        zIndex: 1,
+                      }}>
+                        {mode === 'auto'
+                          ? 'every document shared in this group is automatically staged and synced.'
+                          : 'only files that get a pin reaction are staged. everything else is ignored.'}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>
