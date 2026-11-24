@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The supplied square artwork already carries its own whitespace. Filling the
+  adaptive foreground canvas keeps the cat inside Android's 66dp safe zone;
+  the launcher applies the user's circle, squircle, or other system mask.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:gravity="fill">
+        <bitmap
+            android:src="@drawable/reyna_app_logo"
+            android:gravity="fill"
+            android:filter="true" />
+    </item>
+</layer-list>
