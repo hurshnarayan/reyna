@@ -9,6 +9,7 @@ import Files from './pages/Files'
 import Groups from './pages/Groups'
 import Staging from './pages/Staging'
 import Search from './pages/Search'
+import SpotlightPage from './pages/SpotlightPage'
 // import BotDemo from './pages/BotDemo'  // Removed — bot demo disabled
 import NotFound from './pages/NotFound'
 import Layout from './components/Layout'
@@ -117,6 +118,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
           <Route path="/groups" element={<Groups />} />
           <Route path="/staging" element={<Staging />} />
           <Route path="/search" element={<Search />} />
+          <Route path="/spotlight" element={<SpotlightPage />} />
           {/* <Route path="/bot" element={<BotDemo />} /> */}
         </Route>
         <Route path="*" element={<NotFound />} />

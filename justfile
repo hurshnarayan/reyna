@@ -59,6 +59,10 @@ frontend:
 bot:
     cd whatsapp-bot && node bot.js
 
+# Instant fuzzy document retrieval via fzf (Raycast-style)
+find *args:
+    ./scripts/reyna-find {{args}}
+
 # Wipe SQLite database and start fresh backend
 fresh:
     rm -f reyna.db reyna.db-shm reyna.db-wal
