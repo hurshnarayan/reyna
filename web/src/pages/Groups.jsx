@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { notify } from '../components/Notifications'
@@ -12,6 +13,7 @@ export default function Groups() {
   const [searchQuery, setSearchQuery] = useState('')
   const [activeTab, setActiveTab] = useState('all') // 'all' | 'active' | 'paused' | 'auto' | 'reaction'
   const [selectedGroupIds, setSelectedGroupIds] = useState(new Set())
+  const [openMenu, setOpenMenu] = useState(null) // { gid, gs, top, right, bottom }
 
   // Configure Modal State
   const [configGroup, setConfigGroup] = useState(null)
@@ -37,6 +39,44 @@ export default function Groups() {
     const interval = setInterval(fetchGroups, 6000)
     return () => clearInterval(interval)
   }, [])
+
+  // Close context menu on outside click or scroll
+  useEffect(() => {
+    if (!openMenu) return
+    const handleClose = (e) => {
+      if (!e.target.closest('.group-action-menu') && !e.target.closest('.group-menu-trigger')) {
+        setOpenMenu(null)
+      }
+    }
+    const handleScroll = () => setOpenMenu(null)
+    window.addEventListener('click', handleClose)
+    window.addEventListener('scroll', handleScroll, true)
+    window.addEventListener('resize', handleScroll)
+    return () => {
+      window.removeEventListener('click', handleClose)
+      window.removeEventListener('scroll', handleScroll, true)
+      window.removeEventListener('resize', handleScroll)
+    }
+  }, [openMenu])
+
+  const toggleMenu = (e, gs) => {
+    e.stopPropagation()
+    const gid = gs.group?.id
+    if (openMenu?.gid === gid) {
+      setOpenMenu(null)
+      return
+    }
+    const rect = e.currentTarget.getBoundingClientRect()
+    const spaceBelow = window.innerHeight - rect.bottom
+    const openUp = spaceBelow < 120
+    setOpenMenu({
+      gid,
+      gs,
+      top: openUp ? undefined : rect.bottom + 4,
+      bottom: openUp ? window.innerHeight - rect.top + 4 : undefined,
+      right: window.innerWidth - rect.right,
+    })
+  }
 
   const toggleGroupEnabled = async (groupId, enabled) => {
     setGroupSettings(prev => prev.map(g => g.group?.id === groupId ? { ...g, settings: { ...g.settings, enabled } } : g))
@@ -457,64 +497,34 @@ export default function Groups() {
                         </span>
                       </td>
 
-                      {/* Direct Actions: configure bot & remove group */}
-                      <td style={{ padding: '14px 12px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                          <button
-                            onClick={() => openConfig(gs)}
-                            title="configure bot"
-                            style={{
-                              background: '#ffffff',
-                              border: '1px solid #e5e7eb',
-                              borderRadius: 9999,
-                              padding: '4px 8px',
-                              fontSize: 11,
-                              color: '#6b7280',
-                              cursor: 'pointer',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              transition: 'all 0.15s',
-                            }}
-                            onMouseEnter={e => {
-                              e.currentTarget.style.borderColor = '#111827'
-                              e.currentTarget.style.color = '#111827'
-                            }}
-                            onMouseLeave={e => {
-                              e.currentTarget.style.borderColor = '#e5e7eb'
-                              e.currentTarget.style.color = '#6b7280'
-                            }}
-                          >
-                            <Fa icon={icons.settings} style={{ fontSize: 10 }} />
-                          </button>
-                          <button
-                            onClick={() => removeGroup(gid)}
-                            title="remove group"
-                            style={{
-                              background: '#ffffff',
-                              border: '1px solid #e5e7eb',
-                              borderRadius: 9999,
-                              padding: '4px 8px',
-                              fontSize: 11,
-                              color: '#6b7280',
-                              cursor: 'pointer',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              transition: 'all 0.15s',
-                            }}
-                            onMouseEnter={e => {
-                              e.currentTarget.style.borderColor = '#dc2626'
-                              e.currentTarget.style.color = '#dc2626'
-                            }}
-                            onMouseLeave={e => {
-                              e.currentTarget.style.borderColor = '#e5e7eb'
-                              e.currentTarget.style.color = '#6b7280'
-                            }}
-                          >
-                            <Fa icon={icons.close} style={{ fontSize: 10 }} />
-                          </button>
-                        </div>
+                      {/* Action Menu (⋮ Untitled UI style trigger) */}
+                      <td style={{ padding: '14px 12px', textAlign: 'right' }}>
+                        <button
+                          className="group-menu-trigger"
+                          onClick={(e) => toggleMenu(e, gs)}
+                          style={{
+                            background: openMenu?.gid === gid ? '#f3f4f6' : 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            color: openMenu?.gid === gid ? '#111827' : '#9ca3af',
+                            padding: '6px 10px',
+                            fontSize: 14,
+                            borderRadius: 6,
+                            transition: 'all 0.15s',
+                          }}
+                          onMouseEnter={e => {
+                            e.currentTarget.style.background = '#f3f4f6'
+                            e.currentTarget.style.color = '#111827'
+                          }}
+                          onMouseLeave={e => {
+                            if (openMenu?.gid !== gid) {
+                              e.currentTarget.style.background = 'none'
+                              e.currentTarget.style.color = '#9ca3af'
+                            }
+                          }}
+                        >
+                          <Fa icon="fa-ellipsis-v" />
+                        </button>
                       </td>
                     </tr>
                   )
@@ -838,6 +848,85 @@ export default function Groups() {
             </div>
           </div>
         </Modal>
+      )}
+      {/* ── Context Menu (Rendered in Portal to prevent any container clipping) ── */}
+      {openMenu && createPortal(
+        <div
+          className="group-action-menu"
+          onClick={e => e.stopPropagation()}
+          style={{
+            position: 'fixed',
+            top: openMenu.top,
+            bottom: openMenu.bottom,
+            right: openMenu.right,
+            background: '#ffffff',
+            border: '1px solid #e5e7eb',
+            borderRadius: 12,
+            padding: '6px',
+            width: 200,
+            boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.08)',
+            zIndex: 999999,
+            textAlign: 'left',
+            animation: 'fadeIn 0.12s ease',
+          }}
+        >
+          <button
+            onClick={() => {
+              const gs = openMenu.gs
+              setOpenMenu(null)
+              openConfig(gs)
+            }}
+            style={{
+              width: '100%',
+              background: 'none',
+              border: 'none',
+              padding: '8px 12px',
+              fontSize: 13,
+              color: '#111827',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              cursor: 'pointer',
+              borderRadius: 8,
+              textTransform: 'lowercase',
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = '#f9fafb'}
+            onMouseLeave={e => e.currentTarget.style.background = 'none'}
+          >
+            <Fa icon={icons.settings} style={{ fontSize: 12, color: '#6b7280' }} />
+            configure bot
+          </button>
+
+          <div style={{ height: 1, background: '#f3f4f6', margin: '4px 0' }} />
+
+          <button
+            onClick={() => {
+              const gid = openMenu.gid
+              setOpenMenu(null)
+              removeGroup(gid)
+            }}
+            style={{
+              width: '100%',
+              background: 'none',
+              border: 'none',
+              padding: '8px 12px',
+              fontSize: 13,
+              color: '#dc2626',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              cursor: 'pointer',
+              borderRadius: 8,
+              textTransform: 'lowercase',
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = '#fef2f2'}
+            onMouseLeave={e => e.currentTarget.style.background = 'none'}
+          >
+            <Fa icon={icons.delete} style={{ fontSize: 12, color: '#dc2626' }} />
+            remove group
+          </button>
+        </div>,
+        document.body
       )}
     </div>
   )
