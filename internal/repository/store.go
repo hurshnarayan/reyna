@@ -2,13 +2,19 @@ package repository
 
 import (
 	"database/sql"
+	"encoding/binary"
 	"fmt"
 	"log"
+	"math"
+	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/hurshnarayan/reyna/internal/model"
+	"github.com/hurshnarayan/reyna/internal/relevance"
 )
 
 type Store struct {
@@ -136,6 +142,11 @@ func (s *Store) migrate() error {
 		// rows with empty content_hash so historical rows aren't affected.
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_files_hash_unique ON files(group_id, content_hash) WHERE content_hash != ''`,
 		`ALTER TABLE group_settings ADD COLUMN hidden INTEGER DEFAULT 0`,
+		`CREATE TABLE IF NOT EXISTS file_embeddings (
+			file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+			embedding BLOB NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
 	}
 	for _, m := range migrations {
 		s.db.Exec(m) // ignore errors if columns already exist
@@ -144,8 +155,92 @@ func (s *Store) migrate() error {
 	if err := s.migrateAttribution(); err != nil {
 		return err
 	}
+	if err := s.releaseFalselyUnreadable(); err != nil {
+		return err
+	}
+	if err := s.unnameTheDevice(); err != nil {
+		return err
+	}
 
 	return nil
+}
+
+// unnameTheDevice strips the attributions that named the phone as a person.
+//
+// Everything captured on-device uploads under the identity "device", a user
+// record was upserted for it, and the sender lookup found a name that was not
+// a phone number and concluded it was human. Those rows were then stamped
+// AttrBaileys at confidence 1.0, which claims the sender was stated by the
+// WhatsApp protocol as a fact. Answers duly said "(by device)".
+//
+// The confidence threshold exists precisely so a file whose sender is unknown
+// says so. These rows asserted the opposite with full certainty, so they are
+// reset to unattributed: no name, no method, no confidence. Nothing is lost
+// that was ever real, and the repair screen can still ask the user who shared
+// something.
+func (s *Store) unnameTheDevice() error {
+	res, err := s.db.Exec(`
+		UPDATE files
+		   SET shared_by_name = '',
+		       attribution_method = ?,
+		       attribution_confidence = 0
+		 WHERE LOWER(TRIM(COALESCE(shared_by_name,''))) = 'device'`,
+		model.AttrNone)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("[MIGRATE] cleared %d attribution(s) that named the device as the sender", n)
+	}
+	// The user record itself, so the lookup cannot recreate the name.
+	_, err = s.db.Exec(`UPDATE users SET name='' WHERE LOWER(TRIM(COALESCE(name,''))) = 'device'`)
+	return err
+}
+
+// releaseFalselyUnreadable gives back the files that a failed reading retired.
+//
+// UnreadableSentinel is permanent on purpose, so a document that genuinely
+// holds no text stops costing a model call on every question. Until now it was
+// also written whenever the reading itself failed, and on a free allowance of
+// twenty calls a day the commonest failure by far is the allowance running
+// out. Those files were retired for good without ever having been opened.
+//
+// The mark cannot be told apart after the fact, so every retired file of a
+// type that could yield text is offered one more chance. A file that really
+// has nothing in it is read once more and marked again, which costs a single
+// call; a file that was only unlucky comes back. Formats read locally by
+// internal/docs cost nothing at all to retry.
+//
+// This runs once. A marker row records that it has, so restarting the server
+// does not put the genuinely empty files back into the queue every time.
+func (s *Store) releaseFalselyUnreadable() error {
+	s.db.Exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`)
+
+	var done string
+	s.db.QueryRow(`SELECT value FROM meta WHERE key='released_false_unreadable'`).Scan(&done)
+	if done != "" {
+		return nil
+	}
+
+	res, err := s.db.Exec(`
+		UPDATE files SET extracted_content='', content_summary=''
+		WHERE extracted_content = ?
+		  AND (
+		    LOWER(file_name) LIKE '%.pdf'  OR LOWER(file_name) LIKE '%.doc'  OR LOWER(file_name) LIKE '%.docx' OR
+		    LOWER(file_name) LIKE '%.ppt'  OR LOWER(file_name) LIKE '%.pptx' OR LOWER(file_name) LIKE '%.odp'  OR
+		    LOWER(file_name) LIKE '%.xls'  OR LOWER(file_name) LIKE '%.xlsx' OR LOWER(file_name) LIKE '%.ods'  OR
+		    LOWER(file_name) LIKE '%.odt'  OR LOWER(file_name) LIKE '%.rtf'  OR LOWER(file_name) LIKE '%.csv'  OR
+		    LOWER(file_name) LIKE '%.txt'  OR LOWER(file_name) LIKE '%.md'   OR LOWER(file_name) LIKE '%.epub'
+		  )`, UnreadableSentinel)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n > 0 {
+		log.Printf("[MIGRATE] released %d file(s) wrongly marked unreadable", n)
+	}
+	_, err = s.db.Exec(`INSERT OR REPLACE INTO meta (key, value) VALUES ('released_false_unreadable','1')`)
+	return err
 }
 
 // migrateAttribution adds the schema that lets a file's sender and share time
@@ -331,6 +426,16 @@ func (s *Store) GetUserByID(id int64) (*model.User, error) {
 		return nil, err
 	}
 	return u, nil
+}
+
+// GetPrimaryUserName returns the primary configured user's name if available.
+func (s *Store) GetPrimaryUserName() string {
+	var name string
+	err := s.db.QueryRow(`SELECT name FROM users WHERE name != '' AND name != 'You' ORDER BY id DESC LIMIT 1`).Scan(&name)
+	if err == nil {
+		return strings.TrimSpace(name)
+	}
+	return ""
 }
 
 func (s *Store) UpdateUserGoogle(userID int64, email, token, refresh, rootID string) error {
@@ -532,10 +637,10 @@ func (s *Store) AddFile(f *model.File) (*model.File, error) {
 	return f, nil
 }
 
-// CommitFiles marks staged files as committed in a group (excluding any still being classified)
+// CommitFiles marks staged files as committed in a group
 func (s *Store) CommitFiles(groupID int64) (int64, error) {
 	res, err := s.db.Exec(
-		`UPDATE files SET status='committed' WHERE group_id=? AND status='staged' AND subject != 'classifying...'`,
+		`UPDATE files SET status='committed' WHERE group_id=? AND status='staged'`,
 		groupID,
 	)
 	if err != nil {
@@ -547,7 +652,7 @@ func (s *Store) CommitFiles(groupID int64) (int64, error) {
 // CommitFileByName marks a specific staged file as committed
 func (s *Store) CommitFileByName(groupID int64, fileName string) error {
 	_, err := s.db.Exec(
-		`UPDATE files SET status='committed' WHERE group_id=? AND file_name LIKE ? AND status='staged' AND subject != 'classifying...'`,
+		`UPDATE files SET status='committed' WHERE group_id=? AND file_name LIKE ? AND status='staged'`,
 		groupID, "%"+fileName+"%",
 	)
 	return err
@@ -1417,6 +1522,14 @@ func (s *Store) FindDriveConnectedUser(groupID int64) *model.User {
 
 // ── Content Extraction ──
 
+// UnreadableSentinel marks a file whose bytes could not be turned into text.
+//
+// Stored rather than left empty so the file stops being offered for reading on
+// every pass. An empty extracted_content means "not read yet"; this means
+// "tried, and there is nothing here".
+const UnreadableSentinel = "[unreadable]"
+
+
 // UpdateFileContent stores extracted content and summary for a file
 func (s *Store) UpdateFileContent(fileID int64, content, summary string) error {
 	_, err := s.db.Exec(
@@ -1437,6 +1550,28 @@ func (s *Store) GetFileContent(fileID int64) (string, string) {
 
 // SearchFilesNLP searches files by sender, content, filename, subject, and time window
 func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *time.Time, limit int) ([]model.File, error) {
+	ranked, err := s.SearchFilesNLPScored(groupIDs, who, what, sinceTime, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.File, 0, len(ranked))
+	for _, r := range ranked {
+		out = append(out, r.File)
+	}
+	return out, nil
+}
+
+// SearchFilesNLPScored is SearchFilesNLP with the ranking kept.
+//
+// The scores travel with the files because the caller has to decide whether
+// one match was clear enough to answer from, or whether two were close enough
+// that the honest move is to ask which was meant.
+func (s *Store) SearchFilesNLPScored(groupIDs []int64, who, what string, sinceTime *time.Time, limit int) ([]ScoredFile, error) {
+	return s.SearchFilesNLPScoredWithPrimary(groupIDs, who, what, what, sinceTime, limit)
+}
+
+// SearchFilesNLPScoredWithPrimary is SearchFilesNLPScored with explicit primary query term prioritization.
+func (s *Store) SearchFilesNLPScoredWithPrimary(groupIDs []int64, who, searchWhat, primaryWhat string, sinceTime *time.Time, limit int) ([]ScoredFile, error) {
 	if len(groupIDs) == 0 {
 		return nil, nil
 	}
@@ -1473,7 +1608,13 @@ func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *ti
 	whoRankExpr := "0"
 	var whoRankArgs []interface{}
 	if who != "" {
-		whoLower := strings.ToLower(strings.TrimSpace(who))
+		whoClean := strings.Map(func(r rune) rune {
+			if unicode.IsPunct(r) {
+				return ' '
+			}
+			return r
+		}, who)
+		whoLower := strings.ToLower(strings.TrimSpace(whoClean))
 		// First name token (handles "Mohit Singh" → match on "mohit")
 		first := whoLower
 		if fields := strings.Fields(whoLower); len(fields) > 0 {
@@ -1515,18 +1656,51 @@ func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *ti
 		whoRankArgs = whoMatchArgs
 	}
 
-	// WHAT filter — tokenized OR-match with rank-by-hits.
-	tokens := TokenizeWhat(what)
+	// WHAT filter — tokenized OR-match with weighted rank-by-hits.
+	tokens := TokenizeWhat(searchWhat)
 	rankExpr := "0"
-	if what != "" && len(tokens) > 0 {
+	var rankArgs []interface{}
+	if searchWhat != "" && len(tokens) > 0 {
+		cleanPhrase := strings.TrimSpace(strings.ToLower(searchWhat))
 		var orParts []string
 		var rankParts []string
-		for _, tok := range tokens {
-			orParts = append(orParts, "(LOWER(f.file_name) LIKE ? OR LOWER(f.subject) LIKE ? OR LOWER(f.tags) LIKE ? OR LOWER(f.extracted_content) LIKE ? OR LOWER(f.content_summary) LIKE ?)")
-			rankParts = append(rankParts, "(CASE WHEN LOWER(f.file_name) LIKE ? OR LOWER(f.subject) LIKE ? OR LOWER(f.tags) LIKE ? OR LOWER(f.extracted_content) LIKE ? OR LOWER(f.content_summary) LIKE ? THEN 1 ELSE 0 END)")
-			like := "%" + tok + "%"
-			args = append(args, like, like, like, like, like)
+
+		// 1. Exact phrase match boost in filename, summary, or subject (e.g. "c programming", "reyna script")
+		if strings.Contains(cleanPhrase, " ") {
+			phraseLike := "%" + cleanPhrase + "%"
+			orParts = append(orParts, "LOWER(f.file_name) LIKE ?", "LOWER(f.content_summary) LIKE ?", "LOWER(f.subject) LIKE ?")
+			args = append(args, phraseLike, phraseLike, phraseLike)
+			rankParts = append(rankParts, "(CASE WHEN LOWER(f.file_name) LIKE ? THEN 60 WHEN LOWER(f.content_summary) LIKE ? THEN 50 WHEN LOWER(f.subject) LIKE ? THEN 40 ELSE 0 END)")
+			rankArgs = append(rankArgs, phraseLike, phraseLike, phraseLike)
 		}
+
+		// 2. Individual token matches with heavy weighting on filename, summary, and subject
+		for _, tok := range tokens {
+			like := "%" + tok + "%"
+			if len(tok) <= 2 {
+				// Short token / acronym (e.g. "c", "os", "ai", "db"): match only filename, subject, tags
+				orParts = append(orParts, "(LOWER(f.file_name) LIKE ? OR LOWER(f.subject) LIKE ? OR LOWER(f.tags) LIKE ?)")
+				args = append(args, like, like, like)
+				rankParts = append(rankParts, "(CASE WHEN LOWER(f.file_name) LIKE ? THEN 25 WHEN LOWER(f.subject) LIKE ? THEN 15 ELSE 0 END)")
+				rankArgs = append(rankArgs, like, like)
+			} else {
+				orParts = append(orParts, "(LOWER(f.file_name) LIKE ? OR LOWER(f.subject) LIKE ? OR LOWER(f.tags) LIKE ? OR LOWER(f.content_summary) LIKE ? OR LOWER(f.extracted_content) LIKE ?)")
+				args = append(args, like, like, like, like, like)
+				rankParts = append(rankParts, "(CASE WHEN LOWER(f.file_name) LIKE ? THEN 25 WHEN LOWER(f.content_summary) LIKE ? THEN 20 WHEN LOWER(f.subject) LIKE ? THEN 15 WHEN LOWER(f.extracted_content) LIKE ? THEN 4 ELSE 0 END)")
+				rankArgs = append(rankArgs, like, like, like, like)
+			}
+		}
+
+		// 3. Multi-token AND boost in filename (when all tokens appear together in filename)
+		if len(tokens) >= 2 {
+			var andParts []string
+			for _, tok := range tokens {
+				andParts = append(andParts, "LOWER(f.file_name) LIKE ?")
+				rankArgs = append(rankArgs, "%"+tok+"%")
+			}
+			rankParts = append(rankParts, "(CASE WHEN ("+strings.Join(andParts, " AND ")+") THEN 40 ELSE 0 END)")
+		}
+
 		conditions = append(conditions, "("+strings.Join(orParts, " OR ")+")")
 		rankExpr = strings.Join(rankParts, " + ")
 	}
@@ -1543,12 +1717,22 @@ func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *ti
 	// in the statement: WHO rank first, then content rank.
 	args = append(args, whoRankArgs...)
 	if rankExpr != "0" {
-		for _, tok := range tokens {
-			like := "%" + tok + "%"
-			args = append(args, like, like, like, like, like)
-		}
+		args = append(args, rankArgs...)
 	}
-	args = append(args, interface{}(limit))
+	// Over-fetch, because the real filter runs after this in Go.
+	//
+	// The SQL rank cannot tell "module 1" from "Module4_part1", so cutting at
+	// `limit` here throws away the file the person asked for before anything
+	// has looked at it properly. Fetch a wide band and let rankByRelevance
+	// choose, bounded so a two word question cannot pull the whole library.
+	fetchLimit := limit * 12
+	if fetchLimit > 400 {
+		fetchLimit = 400
+	}
+	if fetchLimit < limit {
+		fetchLimit = limit
+	}
+	args = append(args, interface{}(fetchLimit))
 
 	// SQLite parses bare numeric expressions in ORDER BY as column ordinals, so
 	// `ORDER BY (0) DESC` fails with "1st ORDER BY term out of range". Only emit
@@ -1583,7 +1767,143 @@ func (s *Store) SearchFilesNLP(groupIDs []int64, who, what string, sinceTime *ti
 		return nil, err
 	}
 	defer rows.Close()
-	return scanFiles(rows)
+	candidates, err := scanFiles(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	// The SQL above is a recall net, not the answer.
+	//
+	// Every one of its tests is LIKE '%token%', which has no notion of a word:
+	// it matches "ode" inside "diodes" and "1" inside "part1", and because the
+	// token tests are joined with OR, a file needed only the word "module" to
+	// qualify for a question about module 1 ODE. So the query casts wide and
+	// deliberately over-fetches, and the decision about what is actually
+	// relevant is made here, on whole words, where it can be tested.
+	primaryTokens := TokenizeWhat(primaryWhat)
+	ranked := rankByRelevance(candidates, s.snippets(candidates), tokens, primaryTokens)
+	if len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+	return ranked, nil
+}
+
+// ScoredFile is a file together with how well it answered the query.
+//
+// The scores travel with the file because the caller has to decide whether
+// the match was clear enough to answer from, or close enough to a rival that
+// the honest move is to ask which one was meant.
+type ScoredFile struct {
+	model.File
+	Score    float64
+	Coverage float64
+	Adjacent int
+}
+
+type docSnippet struct {
+	summary string
+	content string
+}
+
+// snippets fetches each candidate's stored summary and text, for relevance scoring.
+//
+// The whole of it, not the opening. A term the question is about can sit
+// anywhere in a document, and an earlier revision that read only the first few
+// thousand characters made a lecture naming Bernoulli's equation on its
+// fifteenth slide unfindable by anything but its filename, which did not
+// mention it either.
+//
+// Capped per file rather than per query, at a size no real document reaches,
+// so one pathological row cannot pull the whole table into memory.
+func (s *Store) snippets(files []model.File) map[int64]docSnippet {
+	out := make(map[int64]docSnippet, len(files))
+	if len(files) == 0 {
+		return out
+	}
+	ids := make([]int64, 0, len(files))
+	for _, f := range files {
+		ids = append(ids, f.ID)
+	}
+	placeholders, args := buildInClause(ids)
+	rows, err := s.db.Query(
+		`SELECT id, COALESCE(content_summary,''), substr(COALESCE(extracted_content,''),1,200000) FROM files WHERE id IN (`+placeholders+`)`,
+		args...,
+	)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var sum, snip string
+		if rows.Scan(&id, &sum, &snip) == nil {
+			out[id] = docSnippet{summary: sum, content: snip}
+		}
+	}
+	return out
+}
+
+// rankByRelevance keeps the files that actually answer the query and orders
+// them best first.
+//
+// The cut is relative to the best match rather than an absolute threshold.
+// When some file accounts for every word of the question, files accounting
+// for fewer are not near misses, they are other documents, and listing them
+// under an answer is what made a correct answer look like a guess. When
+// nothing accounts for the whole question, the best available is still the
+// best there is and must survive, or a library that plainly contains
+// something answers that it has never seen it.
+func rankByRelevance(files []model.File, snippets map[int64]docSnippet, tokens []string, primaryTokens []string) []ScoredFile {
+	if len(files) == 0 {
+		return nil
+	}
+	if len(tokens) == 0 {
+		out := make([]ScoredFile, 0, len(files))
+		for _, f := range files {
+			out = append(out, ScoredFile{File: f})
+		}
+		return out
+	}
+
+	scored := make([]ScoredFile, 0, len(files))
+	best := 0.0
+	for _, f := range files {
+		doc := snippets[f.ID]
+		r := relevance.ScoredWithPrimary(f.FileName, f.Subject+" "+f.Tags, doc.summary, doc.content, tokens, primaryTokens)
+		if r.Matched == 0 {
+			continue
+		}
+		if r.Coverage > best {
+			best = r.Coverage
+		}
+		scored = append(scored, ScoredFile{File: f, Score: r.Score, Coverage: r.Coverage, Adjacent: r.Adjacent})
+	}
+
+	floor := relevance.Floor(best)
+	if len(tokens) > 3 {
+		// When tokens represent an expanded synonym list (e.g. flight, train, ticket, booking, travel),
+		// individual files match different subsets of synonyms (e.g. train ticket vs flight ticket).
+		// Don't let a file matching 5 synonyms eliminate files matching 3 or 4 valid synonyms.
+		expandedFloor := best - 0.35
+		if expandedFloor < 0.33 {
+			expandedFloor = 0.33
+		}
+		if expandedFloor < floor {
+			floor = expandedFloor
+		}
+	}
+	kept := scored[:0]
+	for _, sf := range scored {
+		if sf.Coverage >= floor {
+			kept = append(kept, sf)
+		}
+	}
+
+	// Stable, so files that scored the same keep the SQL order, which already
+	// put confident sender matches and recent files first.
+	sort.SliceStable(kept, func(i, j int) bool { return kept[i].Score > kept[j].Score })
+	log.Printf("[RANK] candidates=%d kept=%d best_coverage=%.2f floor=%.2f", len(files), len(kept), best, floor)
+	return kept
 }
 
 // SearchFilesContent searches files by extracted content (for Q&A).
@@ -1643,10 +1963,53 @@ func (s *Store) SearchFilesContent(groupIDs []int64, query string, limit int) ([
 	return scanFiles(rows)
 }
 
+// SearchFilesByRawDateTokens searches files whose extracted content or summary contains
+// any of the specified date strings (e.g. "12-Sept", "12-Sep", "12 Sep").
+func (s *Store) SearchFilesByRawDateTokens(groupIDs []int64, dateTokens []string, limit int) ([]model.File, error) {
+	if len(groupIDs) == 0 || len(dateTokens) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	placeholders, args := buildInClause(groupIDs)
+	var orParts []string
+	for _, dt := range dateTokens {
+		dtClean := strings.TrimSpace(strings.ToLower(dt))
+		if dtClean == "" {
+			continue
+		}
+		like := "%" + dtClean + "%"
+		orParts = append(orParts, "LOWER(f.extracted_content) LIKE ? OR LOWER(f.content_summary) LIKE ?")
+		args = append(args, like, like)
+	}
+	if len(orParts) == 0 {
+		return nil, nil
+	}
+	args = append(args, interface{}(limit))
+	q := fmt.Sprintf(
+		`SELECT f.id, f.group_id, f.user_id, f.shared_by_phone, f.shared_by_name, f.file_name, f.file_size,
+		  f.mime_type, f.drive_file_id, f.drive_folder_id, f.subject, f.tags, f.version, f.parent_file_id, f.wa_message_id, f.status, f.created_at, f.posted_at, COALESCE(f.attribution_method,''), COALESCE(f.attribution_confidence,0)
+		 FROM files f
+		 WHERE f.group_id IN (%s) AND f.status != 'deleted_in_drive' AND (%s)
+		 ORDER BY f.created_at DESC LIMIT ?`,
+		placeholders, strings.Join(orParts, " OR "),
+	)
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanFiles(rows)
+}
+
 // TokenizeWhat splits an NLP `what` clause into significant lowercase tokens.
 // Drops stopwords and tokens shorter than 3 chars so noise like "the", "a",
 // "of" doesn't widen the search to match every file in the DB.
 func TokenizeWhat(what string) []string {
+	if strings.TrimSpace(what) == "" {
+		return nil
+	}
 	stop := map[string]bool{
 		// articles / pronouns / aux
 		"the": true, "and": true, "for": true, "with": true, "from": true, "that": true,
@@ -1665,6 +2028,7 @@ func TokenizeWhat(what string) []string {
 		// generic Q&A request verbs
 		"please": true, "find": true, "show": true, "give": true, "tell": true, "send": true,
 		"share": true, "shared": true, "sent": true, "uploaded": true, "upload": true,
+		"received": true, "receive": true, "got": true, "gets": true, "getting": true,
 		"explain": true, "describe": true, "define": true, "definition": true, "exact": true,
 		"exactly": true, "example": true, "examples": true, "summary": true, "summarize": true,
 		"summarise": true, "list": true, "mention": true, "mentioned": true, "mentions": true,
@@ -1676,17 +2040,41 @@ func TokenizeWhat(what string) []string {
 		"recently": true, "latest": true, "last": true, "ago": true, "back": true, "only": true,
 	}
 	lower := strings.ToLower(what)
-	// replace non-alphanumeric with spaces
+	// replace non-alphanumeric with spaces (supports all Unicode letters, digits, and combining marks/vowels)
 	cleaned := strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r) {
 			return r
 		}
 		return ' '
 	}, lower)
+	shortAllowed := map[string]bool{
+		"c": true, "r": true, "go": true, "os": true, "ai": true, "ml": true,
+		"ds": true, "db": true, "cn": true, "se": true, "ia": true, "be": true,
+		"it": true, "cs": true, "ee": true, "ec": true, "me": true, "cv": true,
+		"py": true, "js": true, "ui": true, "ux": true, "ip": true,
+	}
+	// A bare number is always kept, however short.
+	//
+	// "module 1" and "module 4" differ by exactly one character, and that
+	// character is the entire question. Dropping it as too short left the
+	// query as just "module", every module in the library matched equally,
+	// and a question about module 1 was answered from module 4. The phone
+	// side of this had already been fixed; this side had not.
+	isNumber := func(tok string) bool {
+		for _, r := range tok {
+			if !unicode.IsDigit(r) {
+				return false
+			}
+		}
+		return tok != ""
+	}
+
 	var out []string
 	seen := map[string]bool{}
 	for _, tok := range strings.Fields(cleaned) {
-		if len(tok) < 3 || stop[tok] || seen[tok] {
+		runeCount := utf8.RuneCountInString(tok)
+		isShort := (len(tok) == runeCount && runeCount < 3 && !shortAllowed[tok] && !isNumber(tok)) || (runeCount < 2 && !shortAllowed[tok] && !isNumber(tok))
+		if isShort || stop[tok] || seen[tok] {
 			continue
 		}
 		seen[tok] = true
@@ -1695,7 +2083,10 @@ func TokenizeWhat(what string) []string {
 	// If everything got filtered (e.g. user typed only stopwords), fall back
 	// to the original phrase so we still search something.
 	if len(out) == 0 {
-		out = []string{strings.TrimSpace(lower)}
+		trimmed := strings.TrimSpace(lower)
+		if trimmed != "" {
+			out = []string{trimmed}
+		}
 	}
 	return out
 }
@@ -1722,4 +2113,230 @@ func (s *Store) GetFileExtractedContent(fileIDs []int64) map[int64]string {
 		result[id] = content
 	}
 	return result
+}
+
+// GetFileContentSummaries returns just the content_summary for given file IDs
+func (s *Store) GetFileContentSummaries(fileIDs []int64) map[int64]string {
+	result := make(map[int64]string)
+	if len(fileIDs) == 0 {
+		return result
+	}
+	placeholders, args := buildInClause(fileIDs)
+	rows, err := s.db.Query(
+		`SELECT id, COALESCE(content_summary, '') FROM files WHERE id IN (`+placeholders+`)`,
+		args...,
+	)
+	if err != nil {
+		return result
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var summary string
+		if err := rows.Scan(&id, &summary); err == nil {
+			result[id] = summary
+		}
+	}
+	return result
+}
+
+// GetFileContentWithSummary returns the content summary and extracted content joined together for given file IDs
+func (s *Store) GetFileContentWithSummary(fileIDs []int64) map[int64]string {
+	result := make(map[int64]string)
+	if len(fileIDs) == 0 {
+		return result
+	}
+	placeholders, args := buildInClause(fileIDs)
+	rows, err := s.db.Query(
+		`SELECT id, COALESCE(content_summary, ''), COALESCE(extracted_content, '') FROM files WHERE id IN (`+placeholders+`)`,
+		args...,
+	)
+	if err != nil {
+		return result
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var summary, content string
+		if err := rows.Scan(&id, &summary, &content); err == nil {
+			var sb strings.Builder
+			if strings.TrimSpace(summary) != "" {
+				sb.WriteString("Summary: ")
+				sb.WriteString(strings.TrimSpace(summary))
+				sb.WriteString("\n")
+			}
+			if strings.TrimSpace(content) != "" {
+				sb.WriteString(strings.TrimSpace(content))
+			}
+			result[id] = sb.String()
+		}
+	}
+	return result
+}
+
+// CountCommittedFiles is how many of a group's files actually reached Drive.
+//
+// Counted by status rather than by a non-empty drive_file_id, because a file
+// held only in the local store carries a synthetic "local_" id that would
+// otherwise read as filed.
+func (s *Store) CountCommittedFiles(groupID int64) int {
+	var n int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM files
+		  WHERE group_id = ? AND status = 'committed'
+		    AND drive_file_id <> '' AND drive_file_id NOT LIKE 'local_%'`,
+		groupID,
+	).Scan(&n)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// FilesMissingContent lists files stored but never actually read.
+//
+// A file whose text was never extracted is only findable by its name, which
+// for a WhatsApp document called DOC-20260818-WA0041.pdf means not findable at
+// all. These are the ones a backfill has to revisit.
+func (s *Store) FilesMissingContent(limit int) ([]model.File, error) {
+	// Documents only, never photographs.
+	//
+	// A phone's WhatsApp folder is overwhelmingly images: 762 of 903 in the
+	// library this was written against, most of them forwards and memes.
+	// Reading them costs the same as reading a contract and returns a
+	// description nobody will ever search for. On a metered or rate limited
+	// model that is where the entire allowance goes, and the documents people
+	// actually want never get read at all.
+	rows, err := s.db.Query(
+		`SELECT id, group_id, user_id, shared_by_phone, shared_by_name, file_name,
+		        file_size, mime_type, drive_file_id, drive_folder_id, subject, tags,
+		        version, parent_file_id, wa_message_id, status, created_at, posted_at,
+		        attribution_method, attribution_confidence
+		   FROM files
+		  WHERE (extracted_content IS NULL OR extracted_content = '')
+		    AND status != 'deleted_in_drive'
+		    AND mime_type NOT LIKE 'image/%'
+		  ORDER BY posted_at DESC
+		  LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanFiles(rows)
+}
+
+// GetFilesByIDs returns these files, in the order the ids were given.
+//
+// Order matters because the ids come from a user choosing documents from a
+// list, and the first one they picked is the one they meant first.
+func (s *Store) GetFilesByIDs(ids []int64) ([]model.File, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders, args := buildInClause(ids)
+	rows, err := s.db.Query(
+		`SELECT f.id, f.group_id, f.user_id, f.shared_by_phone, f.shared_by_name, f.file_name, f.file_size,
+		  f.mime_type, f.drive_file_id, f.drive_folder_id, f.subject, f.tags, f.version, f.parent_file_id,
+		  f.wa_message_id, f.status, f.created_at, f.posted_at,
+		  COALESCE(f.attribution_method,''), COALESCE(f.attribution_confidence,0)
+		 FROM files f WHERE f.id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	found, err := scanFiles(rows)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[int64]model.File, len(found))
+	for _, f := range found {
+		byID[f.ID] = f
+	}
+	out := make([]model.File, 0, len(ids))
+	for _, id := range ids {
+		if f, ok := byID[id]; ok {
+			out = append(out, f)
+		}
+	}
+	return out, nil
+}
+
+// FloatsToBytes converts a slice of float32 to little-endian bytes.
+func FloatsToBytes(vec []float32) []byte {
+	buf := make([]byte, len(vec)*4)
+	for i, v := range vec {
+		binary.LittleEndian.PutUint32(buf[i*4:(i+1)*4], math.Float32bits(v))
+	}
+	return buf
+}
+
+// BytesToFloats converts little-endian bytes back to a slice of float32.
+func BytesToFloats(buf []byte) []float32 {
+	if len(buf)%4 != 0 {
+		return nil
+	}
+	vec := make([]float32, len(buf)/4)
+	for i := range vec {
+		bits := binary.LittleEndian.Uint32(buf[i*4 : (i+1)*4])
+		vec[i] = math.Float32frombits(bits)
+	}
+	return vec
+}
+
+// SaveFileEmbedding stores a vector embedding for a file.
+func (s *Store) SaveFileEmbedding(fileID int64, vec []float32) error {
+	if len(vec) == 0 {
+		return nil
+	}
+	blob := FloatsToBytes(vec)
+	_, err := s.db.Exec(`
+		INSERT INTO file_embeddings (file_id, embedding, created_at)
+		VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(file_id) DO UPDATE SET embedding = excluded.embedding, created_at = CURRENT_TIMESTAMP
+	`, fileID, blob)
+	return err
+}
+
+// GetFileEmbedding retrieves the vector embedding for a file, or nil if none.
+func (s *Store) GetFileEmbedding(fileID int64) ([]float32, error) {
+	var blob []byte
+	err := s.db.QueryRow(`SELECT embedding FROM file_embeddings WHERE file_id = ?`, fileID).Scan(&blob)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return BytesToFloats(blob), nil
+}
+
+// GetAllEmbeddings retrieves embeddings for all eligible files in the given groups.
+func (s *Store) GetAllEmbeddings(groupIDs []int64) (map[int64][]float32, error) {
+	out := make(map[int64][]float32)
+	if len(groupIDs) == 0 {
+		return out, nil
+	}
+	placeholders, args := buildInClause(groupIDs)
+	query := fmt.Sprintf(`
+		SELECT e.file_id, e.embedding
+		FROM file_embeddings e
+		JOIN files f ON f.id = e.file_id
+		WHERE f.group_id IN (%s) AND f.status != 'deleted_in_drive'
+	`, placeholders)
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var fID int64
+		var blob []byte
+		if err := rows.Scan(&fID, &blob); err == nil {
+			if vec := BytesToFloats(blob); len(vec) > 0 {
+				out[fID] = vec
+			}
+		}
+	}
+	return out, nil
 }

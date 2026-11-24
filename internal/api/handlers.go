@@ -8,17 +8,22 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hurshnarayan/reyna/internal/auth"
 	"github.com/hurshnarayan/reyna/internal/config"
-	"github.com/hurshnarayan/reyna/internal/repository"
 	"github.com/hurshnarayan/reyna/internal/integrations/gdrive"
 	"github.com/hurshnarayan/reyna/internal/model"
 	"github.com/hurshnarayan/reyna/internal/nlp"
+	"github.com/hurshnarayan/reyna/internal/relevance"
+	"github.com/hurshnarayan/reyna/internal/repository"
 	"github.com/hurshnarayan/reyna/internal/reyna"
 )
 
@@ -43,9 +48,18 @@ func (s *Server) uploadLockFor(groupID int64) *sync.Mutex {
 
 // looksLikePhoneOrLID checks if a string looks like a phone number or WhatsApp LID
 // (not a real human name). Used to avoid storing "+1234567890" or "0440" as shared_by_name.
+// isDeviceIdentity reports whether this is the phone's own placeholder rather
+// than a person. The app uploads everything under it, so it appears as both a
+// user phone and, once a user record exists, a user name.
+func isDeviceIdentity(s string) bool {
+	return strings.EqualFold(strings.TrimSpace(s), deviceIdentity)
+}
+
 func looksLikePhoneOrLID(s string) bool {
 	s = strings.TrimSpace(s)
-	if s == "" { return false }
+	if s == "" {
+		return false
+	}
 	// Strip + prefix
 	cleaned := strings.TrimPrefix(s, "+")
 	// Remove common separators
@@ -56,9 +70,14 @@ func looksLikePhoneOrLID(s string) bool {
 	// If all digits, it's a phone number or LID
 	allDigits := true
 	for _, c := range cleaned {
-		if c < '0' || c > '9' { allDigits = false; break }
+		if c < '0' || c > '9' {
+			allDigits = false
+			break
+		}
 	}
-	if allDigits && len(cleaned) >= 1 { return true }
+	if allDigits && len(cleaned) >= 1 {
+		return true
+	}
 	return false
 }
 
@@ -74,13 +93,18 @@ func (s *Server) routes() {
 	wrap := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
-			if origin == "" { origin = "*" }
+			if origin == "" {
+				origin = "*"
+			}
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Content-Type", "application/json")
-			if r.Method == "OPTIONS" { w.WriteHeader(200); return }
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(200)
+				return
+			}
 			h(w, r)
 		}
 	}
@@ -89,9 +113,8 @@ func (s *Server) routes() {
 			auth.Middleware(s.cfg.JWTSecret)(http.HandlerFunc(h)).ServeHTTP(w, r)
 		})
 	}
-	// device gates the routes the WhatsApp bot calls. They accept file uploads
-	// and expose any group's contents, so leaving them open meant anything that
-	// could reach the port could read every user's files.
+	// device gates the JSON routes the Android app calls. They ingest
+	// attribution data and expose file records, so they are not open.
 	device := func(h http.HandlerFunc) http.HandlerFunc {
 		return wrap(func(w http.ResponseWriter, r *http.Request) {
 			if !auth.ValidDeviceToken(r, s.cfg.DeviceToken) {
@@ -101,7 +124,7 @@ func (s *Server) routes() {
 			h(w, r)
 		})
 	}
-	// deviceOrUser accepts either the device token (bot) or a user JWT
+	// deviceOrUser accepts either the device token (the app) or a user JWT
 	// (dashboard). The NLP routes are reached from both.
 	deviceOrUser := func(h http.HandlerFunc) http.HandlerFunc {
 		return wrap(func(w http.ResponseWriter, r *http.Request) {
@@ -112,15 +135,16 @@ func (s *Server) routes() {
 			auth.Middleware(s.cfg.JWTSecret)(http.HandlerFunc(h)).ServeHTTP(w, r)
 		})
 	}
-	// deviceRaw is the multipart upload path: same check, but it must not go
-	// through wrap(), which forces a JSON content type.
+	// deviceRaw protects binary device routes without forcing a JSON content type.
 	deviceRaw := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == "OPTIONS" {
 				origin := r.Header.Get("Origin")
-				if origin == "" { origin = "*" }
+				if origin == "" {
+					origin = "*"
+				}
 				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Access-Control-Allow-Methods", "POST,OPTIONS")
+				w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
 				w.WriteHeader(200)
 				return
@@ -148,6 +172,23 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/bot/group-states", device(s.handleGroupStates))
 	s.mux.HandleFunc("/api/bot/known-groups", device(s.handleKnownGroups))
 	s.mux.HandleFunc("/api/bot/group-mode", device(s.handleGroupMode))
+
+	// Capture. The WhatsApp bot that used to own this surface is gone; the
+	// Android app is the capture client now. Only the upload path survived —
+	// the rest of /api/bot/* existed to drive a process sitting inside a
+	// WhatsApp group (command parsing, reaction staging, group allowlist
+	// polling), none of which has an on-device equivalent.
+	s.mux.HandleFunc("/api/device/files", deviceRaw(s.handleDeviceUpload)) // multipart, not JSON
+	s.mux.HandleFunc("/api/device/files/content", deviceRaw(s.handleDeviceFileContent))
+	s.mux.HandleFunc("/api/device/events", device(s.handleDeviceEvents))
+	s.mux.HandleFunc("/api/device/export", device(s.handleDeviceExport))
+	s.mux.HandleFunc("/api/device/pending", device(s.handleDevicePending))
+	s.mux.HandleFunc("/api/device/attribute", device(s.handleDeviceAttribute))
+	s.mux.HandleFunc("/api/device/drive/connect", device(s.handleDeviceDriveConnect))
+	s.mux.HandleFunc("/api/device/drive/status", device(s.handleDeviceDriveStatus))
+	s.mux.HandleFunc("/api/device/drive/state", device(s.handleDeviceDriveState))
+	s.mux.HandleFunc("/api/device/drive/push", device(s.handleDeviceDrivePush))
+	s.mux.HandleFunc("/api/device/drive/disconnect", device(s.handleDeviceDriveDisconnect))
 
 	s.mux.HandleFunc("/api/me", protected(s.handleMe))
 	s.mux.HandleFunc("/api/auth/google/status", protected(s.handleGoogleStatus))
@@ -192,24 +233,42 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // ── Auth ──
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
-	var req struct { Phone, Name string }
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
+	var req struct{ Phone, Name string }
 	json.NewDecoder(r.Body).Decode(&req)
-	if req.Phone == "" { http.Error(w, `{"error":"phone required"}`, 400); return }
+	if req.Phone == "" {
+		http.Error(w, `{"error":"phone required"}`, 400)
+		return
+	}
 	user, err := s.store.UpsertUser(req.Phone, req.Name)
-	if err != nil { http.Error(w, `{"error":"registration failed"}`, 500); return }
+	if err != nil {
+		http.Error(w, `{"error":"registration failed"}`, 500)
+		return
+	}
 	s.store.AutoLinkUserToGroups(user.ID, req.Phone)
 	token, _ := auth.GenerateToken(user.ID, s.cfg.JWTSecret)
 	json.NewEncoder(w).Encode(model.AuthResponse{Token: token, User: user})
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
 	var req model.LoginRequest
 	json.NewDecoder(r.Body).Decode(&req)
-	if req.Phone == "" { http.Error(w, `{"error":"phone required"}`, 400); return }
+	if req.Phone == "" {
+		http.Error(w, `{"error":"phone required"}`, 400)
+		return
+	}
 	user, err := s.store.GetUserByPhone(req.Phone)
-	if err != nil { http.Error(w, `{"error":"user not found, register first"}`, 404); return }
+	if err != nil {
+		http.Error(w, `{"error":"user not found, register first"}`, 404)
+		return
+	}
 	s.store.AutoLinkUserToGroups(user.ID, req.Phone)
 	token, _ := auth.GenerateToken(user.ID, s.cfg.JWTSecret)
 	json.NewEncoder(w).Encode(model.AuthResponse{Token: token, User: user})
@@ -218,7 +277,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	uid := auth.GetUserID(r)
 	user, err := s.store.GetUserByID(uid)
-	if err != nil { http.Error(w, `{"error":"user not found"}`, 404); return }
+	if err != nil {
+		http.Error(w, `{"error":"user not found"}`, 404)
+		return
+	}
 	json.NewEncoder(w).Encode(user)
 }
 
@@ -256,15 +318,22 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
 	uid := auth.GetUserID(r)
 	if r.Method == "POST" {
-		var req struct { WAID string `json:"wa_id"`; Name string `json:"name"` }
+		var req struct {
+			WAID string `json:"wa_id"`
+			Name string `json:"name"`
+		}
 		json.NewDecoder(r.Body).Decode(&req)
 		group, _ := s.store.UpsertGroup(req.WAID, req.Name, uid)
-		if group != nil { s.store.AddGroupMember(group.ID, uid, "", "admin") }
+		if group != nil {
+			s.store.AddGroupMember(group.ID, uid, "", "admin")
+		}
 		json.NewEncoder(w).Encode(group)
 		return
 	}
 	groups, _ := s.store.GetUserGroups(uid)
-	if groups == nil { groups = []model.Group{} }
+	if groups == nil {
+		groups = []model.Group{}
+	}
 	json.NewEncoder(w).Encode(groups)
 }
 
@@ -272,10 +341,12 @@ func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	uid := auth.GetUserID(r)
 	gidStr := r.URL.Query().Get("group_id")
-	sortBy := r.URL.Query().Get("sort_by")     // name, date, size, subject, version
+	sortBy := r.URL.Query().Get("sort_by")       // name, date, size, subject, version
 	sortOrder := r.URL.Query().Get("sort_order") // asc, desc
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 { limit = 100 }
+	if limit <= 0 {
+		limit = 100
+	}
 
 	// Link if not yet linked
 	gids := s.store.GetUserGroupIDs(uid)
@@ -283,12 +354,6 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		user, _ := s.store.GetUserByID(uid)
 		if user != nil {
 			s.store.AutoLinkUserToGroups(uid, user.Phone)
-			if user.GoogleRefresh != "" {
-				allGroups, _ := s.store.GetAllGroups()
-				for _, g := range allGroups {
-					s.store.AddGroupMember(g.ID, uid, user.Phone, "admin")
-				}
-			}
 		}
 		gids = s.store.GetUserGroupIDs(uid)
 	}
@@ -308,34 +373,49 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		gid, _ := strconv.ParseInt(gidStr, 10, 64)
 		files, _ = s.store.GetGroupFiles(gid, limit)
 	} else {
-		if len(gids) > 0 { files, _ = s.store.GetGroupsFiles(gids, limit) }
-		if len(files) == 0 { files, _ = s.store.GetUserFiles(uid, limit) }
+		if len(gids) > 0 {
+			files, _ = s.store.GetGroupsFiles(gids, limit)
+		}
+		if len(files) == 0 {
+			files, _ = s.store.GetUserFiles(uid, limit)
+		}
 	}
-	if files == nil { files = []model.File{} }
+	if files == nil {
+		files = []model.File{}
+	}
 	json.NewEncoder(w).Encode(files)
 }
-
 
 func (s *Server) handleFileVersions(w http.ResponseWriter, r *http.Request) {
 	fid, _ := strconv.ParseInt(r.URL.Query().Get("file_id"), 10, 64)
 	versions, _ := s.store.GetFileVersions(fid)
-	if versions == nil { versions = []model.FileVersion{} }
+	if versions == nil {
+		versions = []model.FileVersion{}
+	}
 	json.NewEncoder(w).Encode(versions)
 }
 
 func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
 	uid := auth.GetUserID(r)
 	var req model.AddFileRequest
 	json.NewDecoder(r.Body).Decode(&req)
 	group, err := s.store.GetGroupByWAID(req.GroupWAID)
-	if err != nil { http.Error(w, `{"error":"group not found"}`, 404); return }
+	if err != nil {
+		http.Error(w, `{"error":"group not found"}`, 404)
+		return
+	}
 	user, _ := s.store.GetUserByID(uid)
 	accessToken, driveRootID := "", ""
 	if user != nil {
 		accessToken, driveRootID = user.GoogleToken, user.DriveRootID
 		if user.GoogleRefresh != "" {
-			if t, e := s.drive.GetValidToken(user.GoogleToken, user.GoogleRefresh, 0); e == nil { accessToken = t }
+			if t, e := s.drive.GetValidToken(user.GoogleToken, user.GoogleRefresh, 0); e == nil {
+				accessToken = t
+			}
 		}
 	}
 	fileData := []byte(req.FileData)
@@ -348,7 +428,9 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 	gid, _ := strconv.ParseInt(r.URL.Query().Get("group_id"), 10, 64)
 	logs, _ := s.store.GetActivityLog(gid, 50)
-	if logs == nil { logs = []model.ActivityLog{} }
+	if logs == nil {
+		logs = []model.ActivityLog{}
+	}
 	json.NewEncoder(w).Encode(logs)
 }
 
@@ -356,298 +438,31 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 // BOT COMMAND HANDLER
 // ══════════════════════════════════════════
 
-func (s *Server) handleBotCommand(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
-	var req model.CommandRequest
-	json.NewDecoder(r.Body).Decode(&req)
-
-	action, args := s.reyna.ProcessCommand(req.Command)
-	userName := req.UserName
-	if userName == "" { userName = req.UserPhone }
-	user, _ := s.store.UpsertUser(req.UserPhone, userName)
-
-	group, err := s.store.GetGroupByWAID(req.GroupWAID)
-	if err != nil { group, _ = s.store.UpsertGroup(req.GroupWAID, "WhatsApp Group", user.ID) }
-	if group != nil { s.store.AddGroupMember(group.ID, user.ID, req.UserPhone, "member") }
-	groupID := int64(0)
-	if group != nil { groupID = group.ID }
-
-	resp := model.CommandResponse{}
-
-	switch action {
-	case "add":
-		// Only metadata add (no file data) — used as fallback
-		fileName := args
-		// Parse --folder / -f flag
-		folderFlag := ""
-		if strings.Contains(args, "--folder ") {
-			parts := strings.SplitN(args, "--folder ", 2)
-			fileName = strings.TrimSpace(parts[0])
-			folderFlag = strings.TrimSpace(parts[1])
-		} else if strings.Contains(args, "-f ") {
-			parts := strings.SplitN(args, "-f ", 2)
-			fileName = strings.TrimSpace(parts[0])
-			folderFlag = strings.TrimSpace(parts[1])
-		}
-		if fileName == "" || fileName == "." { fileName = req.FileName }
-		if fileName == "" { fileName = "unknown_file" }
-		subject := req.Subject
-		if folderFlag != "" { subject = folderFlag }
-		file := &model.File{GroupID: groupID, UserID: user.ID, SharedByPhone: req.UserPhone, SharedByName: req.UserName, FileName: fileName, FileSize: req.FileSize, MimeType: req.MimeType, Subject: subject, DriveFileID: fmt.Sprintf("meta_%d", time.Now().UnixNano()), Status: "staged"}
-		saved, _ := s.store.AddFile(file)
-		total := s.store.CountGroupFiles(groupID)
-		v := 1; if saved != nil { v = saved.Version }
-		resp.Reply = s.reyna.AddResponse(fileName, v, total) + s.reyna.AddReminder()
-
-	case "commit":
-		// Parse -m flag for commit message
-		commitMsg := ""
-		commitFileName := args
-		if strings.Contains(args, "-m ") {
-			parts := strings.SplitN(args, "-m ", 2)
-			commitFileName = strings.TrimSpace(parts[0])
-			commitMsg = strings.Trim(strings.TrimSpace(parts[1]), "\"'")
-		}
-		// Parse --folder / -f flag
-		commitFolder := ""
-		if strings.Contains(commitFileName, "--folder ") {
-			parts := strings.SplitN(commitFileName, "--folder ", 2)
-			commitFileName = strings.TrimSpace(parts[0])
-			commitFolder = strings.TrimSpace(parts[1])
-		} else if strings.Contains(commitFileName, "-f ") {
-			parts := strings.SplitN(commitFileName, "-f ", 2)
-			commitFileName = strings.TrimSpace(parts[0])
-			commitFolder = strings.TrimSpace(parts[1])
-		}
-		_ = commitFolder // Used for folder override during upload
-
-		staged, _ := s.store.GetStagedFiles(groupID)
-		log.Printf("[COMMIT] staged=%d group=%d msg=%q", len(staged), groupID, commitMsg)
-		if len(staged) == 0 {
-			resp.Reply = s.reyna.CommitEmptyResponse()
-		} else {
-			driveUser := s.store.FindDriveConnectedUser(groupID)
-			if driveUser != nil {
-				log.Printf("[COMMIT] drive_user=%s id=%d has_refresh=%v root=%s configured=%v",
-					driveUser.Email, driveUser.ID, driveUser.GoogleRefresh != "", driveUser.DriveRootID, s.drive.IsConfigured())
-			} else {
-				log.Printf("[COMMIT] NO drive user found")
-			}
-			uploaded := 0
-			skipped := 0
-			for i, f := range staged {
-				log.Printf("[COMMIT][%d] file=%s id=%d size=%d subject=%s", i, f.FileName, f.ID, f.FileSize, f.Subject)
-
-				if f.Subject == "classifying..." {
-					log.Printf("[COMMIT][%d] SKIP still classifying", i)
-					skipped++
-					continue
-				}
-
-				canUpload := driveUser != nil && driveUser.GoogleRefresh != "" && s.drive.IsConfigured() && driveUser.DriveRootID != "" && !strings.HasPrefix(driveUser.DriveRootID, "local_")
-				log.Printf("[COMMIT][%d] canUpload=%v", i, canUpload)
-
-				if !canUpload {
-					log.Printf("[COMMIT][%d] SKIP no drive", i)
-					skipped++
-					continue
-				}
-
-				token, terr := s.drive.GetValidToken(driveUser.GoogleToken, driveUser.GoogleRefresh, 0)
-				if terr != nil {
-					log.Printf("[COMMIT][%d] SKIP token error: %v", i, terr)
-					skipped++
-					continue
-				}
-				log.Printf("[COMMIT][%d] token_len=%d", i, len(token))
-				s.store.UpdateUserGoogle(driveUser.ID, driveUser.Email, token, driveUser.GoogleRefresh, driveUser.DriveRootID)
-
-				// Use commit folder override if provided, otherwise use file subject
-				subjectForFolder := f.Subject
-				if commitFolder != "" { subjectForFolder = commitFolder }
-				folderID, ferr := s.drive.EnsureSubjectFolder(token, driveUser.DriveRootID, subjectForFolder)
-				if ferr != nil {
-					log.Printf("[COMMIT][%d] SKIP folder error: %v", i, ferr)
-					skipped++
-					continue
-				}
-				log.Printf("[COMMIT][%d] folder=%s", i, folderID)
-
-				fileData, rerr := s.drive.GetLocalFileData(f.ID)
-				log.Printf("[COMMIT][%d] raw_data len=%d err=%v", i, len(fileData), rerr)
-				if len(fileData) == 0 {
-					fileData, _ = s.drive.GetFileFromLocalStore(f.UserID, f.Subject, f.FileName)
-					log.Printf("[COMMIT][%d] fallback len=%d", i, len(fileData))
-				}
-				if len(fileData) == 0 {
-					log.Printf("[COMMIT][%d] SKIP no data", i)
-					skipped++
-					continue
-				}
-
-				log.Printf("[COMMIT][%d] uploading %d bytes...", i, len(fileData))
-				driveID, uerr := s.drive.UploadFileToDrive(token, folderID, f.FileName, f.MimeType, fileData)
-				if uerr != nil {
-					log.Printf("[COMMIT][%d] SKIP upload error: %v", i, uerr)
-					skipped++
-					continue
-				}
-				if driveID != "" {
-					s.store.UpdateFileDriveID(f.ID, driveID, folderID)
-					uploaded++
-					log.Printf("[COMMIT][%d] SUCCESS drive_id=%s", i, driveID)
-				} else {
-					log.Printf("[COMMIT][%d] SKIP empty drive id", i)
-					skipped++
-				}
-			}
-			count, _ := s.store.CommitFiles(groupID)
-			log.Printf("[COMMIT] DONE committed=%d uploaded=%d skipped=%d", count, uploaded, skipped)
-			if commitMsg != "" {
-				resp.Reply = s.reyna.CommitWithMessageResponse(int(count), commitMsg)
-			} else if commitFileName != "" {
-				s.store.CommitFileByName(groupID, commitFileName)
-				resp.Reply = s.reyna.CommitFileResponse(commitFileName)
-			} else {
-				resp.Reply = s.reyna.CommitAllResponse(int(count))
-			}
-			if uploaded > 0 { resp.Reply += fmt.Sprintf("\n\n☁️ %d file(s) pushed to Google Drive!", uploaded) }
-			if skipped > 0 && uploaded == 0 {
-				if driveUser == nil { resp.Reply += "\n\nNo one in this group has connected Drive yet. Files are saved locally. Connect Drive on the dashboard to sync." } else { resp.Reply += "\n\nDrive upload failed. Check backend logs." }
-			}
-		}
-
-	case "rm":
-		if args == "" || args == "." {
-			count, _ := s.store.RemoveAllStaged(groupID)
-			if count == 0 { resp.Reply = s.reyna.RmEmptyResponse() } else { resp.Reply = s.reyna.RmAllResponse(int(count)) }
-		} else {
-			ok, _ := s.store.RemoveStagedFile(groupID, args)
-			if ok { resp.Reply = s.reyna.RmFileResponse(args) } else { resp.Reply = s.reyna.RmNotFoundResponse(args) }
-		}
-
-	case "staged":
-		staged, _ := s.store.GetStagedFiles(groupID)
-		if staged == nil { staged = []model.File{} }
-		resp.Files = staged
-		resp.Reply = s.reyna.StagedResponse(staged)
-
-	case "find":
-		if args == "" { resp.Reply = "Find kya? Usage: /reyna find \"DSA notes\" 🤦‍♀️"; break }
-		// Parse -a flag for author details
-		showAuthor := false
-		query := args
-		if strings.Contains(args, " -a") {
-			showAuthor = true
-			query = strings.TrimSpace(strings.Replace(args, " -a", "", 1))
-			query = strings.TrimSpace(strings.Replace(query, "-a ", "", 1))
-		}
-		files, _ := s.store.FindFiles(groupID, query)
-		if files == nil { files = []model.File{} }
-		resp.Files = files
-		if showAuthor {
-			resp.Reply = s.reyna.FindWithAuthorResponse(query, files)
-		} else {
-			resp.Reply = s.reyna.FindResponse(query, files)
-		}
-
-	case "log":
-		files, _ := s.store.GetGroupFiles(groupID, 10)
-		if files == nil { files = []model.File{} }
-		total := s.store.CountGroupFiles(groupID)
-		resp.Files = files; resp.LogCount = total
-		resp.Reply = s.reyna.LogResponse(files, total)
-
-	case "status":
-		staged, _ := s.store.GetStagedFiles(groupID)
-		total := s.store.CountGroupFiles(groupID)
-		// Return git-style status
-		resp.Files = staged
-		resp.Reply = s.reyna.StatusResponseGit(staged, nil, total-len(staged), total)
-
-	case "help":
-		resp.Reply = s.reyna.HelpResponse()
-
-	case "enable":
-		if groupID > 0 {
-			gs := s.store.GetGroupSettings(groupID)
-			gs.GroupID = groupID
-			gs.Enabled = true
-			gs.Hidden = false // un-hide so it reappears in dashboard
-			s.store.UpsertGroupSettings(gs)
-			log.Printf("[BOT] Enabled tracking for group %d via /reyna init", groupID)
-			resp.Reply = "Tracking enabled."
-		} else {
-			resp.Reply = "Group not found."
-		}
-
-	case "disable":
-		if groupID > 0 {
-			gs := s.store.GetGroupSettings(groupID)
-			gs.GroupID = groupID
-			gs.Enabled = false
-			s.store.UpsertGroupSettings(gs)
-			log.Printf("[BOT] Disabled tracking for group %d via /reyna stop", groupID)
-			resp.Reply = "Tracking disabled."
-		} else {
-			resp.Reply = "Group not found."
-		}
-
-	case "mode":
-		if groupID > 0 {
-			gs := s.store.GetGroupSettings(groupID)
-			targetMode := strings.ToLower(strings.TrimSpace(args))
-			if targetMode == "reaction" || targetMode == "reactions" || targetMode == "react" {
-				gs.TrackingMode = "reaction"
-				s.store.UpsertGroupSettings(gs)
-				emoji := gs.ReactionEmoji
-				if emoji == "" { emoji = "📌" }
-				resp.Reply = fmt.Sprintf("Tracking mode switched to *reactions only*. %s\n\nFiles shared in this group will only be staged when someone reacts with %s.", emoji, emoji)
-			} else if targetMode == "auto" || targetMode == "all" || targetMode == "track all" {
-				gs.TrackingMode = "auto"
-				s.store.UpsertGroupSettings(gs)
-				resp.Reply = "Tracking mode switched to *track all files*. 📂\n\nEvery document shared in this group will now be automatically staged and synced."
-			} else {
-				resp.Reply = fmt.Sprintf("Current tracking mode: *%s*.\n\nUsage: `/reyna mode auto` or `/reyna mode reaction`", gs.TrackingMode)
-			}
-		} else {
-			resp.Reply = "Group not found."
-		}
-
-	case "tracking":
-		// Handled by bot directly, but provide a fallback
-		resp.Reply = "📊 Use this in WhatsApp to see tracked/untracked files in real time."
-
-	default:
-		// Try to give a helpful suggestion
-		parts := strings.Fields(req.Command)
-		attempted := ""
-		if len(parts) > 1 { attempted = parts[1] }
-		if attempted != "" {
-			resp.Reply = s.reyna.InvalidCommandResponse(attempted)
-		} else {
-			resp.Reply = s.reyna.GenericResponse()
-		}
-	}
-
-	s.store.LogActivity(groupID, user.ID, action, req.Command, "")
-	json.NewEncoder(w).Encode(resp)
-}
-
-// ══════════════════════════════════════════
-// BOT FILE UPLOAD (multipart/form-data)
-// ══════════════════════════════════════════
-
-func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
+// handleDeviceUpload ingests one captured file from the Android app.
+//
+// This is the one piece of the old bot surface that survived. The bot and the
+// app arrive with the same thing: a document, plus whatever is known about who
+// shared it and when. The difference is that the bot knew the sender for
+// certain and the app usually does not, which is why attribution now travels
+// as a method and a confidence rather than a bare name.
+func (s *Server) handleDeviceUpload(w http.ResponseWriter, r *http.Request) {
 	// CORS
 	origin := r.Header.Get("Origin")
-	if origin == "" { origin = "*" }
+	if origin == "" {
+		origin = "*"
+	}
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Access-Control-Allow-Methods", "POST,OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 	w.Header().Set("Content-Type", "application/json")
-	if r.Method == "OPTIONS" { w.WriteHeader(200); return }
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(200)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
 
 	// 50MB max
 	r.Body = http.MaxBytesReader(w, r.Body, 50<<20)
@@ -665,6 +480,7 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 	subject := r.FormValue("subject")
 	fileSizeStr := r.FormValue("file_size")
 	fileSize, _ := strconv.ParseInt(fileSizeStr, 10, 64)
+	deviceExtractedText := strings.TrimSpace(r.FormValue("extracted_text"))
 
 	// When the message was actually sent, epoch seconds, from the WhatsApp
 	// envelope. Zero when the client did not supply it, in which case the row
@@ -689,7 +505,9 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if fileSize == 0 { fileSize = int64(len(fileBytes)) }
+	if fileSize == 0 {
+		fileSize = int64(len(fileBytes))
+	}
 	log.Printf("📤 Bot upload: %s (%d bytes) from %s (phone=%s)", fileName, len(fileBytes), userName, userPhone)
 
 	// ── Content-hash duplicate detection ──
@@ -707,7 +525,9 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 	sharedByName := userName // preserve original name (pushName from WhatsApp)
 	// For the user record, use pushName if available, otherwise phone
 	userRecordName := userName
-	if userRecordName == "" { userRecordName = userPhone }
+	if userRecordName == "" {
+		userRecordName = userPhone
+	}
 	user, _ := s.store.UpsertUser(userPhone, userRecordName)
 
 	// If shared_by_name is still empty, try to get it from an existing user record
@@ -719,11 +539,30 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The phone is not a person.
+	//
+	// Everything captured on-device uploads under the identity "device", and a
+	// user record gets upserted for it, so the lookup above found a name that
+	// is not a phone number, decided it was human, and stored it as the sender.
+	// Twelve hundred files ended up attributed to somebody called "device",
+	// which then appeared in answers as "(by device)". That is exactly the
+	// failure the confidence threshold exists to prevent: a file whose sender
+	// is unknown must say so, not name a placeholder.
+	if isDeviceIdentity(sharedByName) {
+		sharedByName = ""
+	}
+
 	group, err := s.store.GetGroupByWAID(groupWAID)
-	if err != nil { group, _ = s.store.UpsertGroup(groupWAID, "WhatsApp Group", user.ID) }
-	if group != nil { s.store.AddGroupMember(group.ID, user.ID, userPhone, "member") }
+	if err != nil {
+		group, _ = s.store.UpsertGroup(groupWAID, "WhatsApp Group", user.ID)
+	}
+	if group != nil {
+		s.store.AddGroupMember(group.ID, user.ID, userPhone, "member")
+	}
 	groupID := int64(0)
-	if group != nil { groupID = group.ID }
+	if group != nil {
+		groupID = group.ID
+	}
 
 	// ── Per-group serialization lock ──
 	// Without this, simultaneous uploads of byte-identical files all pass the
@@ -773,43 +612,81 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 	// goroutine. The file shows up in the dashboard as "classifying..." and
 	// updates to the real subject once Gemini responds.
 	if subject == "" {
-		subject = "classifying..."
+		subject = classifyingPlaceholder
 	}
 
 	localID, folderID, _ := s.drive.SmartUpload("", "", user.ID, subject, versionedName, mimeType, fileBytes)
-	// Baileys reports the sender from the WhatsApp envelope, so attribution here
-	// is authoritative. A capture path that infers the sender instead must set a
-	// lower confidence and a method describing how it guessed.
-	attrMethod, attrConfidence := model.AttrBaileys, 1.0
-	if sharedByName == "" && userPhone == "" {
-		attrMethod, attrConfidence = model.AttrNone, 0.0
+	// The device states how it worked out the sender and how far to trust it.
+	// A file on a phone carries no sender, so unlike the old bot path this is a
+	// join result rather than a fact, and the server records it as given rather
+	// than assuming.
+	attrMethod := r.FormValue("attribution_method")
+	attrConfidence, _ := strconv.ParseFloat(r.FormValue("attribution_confidence"), 64)
+	if attrMethod == "" {
+		// No attribution reported means nobody worked out who shared this.
+		//
+		// This used to record AttrBaileys at full confidence whenever a name or
+		// a phone was present, and AttrBaileys specifically means "stated by
+		// the WhatsApp Web protocol, authoritative". A file arriving from the
+		// phone with no attribution has been through no such thing. Combined
+		// with the device placeholder above it minted twelve hundred certain
+		// attributions to a sender that does not exist.
+		if sharedByName == "" || isDeviceIdentity(userPhone) {
+			attrMethod, attrConfidence = model.AttrNone, 0.0
+		} else {
+			// A real name, but nothing said where it came from. Kept, because
+			// the bot and export paths do supply names this way, and held below
+			// the naming threshold so it is never stated as fact.
+			attrMethod, attrConfidence = model.AttrNone, 0.5
+		}
+	}
+	// A client cannot promise more than certainty, and must not be able to talk
+	// the server past its own naming threshold by sending a number out of range.
+	if attrConfidence < 0 {
+		attrConfidence = 0
+	} else if attrConfidence > 1 {
+		attrConfidence = 1
+	}
+	// Withhold a name the confidence does not support, so the same rule holds
+	// whether a row arrived from the app or the dashboard.
+	if attrConfidence < model.AttributionMinNamed {
+		sharedByName = ""
 	}
 
 	dbFile := &model.File{GroupID: groupID, UserID: user.ID, SharedByPhone: userPhone, SharedByName: sharedByName, FileName: versionedName, FileSize: fileSize, MimeType: mimeType, Subject: subject, DriveFileID: localID, DriveFolderID: folderID, Status: "staged", ContentHash: contentHash,
 		PostedAt: postedAt, AttributionMethod: attrMethod, AttributionConfidence: attrConfidence}
 	saved, err := s.store.AddFile(dbFile)
-	if err != nil { log.Printf("❌ DB: %v", err); http.Error(w, `{"error":"db save failed"}`, 500); return }
+	if err != nil {
+		log.Printf("❌ DB: %v", err)
+		http.Error(w, `{"error":"db save failed"}`, 500)
+		return
+	}
 
 	s.drive.SaveLocalFileData(saved.ID, fileBytes)
 	log.Printf("✅ Saved file %d: %s (%d bytes) — staged (classifying async)", saved.ID, fileName, len(fileBytes))
 
 	total := s.store.CountGroupFiles(groupID)
-	v := 1; if saved != nil { v = saved.Version }
+	v := 1
+	if saved != nil {
+		v = saved.Version
+	}
 	reply := s.reyna.AddResponse(fileName, v, total)
 	s.store.LogActivity(groupID, user.ID, "add", "/reyna add "+fileName, "staged")
 
 	// Respond instantly — bot can send checkmark NOW
 	json.NewEncoder(w).Encode(map[string]interface{}{"reply": reply, "file_id": saved.ID, "status": "staged"})
 
-	// ── Background: classify + extract ──
-	go func(fileID int64, gID int64, fName, mime string, fSize int64, data []byte, grp *model.Group) {
+	// ── Background: classify + extract + embed ──
+	go func(fileID int64, gID int64, fName, mime string, fSize int64, data []byte, grp *model.Group, devText string) {
 		classifySubject := ""
 
 		// Build candidate folders
 		seen := map[string]bool{}
 		var existingFolders []string
 		for _, sub := range s.store.DistinctSubjectsForGroup(gID) {
-			if sub == "" || sub == "classifying..." || seen[sub] { continue }
+			if sub == "" || sub == "classifying..." || seen[sub] {
+				continue
+			}
 			seen[sub] = true
 			existingFolders = append(existingFolders, sub)
 		}
@@ -820,7 +697,9 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 				folders, _ := s.drive.ListDriveFolders(token, driveUser.DriveRootID)
 				for _, f := range folders {
 					n := f["name"]
-					if n == "" || seen[n] { continue }
+					if n == "" || seen[n] {
+						continue
+					}
 					seen[n] = true
 					existingFolders = append(existingFolders, n)
 				}
@@ -828,16 +707,29 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 		}
 
 		groupName := ""
-		if grp != nil { groupName = grp.Name }
+		if grp != nil {
+			groupName = grp.Name
+		}
 		fmeta := nlp.FileMeta{
 			SenderName: sharedByName, SenderPhone: userPhone,
 			GroupName: groupName, SharedAt: time.Now(),
 		}
 
 		var extractedContent, contentSummary string
-		if len(data) > 0 && (strings.Contains(mime, "pdf") || nlp.IsOfficeDoc(mime)) {
+		switch {
+		case len(data) > 0 && (strings.Contains(mime, "pdf") || nlp.IsOfficeDoc(mime)):
 			classifySubject, _, _, extractedContent, contentSummary = s.classifier.ClassifyFileWithContent(fName, mime, data, existingFolders, fmeta)
-		} else {
+
+		case strings.HasPrefix(mime, "image/"):
+			// Photographs get a folder without asking a model.
+			//
+			// A model call per image is a call spent deciding that a forwarded
+			// photo belongs in Photos. Multiply that by the several hundred
+			// images a real phone holds and it is the whole daily allowance,
+			// spent before a single document has been read.
+			classifySubject = "Photos"
+
+		default:
 			classifySubject, _, _ = s.classifier.ClassifyFile(fName, existingFolders)
 		}
 
@@ -850,18 +742,41 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 			s.store.UpdateFileSubject(fileID, classifySubject)
 		}
 
-		// Content extraction
+		// Content extraction: prefer on-device extracted text if backend didn't extract any
+		if devText != "" && extractedContent == "" {
+			extractedContent = devText
+			if contentSummary == "" {
+				if len(devText) > 150 {
+					contentSummary = devText[:150] + "..."
+				} else {
+					contentSummary = devText
+				}
+			}
+		}
+
 		if extractedContent != "" {
 			s.store.UpdateFileContent(fileID, extractedContent, contentSummary)
 			log.Printf("[EXTRACT] Combined: %s → %s", fName, contentSummary)
 		} else {
-			content, summary := s.classifier.ExtractContent(fName, mime, fSize, data)
+			content, summary, _ := s.classifier.ExtractContent(fName, mime, fSize, data)
 			if content != "" {
+				extractedContent = content
 				s.store.UpdateFileContent(fileID, content, summary)
 				log.Printf("[EXTRACT] Async: %s → %s", fName, summary)
 			}
 		}
-	}(saved.ID, groupID, fileName, mimeType, fileSize, fileBytes, group)
+
+		// Generate and save 768-dim Gemini vector embedding
+		textToEmbed := fmt.Sprintf("%s. %s. %s", fName, classifySubject, extractedContent)
+		if len(textToEmbed) > 2000 {
+			textToEmbed = textToEmbed[:2000]
+		}
+		if vec, err := s.classifier.Embed(textToEmbed); err == nil && len(vec) == 768 {
+			if err := s.store.SaveFileEmbedding(fileID, vec); err == nil {
+				log.Printf("🧠 [VECTOR] Generated & saved 768-dim embedding for file %d (%s)", fileID, fName)
+			}
+		}
+	}(saved.ID, groupID, fileName, mimeType, fileSize, fileBytes, group, deviceExtractedText)
 }
 
 // ── Waitlist ──
@@ -879,16 +794,25 @@ func (s *Server) handleWaitlist(w http.ResponseWriter, r *http.Request) {
 
 // ── Google OAuth ──
 func (s *Server) handleGoogleAuthStart(w http.ResponseWriter, r *http.Request) {
-	if !s.drive.IsConfigured() { json.NewEncoder(w).Encode(map[string]interface{}{"configured": false}); return }
+	if !s.drive.IsConfigured() {
+		json.NewEncoder(w).Encode(map[string]interface{}{"configured": false})
+		return
+	}
 	state := r.URL.Query().Get("token")
-	if state == "" { http.Error(w, `{"error":"token required"}`, 400); return }
+	if state == "" {
+		http.Error(w, `{"error":"token required"}`, 400)
+		return
+	}
 	json.NewEncoder(w).Encode(map[string]string{"url": s.drive.GetAuthURL(state)})
 }
 
 func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	state := r.URL.Query().Get("state")
-	if code == "" { http.Error(w, "Missing code", 400); return }
+	if code == "" {
+		http.Error(w, "Missing code", 400)
+		return
+	}
 	tokenInfo, email, err := s.drive.ExchangeCode(code)
 	if err != nil {
 		w.Header().Set("Content-Type", "text/html")
@@ -931,30 +855,38 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGoogleStatus(w http.ResponseWriter, r *http.Request) {
 	uid := auth.GetUserID(r)
 	user, _ := s.store.GetUserByID(uid)
-	if user == nil { http.Error(w, `{"error":"not found"}`, 404); return }
+	if user == nil {
+		http.Error(w, `{"error":"not found"}`, 404)
+		return
+	}
 
 	rootName := ""
 	if user.GoogleRefresh != "" && user.DriveRootID != "" {
 		token, err := s.drive.GetValidToken(user.GoogleToken, user.GoogleRefresh, 0)
 		if err == nil {
 			rootName = s.drive.GetFolderName(token, user.DriveRootID)
-			if rootName == "" { rootName = "Reyna" }
+			if rootName == "" {
+				rootName = "Reyna"
+			}
 			// Update token if refreshed
 			s.store.UpdateUserGoogle(uid, user.Email, token, user.GoogleRefresh, user.DriveRootID)
 		}
 	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"connected": user.GoogleRefresh != "",
-		"email": user.Email,
-		"drive_root": user.DriveRootID,
+		"connected":       user.GoogleRefresh != "",
+		"email":           user.Email,
+		"drive_root":      user.DriveRootID,
 		"drive_root_name": rootName,
-		"configured": s.drive.IsConfigured(),
+		"configured":      s.drive.IsConfigured(),
 	})
 }
 
 func (s *Server) handleGoogleConnect(w http.ResponseWriter, r *http.Request) {
-	if !s.drive.IsConfigured() { json.NewEncoder(w).Encode(map[string]interface{}{"configured": false}); return }
+	if !s.drive.IsConfigured() {
+		json.NewEncoder(w).Encode(map[string]interface{}{"configured": false})
+		return
+	}
 	uid := auth.GetUserID(r)
 	token, _ := auth.GenerateToken(uid, s.cfg.JWTSecret)
 	json.NewEncoder(w).Encode(map[string]string{"url": s.drive.GetAuthURL(token)})
@@ -962,7 +894,10 @@ func (s *Server) handleGoogleConnect(w http.ResponseWriter, r *http.Request) {
 
 // ── Google Disconnect ──
 func (s *Server) handleGoogleDisconnect(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
 	uid := auth.GetUserID(r)
 	s.store.ClearUserGoogle(uid)
 	log.Printf("☁️ Google Drive disconnected for user %d", uid)
@@ -971,7 +906,10 @@ func (s *Server) handleGoogleDisconnect(w http.ResponseWriter, r *http.Request) 
 
 // ── File Delete (from DB + Drive) ──
 func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" && r.Method != "DELETE" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
+	if r.Method != "POST" && r.Method != "DELETE" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
 	uid := auth.GetUserID(r)
 	var req struct {
 		FileID  int64   `json:"file_id"`
@@ -983,13 +921,18 @@ func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 	if req.FileID > 0 && len(ids) == 0 {
 		ids = []int64{req.FileID}
 	}
-	if len(ids) == 0 { http.Error(w, `{"error":"file_id(s) required"}`, 400); return }
+	if len(ids) == 0 {
+		http.Error(w, `{"error":"file_id(s) required"}`, 400)
+		return
+	}
 
 	user, _ := s.store.GetUserByID(uid)
 	deleted := 0
 	for _, fid := range ids {
 		file, err := s.store.GetFileByID(fid)
-		if err != nil || file == nil { continue }
+		if err != nil || file == nil {
+			continue
+		}
 
 		// Delete from Drive if connected and has drive ID
 		if user != nil && user.GoogleRefresh != "" && file.DriveFileID != "" && !strings.HasPrefix(file.DriveFileID, "local_") && !strings.HasPrefix(file.DriveFileID, "meta_") {
@@ -1011,7 +954,10 @@ func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 
 // ── Remove Staged Files ──
 func (s *Server) handleRemoveStaged(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
 	var req struct {
 		FileID  int64   `json:"file_id"`
 		FileIDs []int64 `json:"file_ids"`
@@ -1035,16 +981,24 @@ func (s *Server) handleRemoveStaged(w http.ResponseWriter, r *http.Request) {
 	if req.FileID > 0 && len(ids) == 0 {
 		ids = []int64{req.FileID}
 	}
-	if len(ids) == 0 { http.Error(w, `{"error":"file_id(s) required"}`, 400); return }
+	if len(ids) == 0 {
+		http.Error(w, `{"error":"file_id(s) required"}`, 400)
+		return
+	}
 
 	removed, _ := s.store.DeleteStagedFiles(ids)
 	json.NewEncoder(w).Encode(map[string]interface{}{"removed": removed})
 }
 
 // ── Commit Staged Files (from dashboard) ──
-func (s *Server) handleCommitStaged(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
-	uid := auth.GetUserID(r)
+// commitStagedForUser pushes everything staged in the user's groups into their
+// Drive and reports what moved.
+//
+// Extracted from the dashboard handler so the phone can trigger the same push.
+// Waiting up to a day to find out whether your files reached Drive is not a
+// state a user should be left in, and duplicating the logic per caller is how
+// the two drift apart.
+func (s *Server) commitStagedForUser(uid int64) (committed int64, uploaded int) {
 
 	gids := s.store.GetUserGroupIDs(uid)
 	totalCommitted := int64(0)
@@ -1052,31 +1006,16 @@ func (s *Server) handleCommitStaged(w http.ResponseWriter, r *http.Request) {
 
 	for _, gid := range gids {
 		staged, _ := s.store.GetStagedFiles(gid)
-		if len(staged) == 0 { continue }
-
-		// Give async classification a brief grace window (up to 2.5s) to resolve
-		deadline := time.Now().Add(2500 * time.Millisecond)
-		for time.Now().Before(deadline) {
-			hasPending := false
-			for _, f := range staged {
-				if f.Subject == "classifying..." {
-					hasPending = true
-					break
-				}
-			}
-			if !hasPending {
-				break
-			}
-			time.Sleep(200 * time.Millisecond)
-			staged, _ = s.store.GetStagedFiles(gid)
+		if len(staged) == 0 {
+			continue
 		}
 
 		driveUser := s.store.FindDriveConnectedUser(gid)
 		canUpload := driveUser != nil && driveUser.GoogleRefresh != "" && s.drive.IsConfigured() && driveUser.DriveRootID != "" && !strings.HasPrefix(driveUser.DriveRootID, "local_")
 
-		log.Printf("[DASHBOARD-COMMIT] group=%d staged=%d driveUser=%v canUpload=%v", gid, len(staged), driveUser != nil, canUpload)
+		log.Printf("[COMMIT] group=%d staged=%d driveUser=%v canUpload=%v", gid, len(staged), driveUser != nil, canUpload)
 		if driveUser != nil {
-			log.Printf("[DASHBOARD-COMMIT] driveUser=%s root=%s hasRefresh=%v", driveUser.Email, driveUser.DriveRootID, driveUser.GoogleRefresh != "")
+			log.Printf("[COMMIT] driveUser=%s root=%s hasRefresh=%v", driveUser.Email, driveUser.DriveRootID, driveUser.GoogleRefresh != "")
 		}
 
 		if canUpload {
@@ -1087,19 +1026,48 @@ func (s *Server) handleCommitStaged(w http.ResponseWriter, r *http.Request) {
 				sem := make(chan struct{}, 10)
 				var uploadMu sync.Mutex
 				var wg sync.WaitGroup
+				// Subject folders are resolved before the uploads start, one at
+				// a time. Doing it inside the goroutines meant every file with
+				// the same subject asked "does this folder exist?" at the same
+				// moment, all got told no, and all created one: six files
+				// committed together produced four separate folders named
+				// Notes. Creating them up front makes each subject exactly one
+				// folder, and costs one round trip per subject rather than one
+				// per file.
+				folderIDs := make(map[string]string, len(staged))
+				for _, f := range staged {
+					if f.Subject == "classifying..." {
+						continue
+					}
+					if _, done := folderIDs[f.Subject]; done {
+						continue
+					}
+					if id, ferr := s.drive.EnsureSubjectFolder(token, driveUser.DriveRootID, f.Subject); ferr == nil {
+						folderIDs[f.Subject] = id
+					}
+				}
+
 				for _, f := range staged {
 					// Skip files still being classified
-					if f.Subject == "classifying..." { continue }
+					if f.Subject == "classifying..." {
+						continue
+					}
 					wg.Add(1)
 					go func(f model.File) {
 						defer wg.Done()
 						sem <- struct{}{}
 						defer func() { <-sem }()
-						folderID, ferr := s.drive.EnsureSubjectFolder(token, driveUser.DriveRootID, f.Subject)
-						if ferr != nil { return }
+						folderID, ok := folderIDs[f.Subject]
+						if !ok {
+							return
+						}
 						fileData, _ := s.drive.GetLocalFileData(f.ID)
-						if len(fileData) == 0 { fileData, _ = s.drive.GetFileFromLocalStore(f.UserID, f.Subject, f.FileName) }
-						if len(fileData) == 0 { return }
+						if len(fileData) == 0 {
+							fileData, _ = s.drive.GetFileFromLocalStore(f.UserID, f.Subject, f.FileName)
+						}
+						if len(fileData) == 0 {
+							return
+						}
 						driveID, uerr := s.drive.UploadFileToDrive(token, folderID, f.FileName, f.MimeType, fileData)
 						if uerr == nil && driveID != "" {
 							s.store.UpdateFileDriveID(f.ID, driveID, folderID)
@@ -1119,10 +1087,19 @@ func (s *Server) handleCommitStaged(w http.ResponseWriter, r *http.Request) {
 		totalCommitted += count
 	}
 
-	log.Printf("[DASHBOARD-COMMIT] user=%d committed=%d uploaded=%d", uid, totalCommitted, totalUploaded)
+	log.Printf("[COMMIT] user=%d committed=%d uploaded=%d", uid, totalCommitted, totalUploaded)
+	return totalCommitted, totalUploaded
+}
+
+func (s *Server) handleCommitStaged(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
+	committed, uploaded := s.commitStagedForUser(auth.GetUserID(r))
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"committed": totalCommitted,
-		"uploaded":  totalUploaded,
+		"committed": committed,
+		"uploaded":  uploaded,
 	})
 }
 
@@ -1130,10 +1107,15 @@ func (s *Server) handleCommitStaged(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSuggestFiles(w http.ResponseWriter, r *http.Request) {
 	uid := auth.GetUserID(r)
 	q := r.URL.Query().Get("q")
-	if q == "" { json.NewEncoder(w).Encode([]string{}); return }
+	if q == "" {
+		json.NewEncoder(w).Encode([]string{})
+		return
+	}
 	gids := s.store.GetUserGroupIDs(uid)
 	names := s.store.SuggestFiles(gids, q, 10)
-	if names == nil { names = []string{} }
+	if names == nil {
+		names = []string{}
+	}
 	json.NewEncoder(w).Encode(names)
 }
 
@@ -1141,14 +1123,20 @@ func (s *Server) handleSuggestFiles(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSearchFiles(w http.ResponseWriter, r *http.Request) {
 	uid := auth.GetUserID(r)
 	q := r.URL.Query().Get("q")
-	if q == "" { http.Error(w, `{"error":"q required"}`, 400); return }
+	if q == "" {
+		http.Error(w, `{"error":"q required"}`, 400)
+		return
+	}
 
 	gids := s.store.GetUserGroupIDs(uid)
 
 	// Check for /content: prefix for content search
 	if strings.HasPrefix(q, "/content:") {
 		contentQuery := strings.TrimSpace(strings.TrimPrefix(q, "/content:"))
-		if contentQuery == "" { json.NewEncoder(w).Encode([]model.File{}); return }
+		if contentQuery == "" {
+			json.NewEncoder(w).Encode([]model.File{})
+			return
+		}
 		// Search inside file contents from local storage
 		var matches []model.File
 		for _, gid := range gids {
@@ -1166,14 +1154,18 @@ func (s *Server) handleSearchFiles(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		if matches == nil { matches = []model.File{} }
+		if matches == nil {
+			matches = []model.File{}
+		}
 		json.NewEncoder(w).Encode(matches)
 		return
 	}
 
 	// Strict filename search
 	files, _ := s.store.FindFilesStrict(gids, q, 20)
-	if files == nil { files = []model.File{} }
+	if files == nil {
+		files = []model.File{}
+	}
 	json.NewEncoder(w).Encode(files)
 }
 
@@ -1182,10 +1174,16 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 	uid := auth.GetUserID(r)
 	fidStr := r.URL.Query().Get("file_id")
 	fid, _ := strconv.ParseInt(fidStr, 10, 64)
-	if fid == 0 { http.Error(w, `{"error":"file_id required"}`, 400); return }
+	if fid == 0 {
+		http.Error(w, `{"error":"file_id required"}`, 400)
+		return
+	}
 
 	file, err := s.store.GetFileByID(fid)
-	if err != nil || file == nil { http.Error(w, `{"error":"file not found"}`, 404); return }
+	if err != nil || file == nil {
+		http.Error(w, `{"error":"file not found"}`, 404)
+		return
+	}
 
 	// Try local data first
 	data, err := s.drive.GetLocalFileData(fid)
@@ -1216,7 +1214,9 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mimeType := file.MimeType
-	if mimeType == "" { mimeType = "application/octet-stream" }
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
 	w.Header().Set("Content-Type", mimeType)
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, file.FileName))
 	w.Header().Del("Access-Control-Allow-Headers") // Let browser handle content type
@@ -1228,7 +1228,10 @@ func (s *Server) handleFileExists(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("name")
 	gidStr := r.URL.Query().Get("group_id")
 	gid, _ := strconv.ParseInt(gidStr, 10, 64)
-	if name == "" { http.Error(w, `{"error":"name required"}`, 400); return }
+	if name == "" {
+		http.Error(w, `{"error":"name required"}`, 400)
+		return
+	}
 	file, exists := s.store.FileExistsInGroup(gid, name)
 	resp := map[string]interface{}{"exists": exists}
 	if exists && file != nil {
@@ -1241,16 +1244,29 @@ func (s *Server) handleFileExists(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDriveFolders(w http.ResponseWriter, r *http.Request) {
 	uid := auth.GetUserID(r)
 	user, _ := s.store.GetUserByID(uid)
-	if user == nil || user.GoogleRefresh == "" { json.NewEncoder(w).Encode([]interface{}{}); return }
+	if user == nil || user.GoogleRefresh == "" {
+		json.NewEncoder(w).Encode([]interface{}{})
+		return
+	}
 	token, err := s.drive.GetValidToken(user.GoogleToken, user.GoogleRefresh, 0)
-	if err != nil { json.NewEncoder(w).Encode([]interface{}{}); return }
+	if err != nil {
+		json.NewEncoder(w).Encode([]interface{}{})
+		return
+	}
 
 	parentID := r.URL.Query().Get("parent_id")
-	if parentID == "" { parentID = user.DriveRootID }
-	if parentID == "" { json.NewEncoder(w).Encode([]interface{}{}); return }
+	if parentID == "" {
+		parentID = user.DriveRootID
+	}
+	if parentID == "" {
+		json.NewEncoder(w).Encode([]interface{}{})
+		return
+	}
 
 	folders, _ := s.drive.ListDriveFolders(token, parentID)
-	if folders == nil { folders = []map[string]string{} }
+	if folders == nil {
+		folders = []map[string]string{}
+	}
 	json.NewEncoder(w).Encode(folders)
 }
 
@@ -1269,7 +1285,9 @@ func (s *Server) handleDriveTree(w http.ResponseWriter, r *http.Request) {
 	}
 
 	parentID := r.URL.Query().Get("parent_id")
-	if parentID == "" { parentID = user.DriveRootID }
+	if parentID == "" {
+		parentID = user.DriveRootID
+	}
 	if parentID == "" {
 		// No root set — return empty
 		json.NewEncoder(w).Encode(map[string]interface{}{"folders": []interface{}{}, "files": []interface{}{}, "root_name": "", "parent_id": "", "no_root": true})
@@ -1280,8 +1298,12 @@ func (s *Server) handleDriveTree(w http.ResponseWriter, r *http.Request) {
 
 	folders, _ := s.drive.ListDriveFolders(token, parentID)
 	files, _ := s.drive.ListDriveFiles(token, parentID)
-	if folders == nil { folders = []map[string]string{} }
-	if files == nil { files = []map[string]interface{}{} }
+	if folders == nil {
+		folders = []map[string]string{}
+	}
+	if files == nil {
+		files = []map[string]interface{}{}
+	}
 
 	rootName := ""
 	if parentID == user.DriveRootID {
@@ -1293,16 +1315,25 @@ func (s *Server) handleDriveTree(w http.ResponseWriter, r *http.Request) {
 
 // ── Change Drive Root ──
 func (s *Server) handleDriveRoot(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
 	uid := auth.GetUserID(r)
 	var req struct {
 		FolderID string `json:"folder_id"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
-	if req.FolderID == "" { http.Error(w, `{"error":"folder_id required"}`, 400); return }
+	if req.FolderID == "" {
+		http.Error(w, `{"error":"folder_id required"}`, 400)
+		return
+	}
 
 	user, _ := s.store.GetUserByID(uid)
-	if user == nil { http.Error(w, `{"error":"user not found"}`, 404); return }
+	if user == nil {
+		http.Error(w, `{"error":"user not found"}`, 404)
+		return
+	}
 	s.store.UpdateUserGoogle(uid, user.Email, user.GoogleToken, user.GoogleRefresh, req.FolderID)
 	log.Printf("📁 Drive root changed for user %d to %s", uid, req.FolderID)
 	json.NewEncoder(w).Encode(map[string]interface{}{"updated": true, "drive_root": req.FolderID})
@@ -1312,20 +1343,34 @@ func (s *Server) handleDriveRoot(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDriveRootFolders(w http.ResponseWriter, r *http.Request) {
 	uid := auth.GetUserID(r)
 	user, _ := s.store.GetUserByID(uid)
-	if user == nil || user.GoogleRefresh == "" { json.NewEncoder(w).Encode([]interface{}{}); return }
+	if user == nil || user.GoogleRefresh == "" {
+		json.NewEncoder(w).Encode([]interface{}{})
+		return
+	}
 	token, err := s.drive.GetValidToken(user.GoogleToken, user.GoogleRefresh, 0)
-	if err != nil { json.NewEncoder(w).Encode([]interface{}{}); return }
+	if err != nil {
+		json.NewEncoder(w).Encode([]interface{}{})
+		return
+	}
 	folders, _ := s.drive.ListRootFolders(token)
-	if folders == nil { folders = []map[string]string{} }
+	if folders == nil {
+		folders = []map[string]string{}
+	}
 	json.NewEncoder(w).Encode(folders)
 }
 
 // ── Folder Create (in Drive) ──
 func (s *Server) handleDriveFolderCreate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
 	uid := auth.GetUserID(r)
 	user, _ := s.store.GetUserByID(uid)
-	if user == nil || user.GoogleRefresh == "" { http.Error(w, `{"error":"drive not connected"}`, 400); return }
+	if user == nil || user.GoogleRefresh == "" {
+		http.Error(w, `{"error":"drive not connected"}`, 400)
+		return
+	}
 
 	var req struct {
 		Name     string `json:"name"`
@@ -1333,7 +1378,10 @@ func (s *Server) handleDriveFolderCreate(w http.ResponseWriter, r *http.Request)
 		SetRoot  bool   `json:"set_as_root"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
-	if req.Name == "" { http.Error(w, `{"error":"name required"}`, 400); return }
+	if req.Name == "" {
+		http.Error(w, `{"error":"name required"}`, 400)
+		return
+	}
 
 	token, err := s.drive.GetValidToken(user.GoogleToken, user.GoogleRefresh, 0)
 	if err != nil {
@@ -1354,15 +1402,7 @@ func (s *Server) handleDriveFolderCreate(w http.ResponseWriter, r *http.Request)
 	folderID, err := s.drive.CreateDriveFolder(token, req.Name, parentID)
 	if err != nil {
 		log.Printf("❌ Create folder error: %v", err)
-		errMsg := "failed to create folder"
-		if strings.Contains(err.Error(), "insufficient") || strings.Contains(err.Error(), "PERMISSION_DENIED") || strings.Contains(err.Error(), "SCOPE_INSUFFICIENT") {
-			errMsg = "Google Drive permission not granted. Please disconnect and reconnect Google Drive, and make sure to check the box granting Google Drive file access."
-		} else {
-			errMsg = fmt.Sprintf("failed to create folder: %v", err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": errMsg})
+		http.Error(w, fmt.Sprintf(`{"error":"failed to create folder: %s"}`, err.Error()), 500)
 		return
 	}
 
@@ -1379,20 +1419,32 @@ func (s *Server) handleDriveFolderCreate(w http.ResponseWriter, r *http.Request)
 
 // ── Folder Rename (in Drive) ──
 func (s *Server) handleDriveFolderRename(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
 	uid := auth.GetUserID(r)
 	user, _ := s.store.GetUserByID(uid)
-	if user == nil || user.GoogleRefresh == "" { http.Error(w, `{"error":"drive not connected"}`, 400); return }
+	if user == nil || user.GoogleRefresh == "" {
+		http.Error(w, `{"error":"drive not connected"}`, 400)
+		return
+	}
 
 	var req struct {
 		FolderID string `json:"folder_id"`
 		NewName  string `json:"new_name"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
-	if req.FolderID == "" || req.NewName == "" { http.Error(w, `{"error":"folder_id and new_name required"}`, 400); return }
+	if req.FolderID == "" || req.NewName == "" {
+		http.Error(w, `{"error":"folder_id and new_name required"}`, 400)
+		return
+	}
 
 	token, err := s.drive.GetValidToken(user.GoogleToken, user.GoogleRefresh, 0)
-	if err != nil { http.Error(w, `{"error":"token error"}`, 500); return }
+	if err != nil {
+		http.Error(w, `{"error":"token error"}`, 500)
+		return
+	}
 	s.store.UpdateUserGoogle(uid, user.Email, token, user.GoogleRefresh, user.DriveRootID)
 
 	err = s.drive.RenameDriveFolder(token, req.FolderID, req.NewName)
@@ -1408,19 +1460,31 @@ func (s *Server) handleDriveFolderRename(w http.ResponseWriter, r *http.Request)
 
 // ── Folder Delete (in Drive — moves to trash) ──
 func (s *Server) handleDriveFolderDelete(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
 	uid := auth.GetUserID(r)
 	user, _ := s.store.GetUserByID(uid)
-	if user == nil || user.GoogleRefresh == "" { http.Error(w, `{"error":"drive not connected"}`, 400); return }
+	if user == nil || user.GoogleRefresh == "" {
+		http.Error(w, `{"error":"drive not connected"}`, 400)
+		return
+	}
 
 	var req struct {
 		FolderID string `json:"folder_id"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
-	if req.FolderID == "" { http.Error(w, `{"error":"folder_id required"}`, 400); return }
+	if req.FolderID == "" {
+		http.Error(w, `{"error":"folder_id required"}`, 400)
+		return
+	}
 
 	token, err := s.drive.GetValidToken(user.GoogleToken, user.GoogleRefresh, 0)
-	if err != nil { http.Error(w, `{"error":"token error"}`, 500); return }
+	if err != nil {
+		http.Error(w, `{"error":"token error"}`, 500)
+		return
+	}
 	s.store.UpdateUserGoogle(uid, user.Email, token, user.GoogleRefresh, user.DriveRootID)
 
 	err = s.drive.DeleteFromDrive(token, req.FolderID)
@@ -1524,177 +1588,6 @@ func (s *Server) handleGroupSettings(w http.ResponseWriter, r *http.Request) {
 // BOT REACTION HANDLER (emoji staging)
 // ══════════════════════════════════════════
 
-func (s *Server) handleBotReaction(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Error(w, `{"error":"method not allowed"}`, 405)
-		return
-	}
-
-	var req model.ReactionRequest
-	json.NewDecoder(r.Body).Decode(&req)
-
-	if req.FileName == "" {
-		http.Error(w, `{"error":"file_name required"}`, 400)
-		return
-	}
-
-	user, _ := s.store.UpsertUser(req.UserPhone, req.UserName)
-	group, err := s.store.GetGroupByWAID(req.GroupWAID)
-	if err != nil {
-		group, _ = s.store.UpsertGroup(req.GroupWAID, "WhatsApp Group", user.ID)
-	}
-	if group != nil {
-		s.store.AddGroupMember(group.ID, user.ID, req.UserPhone, "member")
-	}
-	groupID := int64(0)
-	if group != nil {
-		groupID = group.ID
-	}
-
-	// Use NLP to classify the file into a folder
-	var existingFolders []string
-	driveUser := s.store.FindDriveConnectedUser(groupID)
-	if driveUser != nil && driveUser.GoogleRefresh != "" && driveUser.DriveRootID != "" {
-		token, terr := s.drive.GetValidToken(driveUser.GoogleToken, driveUser.GoogleRefresh, 0)
-		if terr == nil {
-			folders, _ := s.drive.ListDriveFolders(token, driveUser.DriveRootID)
-			for _, f := range folders {
-				existingFolders = append(existingFolders, f["name"])
-			}
-		}
-	}
-
-	subject, _, _ := s.classifier.ClassifyFile(req.FileName, existingFolders)
-	log.Printf("[REACTION] File=%s classified as=%s by NLP", req.FileName, subject)
-
-	file := &model.File{
-		GroupID:       groupID,
-		UserID:        user.ID,
-		SharedByPhone: req.UserPhone,
-		SharedByName:  req.UserName,
-		FileName:      req.FileName,
-		FileSize:      req.FileSize,
-		MimeType:      req.MimeType,
-		Subject:       subject,
-		WAMessageID:   req.WAMessageID,
-		Status:        "staged",
-	}
-	saved, _ := s.store.AddFile(file)
-	s.store.LogActivity(groupID, user.ID, "reaction_stage", req.FileName, "staged via "+req.Emoji)
-
-	reply := s.reyna.ReactionStagedResponse(req.FileName)
-	json.NewEncoder(w).Encode(map[string]interface{}{"reply": reply, "file_id": saved.ID, "status": "staged", "subject": subject})
-}
-
-// ── Enabled Groups (for bot allowlist) ──
-func (s *Server) handleEnabledGroups(w http.ResponseWriter, r *http.Request) {
-	ids := s.store.GetAllEnabledGroupWAIDs()
-	if ids == nil {
-		ids = []string{}
-	}
-	json.NewEncoder(w).Encode(map[string]interface{}{"groups": ids})
-}
-
-// handleGroupStates returns enabled, hidden, tracking_mode, and reaction_emoji status for every known group.
-// Used by the bot's state-change watcher to detect dashboard toggles/removes/mode-switches
-// and send appropriate WhatsApp messages.
-func (s *Server) handleGroupStates(w http.ResponseWriter, r *http.Request) {
-	groups, _ := s.store.GetAllGroups()
-	states := make(map[string]map[string]interface{})
-	for _, g := range groups {
-		gs := s.store.GetGroupSettings(g.ID)
-		mode := gs.TrackingMode
-		if mode == "" {
-			mode = "auto"
-		}
-		emoji := gs.ReactionEmoji
-		if emoji == "" {
-			emoji = "📌"
-		}
-		states[g.WAID] = map[string]interface{}{
-			"enabled":        gs.Enabled,
-			"hidden":         gs.Hidden,
-			"tracking_mode":  mode,
-			"reaction_emoji": emoji,
-		}
-	}
-	json.NewEncoder(w).Encode(states)
-}
-
-// ── Sync Group from Bot (auto-registers groups from WhatsApp) ──
-func (s *Server) handleBotSyncGroup(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
-	var req struct {
-		WAID        string `json:"wa_id"`
-		Name        string `json:"name"`
-		MemberCount int    `json:"member_count"`
-	}
-	json.NewDecoder(r.Body).Decode(&req)
-	if req.WAID == "" { http.Error(w, `{"error":"wa_id required"}`, 400); return }
-	// Don't default to "WhatsApp Group" — if the bot couldn't get the name,
-	// keep whatever name the DB already has. Only update if we got a real one.
-
-	// Try to get existing group first, create if not exists
-	group, err := s.store.GetGroupByWAID(req.WAID)
-	if err != nil || group == nil {
-		// Insert directly without foreign key on created_by
-		s.store.InsertGroupRaw(req.WAID, req.Name, req.MemberCount)
-		group, _ = s.store.GetGroupByWAID(req.WAID)
-	}
-
-	if group != nil {
-		// Only update name if we got a real one — never overwrite with empty or placeholder
-		if req.Name != "" && req.Name != "WhatsApp Group" && req.Name != group.Name {
-			s.store.UpdateGroupName(group.ID, req.Name)
-			log.Printf("[SYNC-GROUP] Updated group %d name: %q → %q", group.ID, group.Name, req.Name)
-		}
-		if req.MemberCount > 0 {
-			s.store.UpdateGroupMemberCount(group.ID, req.MemberCount)
-		}
-		// Create group settings with defaults if they don't exist yet.
-		// Do NOT re-enable if the user explicitly disabled the group —
-		// that was overriding the dashboard toggle on every bot sync.
-		gs := s.store.GetGroupSettings(group.ID)
-		if gs.GroupID == 0 || !s.store.GroupSettingsExist(group.ID) {
-			gs.GroupID = group.ID
-			gs.Enabled = true
-			s.store.UpsertGroupSettings(gs)
-			log.Printf("Auto-enabled group %d (%s) via first sync", group.ID, req.Name)
-		}
-	}
-
-	gid := int64(0)
-	if group != nil { gid = group.ID }
-	json.NewEncoder(w).Encode(map[string]interface{}{"synced": true, "group_id": gid})
-}
-
-// ── Known Groups (all groups in DB — for bot preload) ──
-func (s *Server) handleKnownGroups(w http.ResponseWriter, r *http.Request) {
-	groups, _ := s.store.GetAllGroups()
-	var ids []string
-	for _, g := range groups {
-		ids = append(ids, g.WAID)
-	}
-	if ids == nil { ids = []string{} }
-	json.NewEncoder(w).Encode(map[string]interface{}{"groups": ids})
-}
-
-// ── Group Tracking Mode (for bot) ──
-func (s *Server) handleGroupMode(w http.ResponseWriter, r *http.Request) {
-	waID := r.URL.Query().Get("wa_id")
-	if waID == "" {
-		json.NewEncoder(w).Encode(map[string]interface{}{"mode": "auto", "enabled": false})
-		return
-	}
-	enabled := s.store.IsGroupEnabled(waID)
-	mode := s.store.GetGroupTrackingMode(waID)
-	json.NewEncoder(w).Encode(map[string]interface{}{"mode": mode, "enabled": enabled})
-}
-
-// ══════════════════════════════════════════
-// v3: NLP CONVERSATIONAL RETRIEVAL
-// ══════════════════════════════════════════
-
 func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, `{"error":"method not allowed"}`, 405)
@@ -1707,9 +1600,59 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse the natural language query into WHO/WHAT/WHEN/WHY
-	who, what, when, why := s.classifier.ParseNLPQuery(req.Query)
-	log.Printf("[NLP-RETRIEVE] query=%q → who=%q what=%q when=%q why=%q", req.Query, who, what, when, why)
+	lastQuestion.Store(time.Now().Unix())
+
+	// Say what is happening while it happens, when the client asks for it.
+	//
+	// A question can take half a minute: the search is instant, but reading a
+	// document nobody has opened yet is a model call over a phone connection.
+	// For all of that the app showed one fixed line, "Looking through your
+	// files", which says nothing about whether it is nearly done, stuck, or
+	// about to fail, and half a minute of it reads as a hang.
+	//
+	// Progress is streamed as newline-delimited JSON when the client sends
+	// Accept: application/x-ndjson. Clients that do not get exactly what they
+	// got before, so the web app is unaffected.
+	stage := newStageWriter(w, r)
+	defer stage.Close()
+	stage.Send("searching", "Searching your files")
+
+	// Parse the natural language query into WHO/WHAT/WHEN/WHY with conversation history and term expansion
+	parsedQuery := s.classifier.ParseNLPQueryDetailed(req.Query, req.History)
+	who, what, when, why := parsedQuery.Who, parsedQuery.What, parsedQuery.When, parsedQuery.Why
+	// Reyna is the assistant/app name, not a sender person
+	if strings.EqualFold(strings.TrimSpace(who), "reyna") {
+		if what == "" {
+			what = "reyna"
+		} else if !strings.Contains(strings.ToLower(what), "reyna") {
+			what = "reyna " + what
+		}
+		who = ""
+	}
+	log.Printf("[NLP-RETRIEVE] query=%q history_turns=%d → who=%q what=%q when=%q why=%q terms=%v cues=%v",
+		req.Query, len(req.History), who, what, when, why, parsedQuery.SearchTerms, parsedQuery.HasContentCues)
+
+	// ── Small talk gets a reply, not a search ──
+	//
+	// "thanks" was parsed as a topic and searched for, and six unrelated
+	// documents came back as "I found 6 documents matching thanks, and they
+	// are about different things. Which one did you mean?". Saying thank you
+	// should not produce a disambiguation prompt, and it should certainly not
+	// spend a model call or a Drive walk on one.
+	//
+	// Checked before the search, not after. The first attempt at this sat
+	// below the ambiguity branch, which returns, so it never ran at all and
+	// "thanks" still came back asking which of six documents was meant.
+	if len(req.FileIDs) == 0 && (why == "smalltalk" || nlp.IsSmallTalk(req.Query)) {
+		log.Printf("[NLP-RETRIEVE] small talk, answering without searching")
+		stage.Final(model.NLPRetrievalResponse{
+			Status: model.NLPStatusAnswered,
+			Files:  []model.File{},
+			Query:  model.NLPParsedQuery{Who: who, What: what, When: when, Why: why, Raw: req.Query},
+			Reply:  smallTalkReply(req.Query),
+		})
+		return
+	}
 
 	// Resolve time window
 	var sinceTime *time.Time
@@ -1758,59 +1701,380 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 				groupIDs = s.store.GetUserGroupIDs(user.ID)
 			}
 		}
-		// If still empty, search across all available groups
+		// If still empty (e.g. device token or no user-group mapping yet), search all groups in database
 		if len(groupIDs) == 0 {
-			all, _ := s.store.GetAllGroups()
-			for _, grp := range all {
-				groupIDs = append(groupIDs, grp.ID)
+			allGroups, err := s.store.GetAllGroups()
+			if err == nil {
+				for _, g := range allGroups {
+					groupIDs = append(groupIDs, g.ID)
+				}
 			}
 		}
 	}
 	log.Printf("[NLP-RETRIEVE] groupIDs=%v", groupIDs)
 
-	files, _ := s.store.SearchFilesNLP(groupIDs, who, what, sinceTime, 20)
-	if files == nil {
-		files = []model.File{}
-	}
-	// If WHO and WHAT together found nothing, retry on WHO alone before giving
-	// up. This used to pass the same `who` *and* the same filters, so it re-ran
-	// an identical query and could only ever return the same empty result.
-	if len(files) == 0 && who != "" && (what != "" || sinceTime != nil) {
-		if fallback, _ := s.store.SearchFilesNLP(groupIDs, who, "", nil, 20); len(fallback) > 0 {
-			log.Printf("[NLP-RETRIEVE] no hits for who+what; falling back to sender only")
-			files = fallback
+	currentUserName := ""
+	if req.UserPhone != "" && req.UserPhone != "device" {
+		if u, err := s.store.GetUserByPhone(req.UserPhone); err == nil && u.Name != "" && u.Name != "You" {
+			currentUserName = u.Name
 		}
 	}
-	// Still nothing, and the query named a person: the file may be here but
-	// unattributed. Widen to the topic alone rather than reporting absence,
-	// and let the reply say the sender is unknown.
-	if len(files) == 0 && who != "" && what != "" {
-		if fallback, _ := s.store.SearchFilesNLP(groupIDs, "", what, sinceTime, 20); len(fallback) > 0 {
-			log.Printf("[NLP-RETRIEVE] no hits for sender %q; falling back to topic only", who)
-			files = fallback
-		}
+	if currentUserName == "" {
+		currentUserName = s.store.GetPrimaryUserName()
+	}
+	if currentUserName != "" {
+		log.Printf("[NLP-RETRIEVE] resolved user identity name=%q", currentUserName)
 	}
 
-	// Also walk the user's existing Drive folder tree for matches that were
-	// never captured by the bot. This is the fix for "Reyna only sees its own
-	// staging table" — older notes already organised in Drive are now searchable.
-	driveMatches := s.collectDriveContext(groupIDs, what, 25)
-	// If WHO was specified, drop Drive matches that can't be attributed.
+	// A question that answers a previous "which one did you mean" skips the
+	// search entirely. The user has already said which documents they meant.
+	var scored []repository.ScoredFile
+	searchTerms := parsedQuery.SearchTerms
+	var dateTerms []string
+	if when == "tomorrow" {
+		tTomorrow := now.In(istLocation).AddDate(0, 0, 1)
+		dateTerms = []string{
+			tTomorrow.Format("02-Jan"),
+			fmt.Sprintf("%d-Sept", tTomorrow.Day()),
+			fmt.Sprintf("%02d-Sept", tTomorrow.Day()),
+			tTomorrow.Format("02 Jan"),
+			tTomorrow.Format("02 January"),
+			fmt.Sprintf("%d Sept", tTomorrow.Day()),
+			fmt.Sprintf("%d-Sep", tTomorrow.Day()),
+			tTomorrow.Format("02/01"),
+			tTomorrow.Format("02-01"),
+		}
+		searchTerms = append(searchTerms, dateTerms...)
+	} else if when == "today" {
+		tToday := now.In(istLocation)
+		dateTerms = []string{
+			tToday.Format("02-Jan"),
+			fmt.Sprintf("%d-Sept", tToday.Day()),
+			fmt.Sprintf("%02d-Sept", tToday.Day()),
+			tToday.Format("02 Jan"),
+			tToday.Format("02 January"),
+			fmt.Sprintf("%d Sept", tToday.Day()),
+			fmt.Sprintf("%d-Sep", tToday.Day()),
+			tToday.Format("02/01"),
+			tToday.Format("02-01"),
+		}
+		searchTerms = append(searchTerms, dateTerms...)
+	}
+	if len(searchTerms) == 0 && what != "" {
+		searchTerms = []string{what}
+	}
+	searchWhat := strings.Join(searchTerms, " ")
+	if searchWhat == "" {
+		searchWhat = what
+	}
+
+	primaryWhat := what
 	if who != "" {
-		driveMatches = filterDriveMatchesByWho(driveMatches, who)
+		primaryWhat = strings.TrimSpace(primaryWhat + " " + who)
 	}
-	log.Printf("[NLP-RETRIEVE] db_files=%d drive_matches=%d (after metadata pass)", len(files), len(driveMatches))
+	if primaryWhat == "" {
+		primaryWhat = req.Query
+	}
 
-	// ── Deep content retrieval (Fix 3 from earlier) ──
+	if len(req.FileIDs) > 0 {
+		picked, err := s.store.GetFilesByIDs(req.FileIDs)
+		if err == nil {
+			for _, f := range picked {
+				scored = append(scored, repository.ScoredFile{File: f, Coverage: 1, Score: 1000})
+			}
+		}
+		log.Printf("[NLP-RETRIEVE] answering against %d user-chosen file(s)", len(scored))
+	} else {
+		scored, _ = s.store.SearchFilesNLPScoredWithPrimary(groupIDs, who, searchWhat, primaryWhat, sinceTime, 20)
+	}
+	files := scoredFiles(scored)
+	if len(req.FileIDs) == 0 {
+		// Fallback 1: If time window was set and returned nothing, retry without time window
+		if len(scored) == 0 && sinceTime != nil {
+			if fb, _ := s.store.SearchFilesNLPScoredWithPrimary(groupIDs, who, searchWhat, primaryWhat, nil, 20); len(fb) > 0 {
+				log.Printf("[NLP-RETRIEVE] no hits with time window; falling back without time filter")
+				scored = fb
+			}
+		}
+		// Fallback 2: If WHO and WHAT together found nothing, retry on WHO alone
+		if len(scored) == 0 && who != "" && (searchWhat != "" || sinceTime != nil) {
+			if fb, _ := s.store.SearchFilesNLPScoredWithPrimary(groupIDs, who, "", "", nil, 20); len(fb) > 0 {
+				log.Printf("[NLP-RETRIEVE] no hits for who+what; falling back to sender only")
+				scored = fb
+			}
+		}
+		// Fallback 3: If still nothing and WHO was specified, retry on WHAT alone without time filter
+		if len(scored) == 0 && who != "" && searchWhat != "" {
+			if fb, _ := s.store.SearchFilesNLPScoredWithPrimary(groupIDs, "", searchWhat, primaryWhat, nil, 20); len(fb) > 0 {
+				log.Printf("[NLP-RETRIEVE] no hits for sender %q; falling back to topic only", who)
+				scored = fb
+			}
+		}
+		// Fallback 4: If WHO was specified and WHAT was empty (or both failed), retry searching WHO as WHAT
+		if len(scored) == 0 && who != "" {
+			if fb, _ := s.store.SearchFilesNLPScoredWithPrimary(groupIDs, "", who, who, nil, 20); len(fb) > 0 {
+				log.Printf("[NLP-RETRIEVE] no hits for sender %q; trying sender as topic", who)
+				scored = fb
+			}
+		}
+		files = scoredFiles(scored)
+
+		// If explicit relative calendar time was requested (today/tomorrow), search specifically
+		// for files matching the raw date tokens inside their text, and boost them to the top.
+		if len(dateTerms) > 0 {
+			if dateFiles, err := s.store.SearchFilesByRawDateTokens(groupIDs, dateTerms, 10); err == nil && len(dateFiles) > 0 {
+				log.Printf("[NLP-RETRIEVE] found %d file(s) matching raw date tokens %v", len(dateFiles), dateTerms)
+				existing := make(map[int64]bool)
+				for _, sf := range scored {
+					existing[sf.ID] = true
+				}
+				var dateScored []repository.ScoredFile
+				for _, df := range dateFiles {
+					if !existing[df.ID] {
+						dateScored = append(dateScored, repository.ScoredFile{File: df, Coverage: 1.0, Score: 200})
+					} else {
+						for i := range scored {
+							if scored[i].ID == df.ID {
+								scored[i].Score += 200
+								scored[i].Coverage = 1.0
+							}
+						}
+					}
+				}
+				scored = append(dateScored, scored...)
+				sort.SliceStable(scored, func(i, j int) bool {
+					return scored[i].Score > scored[j].Score
+				})
+			}
+		}
+		files = scoredFiles(scored)
+
+		// ── Dense Vector Semantic Search & Hybrid Reranking (Gemini 768-dim embeddings) ──
+		queryForEmbed := req.Query
+		if queryForEmbed == "" {
+			queryForEmbed = what
+		}
+		if queryForEmbed != "" {
+			if queryVec, err := s.classifier.Embed(queryForEmbed); err == nil && len(queryVec) == 768 {
+				fileEmbeddings, _ := s.store.GetAllEmbeddings(groupIDs)
+				if fileEmbeddings == nil {
+					fileEmbeddings = make(map[int64][]float32)
+				}
+				// Lazily embed top candidates that have text but no embedding yet
+				for _, sf := range scored {
+					if _, has := fileEmbeddings[sf.ID]; !has {
+						if content := s.store.GetFileContentWithSummary([]int64{sf.ID})[sf.ID]; content != "" && content != repository.UnreadableSentinel {
+							textToEmbed := fmt.Sprintf("%s. %s. %s", sf.FileName, sf.Subject, content)
+							if len(textToEmbed) > 2000 {
+								textToEmbed = textToEmbed[:2000]
+							}
+							if vec, err := s.classifier.Embed(textToEmbed); err == nil && len(vec) == 768 {
+								_ = s.store.SaveFileEmbedding(sf.ID, vec)
+								fileEmbeddings[sf.ID] = vec
+								log.Printf("🧠 [VECTOR] Indexed embedding for %s (%d)", sf.FileName, sf.ID)
+							}
+						}
+					}
+					if len(fileEmbeddings) >= 5 {
+						break
+					}
+				}
+
+				if len(fileEmbeddings) > 0 {
+					scoredMap := make(map[int64]int)
+					for idx, sf := range scored {
+						scoredMap[sf.ID] = idx
+					}
+					type vectorCandidate struct {
+						id  int64
+						sim float64
+					}
+					var vectorCandidates []vectorCandidate
+					for fID, fVec := range fileEmbeddings {
+						sim := relevance.CosineSimilarity(queryVec, fVec)
+						if idx, exists := scoredMap[fID]; exists {
+							// Boost existing lexical match with dense semantic similarity
+							scored[idx].Score += sim * 60.0
+							log.Printf("🧠 [VECTOR-HYBRID] file %d (%s) lexical+dense boost (sim=%.3f, new_score=%.1f)", fID, scored[idx].FileName, sim, scored[idx].Score)
+						} else if sim >= 0.53 {
+							// Dense semantic match not captured by pure keyword search
+							vectorCandidates = append(vectorCandidates, vectorCandidate{id: fID, sim: sim})
+						}
+					}
+					if len(vectorCandidates) > 0 {
+						sort.Slice(vectorCandidates, func(i, j int) bool {
+							return vectorCandidates[i].sim > vectorCandidates[j].sim
+						})
+						if len(vectorCandidates) > 8 {
+							vectorCandidates = vectorCandidates[:8]
+						}
+						var extraIDs []int64
+						simMap := make(map[int64]float64, len(vectorCandidates))
+						for _, vc := range vectorCandidates {
+							extraIDs = append(extraIDs, vc.id)
+							simMap[vc.id] = vc.sim
+						}
+						if extraFiles, err := s.store.GetFilesByIDs(extraIDs); err == nil {
+							tokens := repository.TokenizeWhat(searchWhat)
+							primaryTokens := repository.TokenizeWhat(primaryWhat)
+							summaries := s.store.GetFileContentSummaries(extraIDs)
+							contents := s.store.GetFileExtractedContent(extraIDs)
+							for _, ef := range extraFiles {
+								sim := simMap[ef.ID]
+								r := relevance.ScoredWithPrimary(ef.FileName, ef.Subject+" "+ef.Tags, summaries[ef.ID], contents[ef.ID], tokens, primaryTokens)
+								finalScore := float64(sim) * 60.0
+								finalCoverage := 0.0
+								if r.Matched > 0 {
+									finalScore += r.Score
+									finalCoverage = r.Coverage
+								}
+								scored = append(scored, repository.ScoredFile{
+									File:     ef,
+									Score:    finalScore,
+									Coverage: finalCoverage,
+									Adjacent: r.Adjacent,
+								})
+								log.Printf("🧠 [VECTOR-SEMANTIC-RETRIEVE] retrieved file %d (%s) via dense cosine similarity=%.3f (score=%.1f, cov=%.2f)", ef.ID, ef.FileName, sim, finalScore, finalCoverage)
+							}
+						}
+					}
+					sort.SliceStable(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
+					files = scoredFiles(scored)
+				}
+			}
+		}
+	}
+
+	readNow := 0
+
+	// ── Dual Intent: Fetch vs Answer (Slide 5) ──
+	// Say "fetch" and it shows top 3 matching files as chips; otherwise answers silently using those files as context.
+	isFetch := why == "fetch" ||
+		strings.HasPrefix(strings.ToLower(strings.TrimSpace(req.Query)), "fetch") ||
+		strings.HasPrefix(strings.ToLower(strings.TrimSpace(req.Query)), "get file") ||
+		strings.HasPrefix(strings.ToLower(strings.TrimSpace(req.Query)), "get files")
+
+	if isFetch {
+		log.Printf("[NLP-RETRIEVE] Intent is FETCH — returning top 3 file chips directly")
+
+		// If query is a follow-up pronoun query ("fetch it", "send that", "get it"), resolve from immediate history
+		lowerQ := strings.ToLower(strings.TrimSpace(req.Query))
+		isFollowup := lowerQ == "fetch it" || lowerQ == "fetch" || lowerQ == "send it" || lowerQ == "get it" ||
+			lowerQ == "download it" || strings.Contains(lowerQ, "fetch that") || strings.Contains(lowerQ, "send that")
+		if isFollowup && len(req.History) > 0 {
+			for i := len(req.History) - 1; i >= 0; i-- {
+				h := req.History[i]
+				if h.Role == "assistant" && (len(h.FileIDs) > 0 || len(h.FileNames) > 0) {
+					var prevFiles []model.File
+					if len(h.FileIDs) > 0 {
+						prevFiles, _ = s.store.GetFilesByIDs(h.FileIDs)
+					} else if len(h.FileNames) > 0 {
+						for _, fn := range h.FileNames {
+							if foundFiles, _ := s.store.FindFilesStrict(groupIDs, fn, 1); len(foundFiles) > 0 {
+								prevFiles = append(prevFiles, foundFiles[0])
+							}
+						}
+					}
+					if len(prevFiles) > 0 {
+						log.Printf("[NLP-RETRIEVE] FETCH follow-up resolved to %d file(s) from previous turn: %v", len(prevFiles), h.FileNames)
+						files = prevFiles
+						break
+					}
+				}
+			}
+		}
+
+		topFiles := files
+		if len(topFiles) > 3 {
+			topFiles = topFiles[:3]
+		}
+		replyText := "Here are the top files matching your request:"
+		if len(topFiles) == 0 {
+			replyText = "I couldn't find any files matching your fetch request."
+		}
+		stage.Final(model.NLPRetrievalResponse{
+			Status:       model.NLPStatusAnswered,
+			Files:        topFiles,
+			DriveMatches: nil,
+			Query:        model.NLPParsedQuery{Who: who, What: what, When: when, Why: why, Raw: req.Query},
+			Reply:        replyText,
+			Citations:    nil,
+		})
+		return
+	}
+
+	// ── Ask, when there is genuinely no way to tell which document was meant ──
+	//
+	// Skipped completely for factual/QA questions: Gemini resolves direction and answers directly.
+	// Only offer choice when user asked to retrieve/find a document by topic and multiple leaders match.
+	if len(req.FileIDs) == 0 && why != "qa" && !isFactualQuestion(req.Query) {
+		if cands := s.ambiguousCandidates(scored); len(cands) > 0 {
+			log.Printf("[NLP-RETRIEVE] ambiguous: offering %d candidates", len(cands))
+			stage.Final(model.NLPRetrievalResponse{
+				Status:     model.NLPStatusNeedsChoice,
+				Files:      files,
+				Query:      model.NLPParsedQuery{Who: who, What: what, When: when, Why: why, Raw: req.Query},
+				Reply:      ambiguityPrompt(what, len(cands)),
+				Candidates: cands,
+			})
+			return
+		}
+	}
+
+	// ── Out of allowance: say so, and stop ──
+	//
+	// On a free tier of roughly sixty model calls a day this is a state the
+	// user genuinely reaches, most often in the evening, and it is not
+	// recoverable by anything they can do. Everything below this point exists
+	// to produce an answer, and without a model there is no answer to produce:
+	// the Drive walk alone costs twenty seconds and the document reads cost
+	// more, all of it spent arriving at the same admission.
+	//
+	// So admit it immediately. The files that matched are still attached, so
+	// the sources button opens them and the documents are still reachable; the
+	// reply itself just says what happened and when it clears, because a
+	// filename list dressed up as a reply is not an answer and reads as one.
+	if until, spent := s.classifier.OutOfAllowanceUntil(); spent {
+		log.Printf("[NLP-RETRIEVE] out of allowance until %s; answering without a model", until.Format(time.RFC1123))
+		stage.Final(model.NLPRetrievalResponse{
+			Status:    model.NLPStatusAnswered,
+			Files:     files,
+			Query:     model.NLPParsedQuery{Who: who, What: what, When: when, Why: why, Raw: req.Query},
+			Reply:     outOfAllowanceReply(until, len(files)),
+			Notice:    model.NoticeOutOfAllowance,
+			Citations: nil,
+		})
+		return
+	}
+
+	// ── Read anything that matched locally but has never been read ──
+	//
+	// A file reaches the server long before anybody reads it: extraction is a
+	// model call, the allowance is small, and the background worker crawls the
+	// library slowly. So the ordinary case is a document whose *name* plainly
+	// answers the question sitting in the results with nothing inside it, and
+	// an answer that says "I have no information about module 4" while the
+	// search screen lists a file called "Module 4".
+	//
+	// Read them now, at the moment someone is asking, and keep what is read.
+	readNow += s.ensureContent(files, onDemandReads, time.Now().Add(onDemandBudget), stage)
+	if readNow > 0 {
+		log.Printf("[NLP-RETRIEVE] read %d file(s) on demand", readNow)
+	}
+
+	// ── Deep content retrieval ──
 	// If metadata search returned nothing, OR the query has specific content
 	// cues that metadata can't catch ("the diagram with R1 R2", "the page
 	// mentioning Wien bridge"), send candidate PDFs to Gemini and ask which
 	// ones actually match. Cost: ~₹0.05 per candidate, capped at 5.
-	if len(files) == 0 || hasContentCues(req.Query) {
+	// Skipped when the top matches already have text, including text read a
+	// moment ago.
+	hasCues := parsedQuery.HasContentCues || hasContentCues(req.Query)
+	if len(files) == 0 || (hasCues && readNow == 0 && !topFilesRead(s, files)) {
 		log.Printf("[NLP-RETRIEVE] triggering deep content retrieval")
-		deepHits := s.deepContentRetrieve(groupIDs, req.Query, who, sinceTime, 5)
+		stage.Send("searching", "Looking inside your documents")
+		deepHits := s.deepContentRetrieve(groupIDs, req.Query, who, searchWhat, sinceTime, 5)
 		if len(deepHits) > 0 {
-			// Merge: deep hits take priority, then add metadata hits not already present
 			seen := map[int64]bool{}
 			merged := make([]model.File, 0, len(deepHits)+len(files))
 			for _, f := range deepHits {
@@ -1830,53 +2094,477 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	for i := range files {
-		if files[i].ContentSummary == "" {
-			_, files[i].ContentSummary = s.store.GetFileContent(files[i].ID)
+	buildDBView := func(fList []model.File) []nlp.RetrievalFile {
+		view := make([]nlp.RetrievalFile, 0, len(fList))
+		fIDs := make([]int64, 0, len(fList))
+		for _, f := range fList {
+			fIDs = append(fIDs, f.ID)
 		}
+		contentMap := s.store.GetFileContentWithSummary(fIDs)
+		for _, f := range fList {
+			sender := ""
+			if f.SenderKnown() {
+				sender = f.SharedByName
+			}
+			view = append(view, nlp.RetrievalFile{
+				ID:       f.ID,
+				Name:     f.FileName,
+				Folder:   f.Subject,
+				Sender:   sender,
+				SharedAt: formatSharedAt(f.SharedAt()),
+				Summary:  contentMap[f.ID],
+			})
+		}
+		return view
 	}
 
-	// Build a conversational LLM-generated reply (multi-language, intent-aware).
-	// We pre-compute the time strings so the LLM can't hallucinate "2 days ago"
-	// when the file was actually shared 2 minutes ago. All times are in IST.
-	dbView := make([]nlp.RetrievalFile, 0, len(files))
+	var driveMatches []model.DriveMatch
+	var sourced nlp.SourcedReply
+	var citations []model.Citation
+
+	// ── 1. Local-First: Answer from local files if available ──
+	if len(files) > 0 {
+		dbView := buildDBView(files)
+		stage.Send("writing", "Writing the answer")
+		sourced = s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, dbView, nil, req.History, currentUserName)
+		citations = s.verifyCitations(sourced.Quotes, files)
+
+		if sourced.Found {
+			// Local files answered the question! Skip Google Drive entirely.
+			if len(files) > maxCitedFiles {
+				files = files[:maxCitedFiles]
+			}
+			log.Printf("[NLP-RETRIEVE] answered locally from %d files (citations=%d); skipping Drive", len(files), len(citations))
+			stage.Final(model.NLPRetrievalResponse{
+				Status:       model.NLPStatusAnswered,
+				Files:        files,
+				DriveMatches: nil,
+				Query:        model.NLPParsedQuery{Who: who, What: what, When: when, Why: why, Raw: req.Query},
+				Reply:        sourced.Answer,
+				Citations:    citations,
+			})
+			return
+		}
+		log.Printf("[NLP-RETRIEVE] local files did not yield positive answer; falling back to Drive")
+	}
+
+	// ── 2. Drive Fallback: Check Drive only if not found locally or local answer was negative ──
+	stage.Send("searching", "Checking your Drive")
+	driveMatches = s.collectDriveContext(groupIDs, searchWhat, 25)
+	if who != "" {
+		driveMatches = filterDriveMatchesByWho(driveMatches, who)
+	}
+	log.Printf("[NLP-RETRIEVE] drive fallback: db_files=%d drive_matches=%d", len(files), len(driveMatches))
+
+	if len(driveMatches) > 0 {
+		dbView := buildDBView(files)
+		driveView := make([]nlp.RetrievalFile, 0, len(driveMatches))
+		for _, m := range driveMatches {
+			shared := ""
+			if !m.SharedAt.IsZero() {
+				shared = formatSharedAt(m.SharedAt)
+			}
+			driveView = append(driveView, nlp.RetrievalFile{
+				Name:     m.FileName,
+				Folder:   m.FolderName,
+				Sender:   m.SenderName,
+				SharedAt: shared,
+			})
+		}
+		stage.Send("writing", "Writing the answer")
+		sourced = s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, dbView, driveView, req.History, currentUserName)
+		citations = s.verifyCitations(sourced.Quotes, files)
+	} else if len(files) == 0 {
+		stage.Send("writing", "Writing the answer")
+		sourced = s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, nil, nil, req.History, currentUserName)
+	}
+
+	if !sourced.Found {
+		files = nil
+		citations = nil
+	}
+
+	if len(files) > maxCitedFiles {
+		files = files[:maxCitedFiles]
+	}
+	stage.Final(model.NLPRetrievalResponse{
+		Status:       model.NLPStatusAnswered,
+		Files:        files,
+		DriveMatches: driveMatches,
+		Query:        model.NLPParsedQuery{Who: who, What: what, When: when, Why: why, Raw: req.Query},
+		Reply:        sourced.Answer,
+		Citations:    citations,
+	})
+}
+
+// smallTalkReply answers a greeting without pretending to have searched.
+func smallTalkReply(query string) string {
+	q := strings.ToLower(query)
+	switch {
+	case strings.Contains(q, "thank") || strings.Contains(q, "thx") ||
+		strings.Contains(q, "ty") || strings.Contains(q, "cheers") ||
+		strings.Contains(q, "dhanyawad") || strings.Contains(q, "dhanyavad") ||
+		strings.Contains(q, "shukriya") || strings.Contains(q, "धन्यवाद") ||
+		strings.Contains(q, "शुक्रिया"):
+		return "Any time! / आपका स्वागत है!"
+	case strings.Contains(q, "bye") || strings.Contains(q, "cya") ||
+		strings.Contains(q, "night") || strings.Contains(q, "alvida"):
+		return "See you! / फिर मिलेंगे!"
+	case strings.Contains(q, "ok") || strings.Contains(q, "cool") ||
+		strings.Contains(q, "nice") || strings.Contains(q, "great") ||
+		strings.Contains(q, "theek"):
+		return "Whenever you need something, just ask."
+	default:
+		return "Hello! Ask me about anything that has come through your chats."
+	}
+}
+
+// outOfAllowanceReply is what Reyna says when it has no model calls left.
+//
+// Plain, short, and about the situation rather than about the files. An
+// earlier version named the closest matches and explained itself over three
+// sentences, which still read as an attempt at an answer and so still felt
+// like being fobbed off. What the user needs is the fact and the time it
+// clears; the files are one tap away under the sources button either way.
+func outOfAllowanceReply(until time.Time, matched int) string {
+	when := "later today"
+	if !until.IsZero() {
+		local := until.In(istLocation)
+		if local.YearDay() == time.Now().In(istLocation).YearDay() {
+			when = "around " + local.Format("3:04 pm")
+		} else {
+			when = "around " + local.Format("3:04 pm") + " tomorrow"
+		}
+	}
+	// Nothing is cited on this path, because nothing was read, so the reply
+	// must not point at a sources button that will not be there. Saying the
+	// documents are safe and still findable is the part that is true and the
+	// part the user actually wants to know.
+	_ = matched
+	return "I have used up today's reading allowance, so I cannot answer questions until it resets " +
+		when + ". Your documents are all still here, and Search still finds them by name."
+}
+
+// scoredFiles drops the scores, for the places that only need the files.
+func scoredFiles(scored []repository.ScoredFile) []model.File {
+	out := make([]model.File, 0, len(scored))
+	for _, sf := range scored {
+		out = append(out, sf.File)
+	}
+	return out
+}
+
+// fileIDs is the ids of these files, in order.
+func fileIDs(files []model.File) []int64 {
+	out := make([]int64, 0, len(files))
 	for _, f := range files {
-		// Withhold the sender unless attribution is strong enough to state it,
-		// and time the file by when it was posted rather than when we inserted
-		// the row.
+		out = append(out, f.ID)
+	}
+	return out
+}
+
+// ambiguityMargin is how close the runner-up has to be before Reyna stops
+// guessing and asks.
+//
+// Expressed as a fraction of the leader's score. Ranking already separates
+// "Module 1" from "Module4_part1" by a wide margin, so a genuine winner clears
+// this easily and the user is never interrupted for a question that had one
+// obvious answer. What it catches is the case the ranking honestly cannot
+// decide: several documents, all called module 1, about entirely different
+// subjects.
+const ambiguityMargin = 0.85
+
+// minCoverageToAsk is how much of the question the best match must account for
+// before a choice is worth offering at all.
+const minCoverageToAsk = 0.6
+
+// maxCandidates bounds the choice offered. A list long enough to scroll is not
+// a choice, it is the search screen with an extra step.
+const maxCandidates = 6
+
+// ambiguousCandidates returns the documents to offer when no one of them can
+// be said to be the answer, or nil when the top match is clear.
+func (s *Server) ambiguousCandidates(scored []repository.ScoredFile) []model.Candidate {
+	if len(scored) < 2 {
+		return nil
+	}
+	top := scored[0]
+	if top.Score <= 0 {
+		return nil
+	}
+	// Only ask when the leader is actually a good answer.
+	//
+	// A choice between several documents is worth making when they all answer
+	// the question and only one was meant. When the best of them accounts for
+	// a third of what was asked, they are not equally good answers, they are
+	// equally bad ones, and offering them as a choice asks the user to pick
+	// between six documents that are all wrong. "I meant to just greet you"
+	// produced exactly that: coverage 0.33, six candidates, none of them
+	// remotely relevant.
+	if top.Coverage < minCoverageToAsk {
+		return nil
+	}
+	// Only rivals that matched the question just as completely count. A file
+	// that covers less of what was asked is not a rival, it is a worse match,
+	// and the ranking is entitled to prefer the better one without asking.
+	var rivals []repository.ScoredFile
+	for _, sf := range scored {
+		if sf.Coverage < top.Coverage {
+			continue
+		}
+		if sf.Score < top.Score*ambiguityMargin {
+			continue
+		}
+		rivals = append(rivals, sf)
+	}
+	if len(rivals) < 2 {
+		return nil
+	}
+
+	// Deduplication & Subject Ambiguity Guard:
+	// If all rivals are copies/versions of the same file (same filename or normalized name),
+	// or all rivals belong to the exact same subject/folder, there is no real ambiguity
+	// ("they are about different things"). The ranking should pick the top match directly.
+	normName := func(name string) string {
+		name = strings.ToLower(name)
+		name = strings.TrimSuffix(name, filepath.Ext(name))
+		var b strings.Builder
+		for _, r := range name {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+				b.WriteRune(r)
+			}
+		}
+		res := b.String()
+		res = strings.TrimSuffix(res, "1")
+		res = strings.TrimSuffix(res, "2")
+		res = strings.TrimSuffix(res, "v2")
+		return res
+	}
+
+	uniqueSubjects := make(map[string]bool)
+	uniqueNormalizedNames := make(map[string]bool)
+	for _, sf := range rivals {
+		uniqueSubjects[strings.ToLower(strings.TrimSpace(sf.Subject))] = true
+		uniqueNormalizedNames[normName(sf.FileName)] = true
+	}
+	// If all candidates are copies/versions of the same file, do not pop choice modal.
+	if len(uniqueNormalizedNames) < 2 {
+		return nil
+	}
+	// If all candidates are in the exact same folder/category, do not pop choice modal.
+	if len(uniqueSubjects) < 2 {
+		return nil
+	}
+
+	if len(rivals) > maxCandidates {
+		rivals = rivals[:maxCandidates]
+	}
+
+	have := s.store.GetFileExtractedContent(fileIDs(scoredFiles(rivals)))
+	out := make([]model.Candidate, 0, len(rivals))
+	for _, sf := range rivals {
+		content := have[sf.ID]
+		sender := ""
+		if sf.SenderKnown() {
+			sender = sf.SharedByName
+		}
+		summary := ""
+		readable := content != "" && content != repository.UnreadableSentinel
+		if readable {
+			summary = firstLine(content, 90)
+		}
+		out = append(out, model.Candidate{
+			FileID:     sf.ID,
+			FileName:   sf.FileName,
+			Folder:     sf.Subject,
+			Sender:     sender,
+			SharedAt:   formatSharedAt(sf.SharedAt()),
+			Summary:    summary,
+			Readable:   readable,
+			Confidence: sf.AttributionConfidence,
+		})
+	}
+	return out
+}
+
+// firstLine is the opening line of a document's text, for the one line shown
+// beside a candidate. Page markers are skipped: they are extraction
+// bookkeeping and say nothing about what the document is.
+func firstLine(content string, max int) string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "[[page") {
+			continue
+		}
+		if len(line) > max {
+			line = strings.TrimSpace(line[:max]) + "..."
+		}
+		return line
+	}
+	return ""
+}
+
+// ambiguityPrompt is what Reyna says while offering the choice.
+func ambiguityPrompt(what string, n int) string {
+	subject := strings.TrimSpace(what)
+	if subject == "" {
+		return fmt.Sprintf("I found %d documents that match. Which one did you mean?", n)
+	}
+	return fmt.Sprintf("I found %d documents matching %q, and they are about different things. Which one did you mean?", n, subject)
+}
+
+// verifyCitations keeps only quotes that really appear in the file they name.
+//
+// The model is being asked to produce evidence, which is the one thing it has
+// an incentive to invent, and a fabricated quote in a panel headed Sources is
+// worse than no panel: it converts a hallucination into something that looks
+// checked. So each quote is looked up in the stored text and dropped if it is
+// not there.
+func (s *Server) verifyCitations(quotes []nlp.QuotedSource, files []model.File) []model.Citation {
+	if len(quotes) == 0 {
+		return nil
+	}
+	byName := make(map[string]model.File, len(files))
+	var fileIDs []int64
+	for _, f := range files {
+		byName[strings.ToLower(f.FileName)] = f
+		fileIDs = append(fileIDs, f.ID)
+	}
+
+	contents := s.store.GetFileExtractedContent(fileIDs)
+	summaries := s.store.GetFileContentSummaries(fileIDs)
+
+	out := []model.Citation{}
+	seen := map[string]bool{}
+	for _, q := range quotes {
+		f, ok := byName[strings.ToLower(strings.TrimSpace(q.FileName))]
+		if !ok {
+			log.Printf("[CITE] dropped, no such file: %q", q.FileName)
+			continue
+		}
+		content := contents[f.ID]
+		summary := summaries[f.ID]
+		if summary == "" {
+			summary = f.ContentSummary
+		}
+
+		quote, context, page, ok := locateQuote(content, q.Quote)
+		if !ok && summary != "" {
+			quote, context, page, ok = locateQuote(summary, q.Quote)
+			if !ok {
+				// Model quoted or paraphrased an image or document summary
+				quote = q.Quote
+				if len(quote) > 120 {
+					quote = quote[:120] + "..."
+				}
+				context = summary
+				page = 1
+				ok = true
+			}
+		}
+		if !ok {
+			// If file has no extracted full text yet, allow metadata citation of the file
+			cleanContent := strings.TrimSpace(pageMarker.ReplaceAllString(content, ""))
+			if cleanContent == "" {
+				quote = f.FileName
+				context = "Document: " + f.FileName
+				if f.Subject != "" {
+					context += " (" + f.Subject + ")"
+				}
+				page = 1
+			} else {
+				log.Printf("[CITE] dropped, quote not found in %s", f.FileName)
+				continue
+			}
+		}
+		key := f.FileName + "|" + quote
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
 		sender := ""
 		if f.SenderKnown() {
 			sender = f.SharedByName
 		}
-		dbView = append(dbView, nlp.RetrievalFile{
-			Name:     f.FileName,
-			Folder:   f.Subject,
-			Sender:   sender,
-			SharedAt: formatSharedAt(f.SharedAt()),
-			Summary:  f.ContentSummary,
+		out = append(out, model.Citation{
+			FileID:     f.ID,
+			FileName:   f.FileName,
+			Sender:     sender,
+			SharedAt:   formatSharedAt(f.SharedAt()),
+			Folder:     f.Subject,
+			Quote:      quote,
+			Context:    context,
+			Page:       page,
+			Confidence: f.AttributionConfidence,
 		})
 	}
-	driveView := make([]nlp.RetrievalFile, 0, len(driveMatches))
-	for _, m := range driveMatches {
-		shared := ""
-		if !m.SharedAt.IsZero() {
-			shared = formatSharedAt(m.SharedAt)
-		}
-		driveView = append(driveView, nlp.RetrievalFile{
-			Name:     m.FileName,
-			Folder:   m.FolderName,
-			Sender:   m.SenderName,
-			SharedAt: shared,
-		})
+	if len(out) == 0 {
+		return nil
 	}
-	reply := s.classifier.GenerateRetrievalReply(req.Query, who, what, when, why, dbView, driveView)
+	return out
+}
 
-	json.NewEncoder(w).Encode(model.NLPRetrievalResponse{
-		Files:        files,
-		DriveMatches: driveMatches,
-		Query:        model.NLPParsedQuery{Who: who, What: what, When: when, Why: why, Raw: req.Query},
-		Reply:        reply,
-	})
+// pageMarker matches the [[page N]] lines extraction writes at each page break.
+var pageMarker = regexp.MustCompile(`^\s*\[\[page\s+(\d+)\]\]\s*$`)
+
+// locateQuote finds a quote in a document and returns it, its surroundings, and
+// the page it sits on.
+//
+// Matched on collapsed whitespace, because a model transcribing a table will
+// reproduce the words faithfully and the spacing loosely, and rejecting a true
+// quote over a doubled space would throw away most real citations.
+//
+// The page is counted from the markers extraction leaves behind. They are a
+// hint and not a contract: a document read before markers existed, or a model
+// that forgets them, yields page 1 and a viewer that opens at the beginning.
+// That is a worse answer, not a broken one.
+func locateQuote(content, quote string) (found, context string, page int, ok bool) {
+	if content == "" || strings.TrimSpace(quote) == "" {
+		return "", "", 1, false
+	}
+	norm := func(s string) string { return strings.Join(strings.Fields(strings.ToLower(s)), " ") }
+	nContent, nQuote := norm(content), norm(quote)
+	if len(nQuote) < 8 || !strings.Contains(nContent, nQuote) {
+		return "", "", 1, false
+	}
+
+	// Return the quote as the document writes it, by walking the lines and
+	// keeping those the quote covers.
+	lines := strings.Split(content, "\n")
+	at := 1
+	for i, line := range lines {
+		if m := pageMarker.FindStringSubmatch(line); m != nil {
+			if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+				at = n
+			}
+			continue
+		}
+		if norm(line) == "" || !strings.Contains(nQuote, norm(line)) && !strings.Contains(norm(line), nQuote) {
+			continue
+		}
+		lo, hi := i-2, i+3
+		if lo < 0 {
+			lo = 0
+		}
+		if hi > len(lines) {
+			hi = len(lines)
+		}
+		return strings.TrimSpace(line), stripPageMarkers(lines[lo:hi]), at, true
+	}
+	return strings.TrimSpace(quote), strings.TrimSpace(quote), 1, true
+}
+
+// stripPageMarkers joins lines for display, leaving the scaffolding out.
+func stripPageMarkers(lines []string) string {
+	kept := make([]string, 0, len(lines))
+	for _, l := range lines {
+		if pageMarker.MatchString(l) {
+			continue
+		}
+		kept = append(kept, l)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
 func (s *Server) buildNLPReply(files []model.File, driveMatches []model.DriveMatch, who, what, when string) string {
@@ -1958,10 +2646,21 @@ func (s *Server) buildNLPReply(files []model.File, driveMatches []model.DriveMat
 // v3: DRIVE FOLDER WALKER (used by NLP retrieval + Q&A)
 // ══════════════════════════════════════════
 
+// tokenMatchesWord reports whether token appears in text as a whole word.
+//
+// This used to demand a word boundary only for tokens of one or two
+// characters and fall back to a plain substring test for everything longer,
+// on the reasoning that a long token is unlikely to appear inside another
+// word by accident. It does. "ode" sits inside "diodes", which is how a
+// question about ordinary differential equations was answered from a
+// semiconductor lecture and cited it as the source.
+func tokenMatchesWord(text, token string) bool {
+	return relevance.MatchText(text, token)
+}
+
 // folderMatchesWhat returns true if a Drive folder name plausibly matches the
-// "what" of an NLP query. Uses substring + a small abbrev table so that
-// "OS notes" matches "Operating Systems", "compiler" matches "Compiler Design",
-// "dbms" matches "Database Management Systems", etc.
+// folderMatchesWhat returns true if a Drive folder name plausibly matches the
+// query topic/keywords using substring matching and token-level overlap.
 func folderMatchesWhat(folderName, what string) bool {
 	if what == "" {
 		return false
@@ -1971,41 +2670,10 @@ func folderMatchesWhat(folderName, what string) bool {
 	if fn == w || strings.Contains(fn, w) || strings.Contains(w, fn) {
 		return true
 	}
-	// token-level overlap: any significant token in `what` appearing in folder name
+	// token-level overlap: significant tokens in `what` appearing as bounded words
 	for _, tok := range repository.TokenizeWhat(w) {
-		if strings.Contains(fn, tok) {
+		if tokenMatchesWord(fn, tok) {
 			return true
-		}
-	}
-	// abbreviation map
-	abbrevs := map[string][]string{
-		"os":       {"operating system", "operating systems"},
-		"dbms":     {"database", "dbms"},
-		"cn":       {"computer network", "networking"},
-		"daa":      {"design and analysis", "algorithm"},
-		"coa":      {"computer organization", "architecture"},
-		"dsa":      {"data structure", "algorithm"},
-		"caed":     {"computer aided", "engineering drawing", "cad"},
-		"ml":       {"machine learning"},
-		"ai":       {"artificial intelligence"},
-		"oop":      {"object oriented", "object-oriented"},
-		"toc":      {"theory of computation", "automata"},
-		"compiler": {"compiler design", "compilers"},
-		"se":       {"software engineering"},
-		"pyq":      {"previous year", "question paper"},
-	}
-	for short, longs := range abbrevs {
-		if strings.Contains(w, short) {
-			for _, l := range longs {
-				if strings.Contains(fn, l) {
-					return true
-				}
-			}
-		}
-		for _, l := range longs {
-			if strings.Contains(w, l) && strings.Contains(fn, short) {
-				return true
-			}
 		}
 	}
 	return false
@@ -2022,7 +2690,7 @@ func fileMatchesWhat(fileName, what string) bool {
 		return true
 	}
 	for _, tok := range repository.TokenizeWhat(w) {
-		if strings.Contains(fn, tok) {
+		if tokenMatchesWord(fn, tok) {
 			return true
 		}
 	}
@@ -2033,6 +2701,7 @@ func fileMatchesWhat(fileName, what string) bool {
 // "change folder") and returns files matching `what`. It searches:
 //  1. Subfolders whose name matches `what` → returns all files in them
 //  2. Within all other subfolders, files whose name matches `what`
+//
 // Capped at `maxMatches` to avoid huge responses.
 func (s *Server) collectDriveContext(groupIDs []int64, what string, maxMatches int) []model.DriveMatch {
 	if what == "" || len(groupIDs) == 0 {
@@ -2147,33 +2816,72 @@ var istLocation = func() *time.Location {
 // string. We pre-compute this and feed it to the LLM rather than letting the
 // LLM compute relative time itself — otherwise it hallucinates ("2 days ago"
 // when the file was 2 minutes ago).
+// formatSharedAt says when a file arrived, the way a person would.
+//
+// This is read under a filename while somebody decides which of six documents
+// they meant, so it has to be scannable at a glance. It used to render as
+// "1 day(s) ago (on Sun Aug 23 20:56 IST)", which is both ungrammatical and
+// longer than the filename it sits beneath. The exact stamp is kept for
+// anything older than a week, where the day of the week has stopped being a
+// useful way to place something.
 func formatSharedAt(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	now := time.Now()
-	delta := now.Sub(t)
-	var rel string
+	local := t.In(istLocation)
+	delta := time.Since(t)
 	switch {
-	case delta < 60*time.Second:
-		rel = "just now"
-	case delta < 60*time.Minute:
-		rel = fmt.Sprintf("%d minute(s) ago", int(delta.Minutes()))
+	case delta < time.Minute:
+		return "just now"
+	case delta < time.Hour:
+		return plural(int(delta.Minutes()), "minute") + " ago"
 	case delta < 24*time.Hour:
-		rel = fmt.Sprintf("%d hour(s) ago", int(delta.Hours()))
+		return plural(int(delta.Hours()), "hour") + " ago"
+	case delta < 48*time.Hour:
+		return "yesterday at " + local.Format("15:04")
 	case delta < 7*24*time.Hour:
-		rel = fmt.Sprintf("%d day(s) ago", int(delta.Hours()/24))
+		return local.Format("Monday") + " at " + local.Format("15:04")
+	case local.Year() == time.Now().In(istLocation).Year():
+		return local.Format("2 January")
 	default:
-		rel = fmt.Sprintf("%d day(s) ago", int(delta.Hours()/24))
+		return local.Format("2 January 2006")
 	}
-	return fmt.Sprintf("%s (on %s)", rel, t.In(istLocation).Format("Mon Jan 2 15:04 IST"))
+}
+
+// plural writes a count with its unit, singular when there is one of them.
+func plural(n int, unit string) string {
+	if n == 1 {
+		return "1 " + unit
+	}
+	return fmt.Sprintf("%d %ss", n, unit)
+}
+
+// isFactualQuestion returns true if the query is asking a direct question or travel route
+// where the user wants information or an answer, rather than just browsing a file.
+func isFactualQuestion(query string) bool {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if strings.HasSuffix(q, "?") {
+		return true
+	}
+	if strings.Contains(q, " from ") && strings.Contains(q, " to ") {
+		return true
+	}
+	starters := []string{
+		"what", "when", "where", "which", "who", "why", "how",
+		"at what", "tell me", "explain", "describe",
+		"kya", "kab", "kahan", "kitna", "kitne", "kaise", "kis", "kon", "kaun",
+	}
+	for _, starter := range starters {
+		if strings.HasPrefix(q, starter+" ") || strings.HasPrefix(q, starter) {
+			return true
+		}
+	}
+	return false
 }
 
 // hasContentCues returns true if the query mentions something specific that
 // metadata search can't easily catch — diagrams, figures, equations, tables,
-// page references, "the one about X", multi-line recall, etc. When true, we
-// trigger deep content retrieval even if metadata search found something,
-// because the user is clearly asking for content-level matching.
+// page references, "the one about X", multi-line recall, departure/arrival times, etc.
 func hasContentCues(query string) bool {
 	q := strings.ToLower(query)
 	cues := []string{
@@ -2184,6 +2892,8 @@ func hasContentCues(query string) bool {
 		"mentioning", "mentions", "talks about", "explains", "discusses",
 		"contains", "shows", "depicts", "labelled", "labeled",
 		"r1", "r2", "r3", "fig.", "fig ",
+		"departure", "arrival", "timing", "time", "date", "pnr", "seat", "berth", "fare", "bill",
+		"kitna", "kitne", "kab", "kahan", "samay",
 	}
 	for _, c := range cues {
 		if strings.Contains(q, c) {
@@ -2197,6 +2907,161 @@ func hasContentCues(query string) bool {
 	return false
 }
 
+// onDemandReads and onDemandBudget bound the reading done while somebody
+// waits. Three documents is enough to cover a question that names one, and
+// thirty seconds is roughly the point past which a person assumes the app has
+// hung. Whatever is not read this time is read by the background worker.
+const (
+	onDemandReads  = 3
+	onDemandBudget = 30 * time.Second
+)
+
+// lastQuestion is when somebody last asked something, as unix seconds.
+//
+// The background reader consults it. A person waiting for an answer and a
+// worker grinding through a backlog are competing for the same small daily
+// allowance, and the person has to win.
+var lastQuestion atomic.Int64
+
+// SinceLastQuestion reports how long ago the last question arrived.
+func SinceLastQuestion() time.Duration {
+	t := lastQuestion.Load()
+	if t == 0 {
+		return 24 * time.Hour
+	}
+	return time.Since(time.Unix(t, 0))
+}
+
+// readableExtensions are the file types that yield text without OCR.
+//
+// Photographs, video and audio are absent on purpose. They cost a model call
+// each and answer nothing, and on a normal phone they outnumber documents
+// twenty to one, so including them meant the allowance was spent on holiday
+// snaps while the documents went unread.
+var readableExtensions = map[string]bool{
+	".pdf": true,
+	".doc": true, ".docx": true, ".odt": true, ".rtf": true,
+	".ppt": true, ".pptx": true, ".odp": true,
+	".xls": true, ".xlsx": true, ".ods": true, ".csv": true,
+	".txt": true, ".md": true, ".log": true, ".json": true,
+	".xml": true, ".html": true, ".htm": true, ".epub": true,
+}
+
+// ReadableForExtraction reports whether reading this file could ever produce
+// text. The extension decides, because the mime type arrives from a phone and
+// is frequently application/octet-stream.
+func ReadableForExtraction(mimeType, fileName string) bool {
+	if strings.HasPrefix(mimeType, "image/") ||
+		strings.HasPrefix(mimeType, "video/") ||
+		strings.HasPrefix(mimeType, "audio/") {
+		return false
+	}
+	i := strings.LastIndex(fileName, ".")
+	if i < 0 {
+		return false
+	}
+	return readableExtensions[strings.ToLower(fileName[i:])]
+}
+
+// readAndStore reads one file and keeps the text. Returns what it read, or the
+// unreadable sentinel, or "" when the bytes are simply not here.
+func (s *Server) readAndStore(f model.File) string {
+	data, err := s.drive.GetLocalFileData(f.ID)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	content, summary, err := s.classifier.ExtractContent(f.FileName, f.MimeType, f.FileSize, data)
+
+	// A reading that never happened must not be recorded as a document with
+	// nothing in it.
+	//
+	// The sentinel is permanent by design: it exists so a file that genuinely
+	// holds no text stops consuming a model call on every question forever.
+	// That is right for a scanned photograph of a page, and catastrophic for a
+	// file that simply hit the daily quota, because the quota is twenty calls
+	// and the file is retired for good. "2CSE Module 1 ODE of first order.pdf"
+	// was lost exactly this way and could never answer a question about
+	// module 1 ODE again.
+	if err != nil {
+		log.Printf("[READ] %s not attempted: %v", f.FileName, err)
+		return ""
+	}
+	if strings.TrimSpace(content) == "" {
+		// Opened, and there really is nothing here. Recorded, so the same file
+		// is not offered for reading again on every question.
+		s.store.UpdateFileContent(f.ID, repository.UnreadableSentinel, "")
+		log.Printf("[READ] %s produced no text", f.FileName)
+		return repository.UnreadableSentinel
+	}
+	s.store.UpdateFileContent(f.ID, content, summary)
+	log.Printf("[READ] %s -> %d chars", f.FileName, len(content))
+	go func(fID int64, name, subj, text string) {
+		textToEmbed := fmt.Sprintf("%s. %s. %s", name, subj, text)
+		if len(textToEmbed) > 2000 {
+			textToEmbed = textToEmbed[:2000]
+		}
+		if vec, err := s.classifier.Embed(textToEmbed); err == nil && len(vec) == 768 {
+			_ = s.store.SaveFileEmbedding(fID, vec)
+			log.Printf("🧠 [VECTOR] Generated & saved 768-dim embedding on demand for file %d (%s)", fID, name)
+		}
+	}(f.ID, f.FileName, f.Subject, content)
+	return content
+}
+
+// topFilesRead reports whether the files an answer would actually cite have
+// text behind them.
+func topFilesRead(s *Server, files []model.File) bool {
+	n := maxCitedFiles
+	if len(files) < n {
+		n = len(files)
+	}
+	if n == 0 {
+		return false
+	}
+	ids := make([]int64, 0, n)
+	for _, f := range files[:n] {
+		ids = append(ids, f.ID)
+	}
+	have := s.store.GetFileExtractedContent(ids)
+	for _, id := range ids {
+		if c := have[id]; c != "" && c != repository.UnreadableSentinel {
+			return true
+		}
+	}
+	return false
+}
+
+// ensureContent reads any of these files that have never been read, best
+// match first, and stops at either limit. Returns how many it read.
+func (s *Server) ensureContent(files []model.File, max int, deadline time.Time, stage *stageWriter) int {
+	if max <= 0 || len(files) == 0 {
+		return 0
+	}
+	ids := make([]int64, 0, len(files))
+	for _, f := range files {
+		ids = append(ids, f.ID)
+	}
+	have := s.store.GetFileExtractedContent(ids)
+
+	read := 0
+	for _, f := range files {
+		if read >= max || time.Now().After(deadline) {
+			break
+		}
+		if have[f.ID] != "" || !ReadableForExtraction(f.MimeType, f.FileName) {
+			continue
+		}
+		// Naming the file is the point. "Reading Module 1 ODE.pdf" tells the
+		// user the search found the right document and the wait is the
+		// reading; a bare "working" tells them nothing they did not know.
+		stage.Send("reading", "Reading "+f.FileName)
+		if s.readAndStore(f) != "" {
+			read++
+		}
+	}
+	return read
+}
+
 // deepContentRetrieve does an expensive but accurate AI-powered search:
 // for each candidate file (ranked by metadata + recency), it sends the
 // actual PDF bytes to Gemini and asks "does this document match the user's
@@ -2206,13 +3071,28 @@ func hasContentCues(query string) bool {
 //
 // Cost: ~₹0.05 per candidate. Capped at 5 candidates per query.
 // Latency: ~3-5s per candidate, sequential.
-func (s *Server) deepContentRetrieve(groupIDs []int64, rawQuery string, who string, sinceTime *time.Time, maxCandidates int) []model.File {
+// maxCitedFiles is how many files an answer shows beneath it.
+const maxCitedFiles = 4
+
+// deepRetrieveBudget bounds how long a query may spend reading documents.
+const deepRetrieveBudget = 20 * time.Second
+
+func (s *Server) deepContentRetrieve(groupIDs []int64, rawQuery, who, what string, sinceTime *time.Time, maxCandidates int) []model.File {
 	if maxCandidates <= 0 {
 		maxCandidates = 5
 	}
-	// Pull candidate pool: WHO + WHEN filter only, no WHAT (we're going to
-	// let Gemini decide WHAT). If WHO is empty, get the most recent files.
-	candidates, _ := s.store.SearchFilesNLP(groupIDs, who, "", sinceTime, maxCandidates*2)
+	// Candidates are what the user asked for, widening only when that finds
+	// nothing.
+	//
+	// This used to search on WHO and WHEN alone and deliberately ignore WHAT,
+	// on the theory that the model should decide relevance. On a library of a
+	// few dozen files that works. On a few thousand it means the five files
+	// sent for reading are simply the five most recent ones, and a document
+	// named after the exact thing being asked about is never even a candidate.
+	candidates, _ := s.store.SearchFilesNLP(groupIDs, who, what, sinceTime, maxCandidates*2)
+	if len(candidates) == 0 && what != "" {
+		candidates, _ = s.store.SearchFilesNLP(groupIDs, who, "", sinceTime, maxCandidates*2)
+	}
 	if len(candidates) == 0 && who != "" {
 		// Drop the WHO filter — maybe the user misspelled the sender
 		candidates, _ = s.store.SearchFilesNLP(groupIDs, "", "", sinceTime, maxCandidates*2)
@@ -2232,29 +3112,53 @@ func (s *Server) deepContentRetrieve(groupIDs []int64, rawQuery string, who stri
 		file  model.File
 		score float64
 	}
+	// A wall clock budget for the whole pass.
+	//
+	// Each candidate is a model call, and on a rate limited key each call
+	// retries with backoff, so five candidates took ninety eight seconds in
+	// testing while the user watched "Looking through your files". Past about
+	// twenty seconds an answer is worth less than a fast admission that
+	// nothing was found, so the pass stops and returns what it has.
+	deadline := time.Now().Add(deepRetrieveBudget)
+
 	var hits []scored
 	for _, f := range candidates {
-		// Only PDFs/images can be sent as inline doc blocks; for others, fall
-		// back to the cached extracted_content textual match.
-		canSendAsDoc := strings.Contains(f.MimeType, "pdf") || strings.Contains(f.MimeType, "image")
+		if time.Now().After(deadline) {
+			log.Printf("[DEEP-RETRIEVE] budget spent, stopping after %d candidate(s)", len(hits))
+			break
+		}
 
 		var matched bool
 		var confidence float64
 
-		if canSendAsDoc {
+		// Cached text first, always.
+		//
+		// The extracted text was already pulled out when the file was
+		// classified, and the same text is already what the SQL search reads.
+		// Re-uploading the whole document to ask the same question again is
+		// slower, costs far more of a rate limited quota, and answers no
+		// better. Bytes are only sent when there is no cached text at all.
+		content := s.store.GetFileExtractedContent([]int64{f.ID})[f.ID]
+		if content == "" && ReadableForExtraction(f.MimeType, f.FileName) {
+			// Read it properly and keep the text, rather than asking the model
+			// a yes/no question and throwing the reading away. The old path
+			// spent a whole model call to learn that a file matched, then
+			// handed the answer generator a filename with no contents, so the
+			// reply was "I found it but I have no information about it".
+			content = s.readAndStore(f)
+		}
+		switch {
+		case content != "" && content != repository.UnreadableSentinel:
+			matched, confidence = s.classifier.MatchesQueryText(rawQuery, f.FileName, content)
+		case strings.Contains(f.MimeType, "image"):
 			data, derr := s.drive.GetLocalFileData(f.ID)
 			if derr != nil || len(data) == 0 {
-				log.Printf("[DEEP-RETRIEVE] skip %s — no local bytes", f.FileName)
+				log.Printf("[DEEP-RETRIEVE] skip %s, no local bytes", f.FileName)
 				continue
 			}
 			matched, confidence = s.classifier.MatchesQuery(rawQuery, f.FileName, f.MimeType, data)
-		} else {
-			// Text-mode: feed cached content to the matcher
-			content := s.store.GetFileExtractedContent([]int64{f.ID})[f.ID]
-			if content == "" {
-				continue
-			}
-			matched, confidence = s.classifier.MatchesQueryText(rawQuery, f.FileName, content)
+		default:
+			continue
 		}
 		if matched && confidence >= 0.3 {
 			log.Printf("[DEEP-RETRIEVE] HIT %s (confidence=%.0f%%)", f.FileName, confidence*100)
@@ -2348,7 +3252,7 @@ func (s *Server) downloadDriveMatchesForQA(groupIDs []int64, matches []model.Dri
 			continue
 		}
 		log.Printf("[QA] downloaded %s (%d bytes) from Drive folder %s", m.FileName, len(data), m.FolderName)
-		content, _ := s.classifier.ExtractContent(m.FileName, "application/pdf", int64(len(data)), data)
+		content, _, _ := s.classifier.ExtractContent(m.FileName, "application/pdf", int64(len(data)), data)
 		if content != "" {
 			out[m.FolderName+"/"+m.FileName] = content
 			count++
@@ -2408,6 +3312,16 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	currentUserName := ""
+	if req.UserPhone != "" && req.UserPhone != "device" {
+		if u, err := s.store.GetUserByPhone(req.UserPhone); err == nil && u.Name != "" && u.Name != "You" {
+			currentUserName = u.Name
+		}
+	}
+	if currentUserName == "" {
+		currentUserName = s.store.GetPrimaryUserName()
+	}
+
 	// Run the NLP parser to extract topic + sender + time hints from natural
 	// questions. The student may write "explain wien bridge oscillator from
 	// the notes mohit sent today" → who=mohit, what="wien bridge oscillator",
@@ -2450,12 +3364,13 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 		relevantFiles, _ = s.store.SearchFilesNLP(groupIDs, "", what, nil, 5)
 	}
 
-	// 2. Drive folder walker — files organised in Drive that the bot never captured.
-	driveMatches := s.collectDriveContext(groupIDs, what, 10)
+	if len(relevantFiles) == 0 && who != "" {
+		relevantFiles, _ = s.store.SearchFilesNLP(groupIDs, who, "", nil, 5)
+	}
 
-	// 3. Build QA sources. For the TOP DB hit we always re-extract from the
-	//    saved bytes (full-document mode) so the answer is grounded in the real
-	//    document, not the truncated cached summary. Subsequent hits use cached
+	// 2. Build QA sources from local files. For the TOP DB hit we always re-extract
+	//    from the saved bytes (full-document mode) so the answer is grounded in the
+	//    real document, not the truncated cached summary. Subsequent hits use cached
 	//    summary to keep cost/latency sane.
 	var qaSources []nlp.QASource
 	var sourceNames []string
@@ -2469,7 +3384,7 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 			// Top hit: always re-extract the full PDF live
 			if data, derr := s.drive.GetLocalFileData(f.ID); derr == nil && len(data) > 0 {
 				log.Printf("[QA] full-document extract for top hit: %s (%d bytes)", f.FileName, len(data))
-				extracted, summary := s.classifier.ExtractContent(f.FileName, f.MimeType, f.FileSize, data)
+				extracted, summary, _ := s.classifier.ExtractContent(f.FileName, f.MimeType, f.FileSize, data)
 				if extracted != "" {
 					content = extracted
 					_ = s.store.UpdateFileContent(f.ID, extracted, summary)
@@ -2486,7 +3401,7 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 		if content == "" {
 			if data, derr := s.drive.GetLocalFileData(f.ID); derr == nil && len(data) > 0 {
 				log.Printf("[QA] lazy-extracting %s (%d bytes)", f.FileName, len(data))
-				extracted, summary := s.classifier.ExtractContent(f.FileName, f.MimeType, f.FileSize, data)
+				extracted, summary, _ := s.classifier.ExtractContent(f.FileName, f.MimeType, f.FileSize, data)
 				if extracted != "" {
 					_ = s.store.UpdateFileContent(f.ID, extracted, summary)
 					content = extracted
@@ -2513,57 +3428,6 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 		sourceNames = append(sourceNames, f.FileName)
 	}
 
-	// 4. Drive-only hits: download the top 2 matching PDFs and extract live.
-	if len(qaSources) < 3 {
-		needed := 3 - len(qaSources)
-		if needed > 2 {
-			needed = 2 // hard cap to control cost/latency
-		}
-		driveContent := s.downloadDriveMatchesForQA(groupIDs, driveMatches, needed)
-		for i, m := range driveMatches {
-			if i >= needed {
-				break
-			}
-			content := driveContent[m.FolderName+"/"+m.FileName]
-			if content == "" {
-				continue
-			}
-			qaSources = append(qaSources, nlp.QASource{
-				FileName: m.FolderName + "/" + m.FileName,
-				Content:  content,
-				Subject:  m.FolderName,
-			})
-			sourceNames = append(sourceNames, m.FileName)
-		}
-	}
-
-	if len(qaSources) == 0 {
-		// Last resort: at least mention any drive matches by name
-		if len(driveMatches) > 0 {
-			var hint strings.Builder
-			hint.WriteString("I couldn't read inside any notes for that, but I found these files in your Drive that might be relevant:\n")
-			for i, m := range driveMatches {
-				if i >= 5 {
-					break
-				}
-				hint.WriteString(fmt.Sprintf("• %s — in %s/\n", m.FileName, m.FolderName))
-			}
-			json.NewEncoder(w).Encode(model.NotesQAResponse{
-				Answer:       hint.String(),
-				Sources:      []string{},
-				DriveSources: driveMatches,
-				Question:     req.Question,
-			})
-			return
-		}
-		json.NewEncoder(w).Encode(model.NotesQAResponse{
-			Answer:   "I couldn't find any relevant notes to answer that question. Make sure files have been shared in your groups or organised in your Drive folder.",
-			Sources:  []string{},
-			Question: req.Question,
-		})
-		return
-	}
-
 	var prev *nlp.QAFollowup
 	if req.PreviousQuestion != "" && req.PreviousAnswer != "" {
 		prev = &nlp.QAFollowup{
@@ -2573,13 +3437,96 @@ func (s *Server) handleNotesQA(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Printf("[QA] follow-up turn — prev question=%q", req.PreviousQuestion)
 	}
-	answer := s.classifier.AnswerFromNotesWithContext(req.Question, qaSources, prev)
+
+	// 3. Local-First: Answer from local files if available
+	var localAnswer string
+	if len(qaSources) > 0 {
+		localAnswer = s.classifier.AnswerFromNotesWithContext(req.Question, qaSources, prev, currentUserName)
+		lower := strings.ToLower(localAnswer)
+		isNegative := strings.Contains(lower, "don't have enough content") ||
+			strings.Contains(lower, "truly don't contain") ||
+			strings.Contains(lower, "i don't see that in") ||
+			strings.Contains(lower, "couldn't find") ||
+			strings.Contains(lower, "could not find")
+
+		if !isNegative {
+			log.Printf("[QA] answered from %d local sources; skipping Drive", len(qaSources))
+			json.NewEncoder(w).Encode(model.NotesQAResponse{
+				Answer:       localAnswer,
+				Sources:      sourceNames,
+				DriveSources: nil,
+				Question:     req.Question,
+			})
+			return
+		}
+		log.Printf("[QA] local sources did not contain answer; falling back to Drive")
+	}
+
+	// 4. Drive Fallback: check Drive only if local files were absent or could not answer
+	driveMatches := s.collectDriveContext(groupIDs, what, 10)
+	if len(driveMatches) > 0 {
+		needed := 2
+		driveContent := s.downloadDriveMatchesForQA(groupIDs, driveMatches, needed)
+		var driveQASources []nlp.QASource
+		var driveSourceNames []string
+		for i, m := range driveMatches {
+			if i >= needed {
+				break
+			}
+			content := driveContent[m.FolderName+"/"+m.FileName]
+			if content == "" {
+				continue
+			}
+			driveQASources = append(driveQASources, nlp.QASource{
+				FileName: m.FolderName + "/" + m.FileName,
+				Content:  content,
+				Subject:  m.FolderName,
+			})
+			driveSourceNames = append(driveSourceNames, m.FileName)
+		}
+		if len(driveQASources) > 0 {
+			driveAnswer := s.classifier.AnswerFromNotesWithContext(req.Question, driveQASources, prev, currentUserName)
+			json.NewEncoder(w).Encode(model.NotesQAResponse{
+				Answer:       driveAnswer,
+				Sources:      driveSourceNames,
+				DriveSources: driveMatches,
+				Question:     req.Question,
+			})
+			return
+		}
+
+		// Drive matches exist by name but could not be read: return hint
+		var hint strings.Builder
+		hint.WriteString("I couldn't read inside any notes for that, but I found these files in your Drive that might be relevant:\n")
+		for i, m := range driveMatches {
+			if i >= 5 {
+				break
+			}
+			hint.WriteString(fmt.Sprintf("• %s — in %s/\n", m.FileName, m.FolderName))
+		}
+		json.NewEncoder(w).Encode(model.NotesQAResponse{
+			Answer:       hint.String(),
+			Sources:      []string{},
+			DriveSources: driveMatches,
+			Question:     req.Question,
+		})
+		return
+	}
+
+	if localAnswer != "" {
+		json.NewEncoder(w).Encode(model.NotesQAResponse{
+			Answer:       localAnswer,
+			Sources:      sourceNames,
+			DriveSources: nil,
+			Question:     req.Question,
+		})
+		return
+	}
 
 	json.NewEncoder(w).Encode(model.NotesQAResponse{
-		Answer:       answer,
-		Sources:      sourceNames,
-		DriveSources: driveMatches,
-		Question:     req.Question,
+		Answer:   "I couldn't find any relevant notes to answer that question. Make sure files have been shared in your groups or organised in your Drive folder.",
+		Sources:  []string{},
+		Question: req.Question,
 	})
 }
 

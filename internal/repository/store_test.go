@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -338,5 +339,146 @@ func TestSearchFilesNLPWhenUsesPostedAt(t *testing.T) {
 	}
 	if files[0].FileName != "posted_today.pdf" {
 		t.Errorf("got %q, want posted_today.pdf — the window must apply to posted_at, not created_at", files[0].FileName)
+	}
+}
+
+func TestSearchFilesNLPReynaScript(t *testing.T) {
+	s := newTestStore(t)
+	userID, groupID := seedGroup(t, s, "+911111111111", "Device User", "device-group@g.us")
+
+	// Reyna script file captured without sender (unattributed)
+	if _, err := s.AddFile(&model.File{
+		GroupID:               groupID,
+		UserID:                userID,
+		FileName:              "Reyna_SIH260150_script.pdf",
+		MimeType:              "application/pdf",
+		PostedAt:              time.Now().Add(-20 * time.Hour),
+		AttributionMethod:     "",
+		AttributionConfidence: 0.0,
+		SharedByName:          "",
+		SharedByPhone:         "",
+	}); err != nil {
+		t.Fatalf("AddFile: %v", err)
+	}
+
+	// 1. Search with what="reyna script"
+	files, err := s.SearchFilesNLP([]int64{groupID}, "", "reyna script", nil, 10)
+	if err != nil {
+		t.Fatalf("SearchFilesNLP: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatalf("expected to find Reyna_SIH260150_script.pdf for what='reyna script', got 0 files")
+	}
+	if files[0].FileName != "Reyna_SIH260150_script.pdf" {
+		t.Errorf("got %q, want Reyna_SIH260150_script.pdf", files[0].FileName)
+	}
+
+	// 2. Search with what="Reyna_SIH260150_script.pdf"
+	files, err = s.SearchFilesNLP([]int64{groupID}, "", "Reyna_SIH260150_script.pdf", nil, 10)
+	if err != nil {
+		t.Fatalf("SearchFilesNLP: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatalf("expected to find Reyna_SIH260150_script.pdf, got 0 files")
+	}
+
+	// 3. Search with what="script"
+	files, err = s.SearchFilesNLP([]int64{groupID}, "", "script", nil, 10)
+	if err != nil {
+		t.Fatalf("SearchFilesNLP: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatalf("expected to find Reyna_SIH260150_script.pdf for what='script', got 0 files")
+	}
+}
+
+func TestTokenizeWhatEdgeCases(t *testing.T) {
+	if tok := TokenizeWhat(""); tok != nil {
+		t.Errorf("TokenizeWhat(\"\") = %v, want nil", tok)
+	}
+	if tok := TokenizeWhat("   "); tok != nil {
+		t.Errorf("TokenizeWhat(\"   \") = %v, want nil", tok)
+	}
+	tok := TokenizeWhat("can you find me the latest Reyna script received")
+	for _, expected := range []string{"reyna", "script"} {
+		found := false
+		for _, tokItem := range tok {
+			if tokItem == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("TokenizeWhat missing %q in %v", expected, tok)
+		}
+	}
+
+	// Multilingual and numeric tests
+	hindiTok := TokenizeWhat("बिजली का बिल 4656526133")
+	for _, expected := range []string{"बिजली", "बिल", "4656526133"} {
+		found := false
+		for _, item := range hindiTok {
+			if item == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("TokenizeWhat Hindi/Numeric missing %q in %v", expected, hindiTok)
+		}
+	}
+}
+
+func TestFileEmbeddings(t *testing.T) {
+	s := newTestStore(t)
+	user, err := s.UpsertUser("+919999999999", "Test User")
+	if err != nil {
+		t.Fatalf("UpsertUser: %v", err)
+	}
+	group, err := s.UpsertGroup("test-group", "Test Group", user.ID)
+	if err != nil {
+		t.Fatalf("UpsertGroup: %v", err)
+	}
+	file, err := s.AddFile(&model.File{
+		GroupID:  group.ID,
+		UserID:   user.ID,
+		FileName: "test_circuit.pdf",
+		MimeType: "application/pdf",
+	})
+	if err != nil {
+		t.Fatalf("AddFile: %v", err)
+	}
+
+	vec := make([]float32, 768)
+	for i := range vec {
+		vec[i] = float32(i) * 0.001
+	}
+
+	if err := s.SaveFileEmbedding(file.ID, vec); err != nil {
+		t.Fatalf("SaveFileEmbedding: %v", err)
+	}
+
+	got, err := s.GetFileEmbedding(file.ID)
+	if err != nil {
+		t.Fatalf("GetFileEmbedding: %v", err)
+	}
+	if len(got) != 768 {
+		t.Fatalf("got len %d, want 768", len(got))
+	}
+	for i := range vec {
+		if math.Abs(float64(got[i]-vec[i])) > 1e-6 {
+			t.Fatalf("mismatch at %d: got %v, want %v", i, got[i], vec[i])
+		}
+	}
+
+	all, err := s.GetAllEmbeddings([]int64{group.ID})
+	if err != nil {
+		t.Fatalf("GetAllEmbeddings: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("GetAllEmbeddings returned %d, want 1", len(all))
+	}
+	if len(all[file.ID]) != 768 {
+		t.Fatalf("GetAllEmbeddings file vec len = %d, want 768", len(all[file.ID]))
 	}
 }

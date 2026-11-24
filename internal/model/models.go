@@ -28,12 +28,12 @@ type Group struct {
 
 // GroupSettings holds per-group configuration
 type GroupSettings struct {
-	GroupID          int64  `json:"group_id"`
-	Enabled          bool   `json:"enabled"`             // toggle: tracking on/off
-	Hidden           bool   `json:"hidden"`              // remove button: hides from dashboard until /reyna init
-	TrackingMode     string `json:"tracking_mode"`       // "auto" | "reaction"
-	AutoCommitHours  int    `json:"auto_commit_hours"`   // 0 = use server default
-	ReactionEmoji    string `json:"reaction_emoji"`      // default "📌"
+	GroupID         int64  `json:"group_id"`
+	Enabled         bool   `json:"enabled"`           // toggle: tracking on/off
+	Hidden          bool   `json:"hidden"`            // remove button: hides from dashboard until /reyna init
+	TrackingMode    string `json:"tracking_mode"`     // "auto" | "reaction"
+	AutoCommitHours int    `json:"auto_commit_hours"` // 0 = use server default
+	ReactionEmoji   string `json:"reaction_emoji"`    // default "📌"
 }
 
 // GroupMember links users to groups
@@ -48,25 +48,25 @@ type GroupMember struct {
 
 // File represents a stored file in a user's Drive repo
 type File struct {
-	ID            int64     `json:"id"`
-	GroupID       int64     `json:"group_id"`
-	UserID        int64     `json:"user_id"`
-	SharedByPhone string    `json:"shared_by_phone"`
-	SharedByName  string    `json:"shared_by_name"`
-	FileName      string    `json:"file_name"`
-	FileSize      int64     `json:"file_size"`
-	MimeType      string    `json:"mime_type"`
-	DriveFileID   string    `json:"drive_file_id"`
-	DriveFolderID string    `json:"drive_folder_id"`
-	Subject       string    `json:"subject"`
-	Tags          string    `json:"tags"`
-	Version       int       `json:"version"`
-	ParentFileID  int64     `json:"parent_file_id"`
-	WAMessageID      string    `json:"wa_message_id"`
-	Status           string    `json:"status"` // "staged" | "committed" | "deleted_in_drive"
-	ExtractedContent string    `json:"extracted_content,omitempty"`
-	ContentSummary   string    `json:"content_summary,omitempty"`
-	ContentHash      string    `json:"content_hash,omitempty"`
+	ID               int64  `json:"id"`
+	GroupID          int64  `json:"group_id"`
+	UserID           int64  `json:"user_id"`
+	SharedByPhone    string `json:"shared_by_phone"`
+	SharedByName     string `json:"shared_by_name"`
+	FileName         string `json:"file_name"`
+	FileSize         int64  `json:"file_size"`
+	MimeType         string `json:"mime_type"`
+	DriveFileID      string `json:"drive_file_id"`
+	DriveFolderID    string `json:"drive_folder_id"`
+	Subject          string `json:"subject"`
+	Tags             string `json:"tags"`
+	Version          int    `json:"version"`
+	ParentFileID     int64  `json:"parent_file_id"`
+	WAMessageID      string `json:"wa_message_id"`
+	Status           string `json:"status"` // "staged" | "committed" | "deleted_in_drive"
+	ExtractedContent string `json:"extracted_content,omitempty"`
+	ContentSummary   string `json:"content_summary,omitempty"`
+	ContentHash      string `json:"content_hash,omitempty"`
 
 	// CreatedAt is when Reyna inserted the row. PostedAt is when the message was
 	// actually sent. Under the Baileys bot these are seconds apart; once capture
@@ -91,6 +91,7 @@ const (
 	AttrNotification = "notification" // Matched an observed notification.
 	AttrDateUnique   = "date_unique"  // Only one candidate message that day.
 	AttrTimeWindow   = "time_window"  // Nearest message in time. Ambiguous.
+	AttrTimeOnly     = "time_only"    // Something in the same ten minutes.
 	AttrNone         = ""             // Unattributed.
 )
 
@@ -174,15 +175,15 @@ type FindRequest struct {
 }
 
 type CommandRequest struct {
-	GroupWAID     string `json:"group_wa_id"`
-	Command       string `json:"command"`
-	Args          string `json:"args"`
-	UserPhone     string `json:"user_phone"`
-	UserName      string `json:"user_name"`
-	FileName      string `json:"file_name"`
-	FileSize      int64  `json:"file_size"`
-	MimeType      string `json:"mime_type"`
-	Subject       string `json:"subject"`
+	GroupWAID string `json:"group_wa_id"`
+	Command   string `json:"command"`
+	Args      string `json:"args"`
+	UserPhone string `json:"user_phone"`
+	UserName  string `json:"user_name"`
+	FileName  string `json:"file_name"`
+	FileSize  int64  `json:"file_size"`
+	MimeType  string `json:"mime_type"`
+	Subject   string `json:"subject"`
 }
 
 type CommandResponse struct {
@@ -193,14 +194,14 @@ type CommandResponse struct {
 
 // ReactionRequest is sent by the bot when a user reacts to a file message
 type ReactionRequest struct {
-	GroupWAID     string `json:"group_wa_id"`
-	UserPhone     string `json:"user_phone"`
-	UserName      string `json:"user_name"`
-	FileName      string `json:"file_name"`
-	FileSize      int64  `json:"file_size"`
-	MimeType      string `json:"mime_type"`
-	Emoji         string `json:"emoji"`
-	WAMessageID   string `json:"wa_message_id"`
+	GroupWAID   string `json:"group_wa_id"`
+	UserPhone   string `json:"user_phone"`
+	UserName    string `json:"user_name"`
+	FileName    string `json:"file_name"`
+	FileSize    int64  `json:"file_size"`
+	MimeType    string `json:"mime_type"`
+	Emoji       string `json:"emoji"`
+	WAMessageID string `json:"wa_message_id"`
 }
 
 // NLPClassifyRequest asks the NLP service to classify a file into a folder
@@ -251,17 +252,106 @@ type WaitlistRequest struct {
 
 // ── NLP Conversational Retrieval ──
 
-type NLPRetrievalRequest struct {
-	Query     string `json:"query"`      // natural language query
-	GroupWAID string `json:"group_wa_id"` // optional: scope to a group
-	UserPhone string `json:"user_phone"`
+type ChatMessageContext struct {
+	Role      string   `json:"role"`                 // "user" or "assistant"
+	Text      string   `json:"text"`                 // message text
+	FileIDs   []int64  `json:"file_ids,omitempty"`   // file IDs referenced
+	FileNames []string `json:"file_names,omitempty"` // filenames referenced/cited
 }
 
+type NLPRetrievalRequest struct {
+	Query     string               `json:"query"`       // natural language query
+	GroupWAID string               `json:"group_wa_id"` // optional: scope to a group
+	UserPhone string               `json:"user_phone"`
+	History   []ChatMessageContext `json:"history,omitempty"` // recent chat history for context
+
+	// FileIDs answers a previous NLPStatusNeedsChoice reply.
+	//
+	// When present the search is skipped entirely and the question is answered
+	// against exactly these files. The user has already said which documents
+	// they meant, and re-running a ranking that was too uncertain to decide is
+	// only an opportunity to overrule them.
+	FileIDs []int64 `json:"file_ids,omitempty"`
+}
+
+// Status values for NLPRetrievalResponse.
+const (
+	// NLPStatusAnswered means Reply is an answer to the question.
+	NLPStatusAnswered = "answered"
+
+	// NLPStatusNeedsChoice means several documents matched about equally well
+	// and Reyna is asking which one was meant, rather than picking one and
+	// presenting the guess as fact. Candidates holds what to offer.
+	NLPStatusNeedsChoice = "needs_choice"
+)
+
 type NLPRetrievalResponse struct {
+	Status       string         `json:"status"`
 	Files        []File         `json:"files"`
 	DriveMatches []DriveMatch   `json:"drive_matches,omitempty"`
 	Query        NLPParsedQuery `json:"parsed_query"`
 	Reply        string         `json:"reply"`
+	Citations    []Citation     `json:"citations,omitempty"`
+
+	// Candidates is populated only when Status is NLPStatusNeedsChoice.
+	Candidates []Candidate `json:"candidates,omitempty"`
+
+	// Notice marks a reply that is about Reyna's own state rather than about
+	// the user's documents, so the app can present it as a notice instead of
+	// as an answer. Empty for ordinary replies.
+	Notice string `json:"notice,omitempty"`
+}
+
+// Notice kinds. A reply carrying one of these is not an answer.
+const (
+	// NoticeOutOfAllowance: the day's model calls are spent. A wait, not a
+	// failure; nothing has been lost and it clears on its own.
+	NoticeOutOfAllowance = "out_of_allowance"
+)
+
+// Candidate is one document offered when Reyna cannot tell which was meant.
+//
+// It carries enough for the user to choose without guessing: what it is
+// called, where it sits, when it arrived, and whether Reyna has actually read
+// it. Readable is the honest part — a file Reyna has never managed to open
+// cannot answer anything, and offering it as a choice without saying so wastes
+// the user's tap and then produces nothing.
+type Candidate struct {
+	FileID   int64  `json:"file_id"`
+	FileName string `json:"file_name"`
+	Folder   string `json:"folder,omitempty"`
+	Sender   string `json:"sender,omitempty"`
+	SharedAt string `json:"shared_at,omitempty"`
+	Summary  string `json:"summary,omitempty"`
+	Readable bool   `json:"readable"`
+
+	Confidence float64 `json:"attribution_confidence"`
+}
+
+// Citation is the passage an answer was drawn from.
+//
+// Kept separate from the reply so the answer can be one sentence and the
+// evidence can still be inspected. The claim that Reyna does not invent things
+// is only worth making if the user can check it, and a citation the user cannot
+// see is the same as no citation.
+type Citation struct {
+	FileID   int64  `json:"file_id"`
+	FileName string `json:"file_name"`
+	Sender   string `json:"sender,omitempty"`
+	SharedAt string `json:"shared_at,omitempty"`
+	Folder   string `json:"folder,omitempty"`
+
+	// Quote is copied verbatim from the stored text of the file, and is
+	// verified to appear there before this ever reaches the user. Context is
+	// the surrounding lines, so the quote can be read where it sits.
+	Quote   string `json:"quote"`
+	Context string `json:"context,omitempty"`
+
+	// Page the quote sits on, counted from markers left during extraction.
+	// Always at least 1, so a viewer never has to handle a missing page.
+	Page int `json:"page"`
+
+	Confidence float64 `json:"attribution_confidence"`
 }
 
 // DriveMatch represents a file found by walking the user's existing Drive folder
@@ -282,11 +372,11 @@ type DriveMatch struct {
 }
 
 type NLPParsedQuery struct {
-	Who    string `json:"who"`
-	What   string `json:"what"`
-	When   string `json:"when"`
-	Why    string `json:"why"`
-	Raw    string `json:"raw"`
+	Who  string `json:"who"`
+	What string `json:"what"`
+	When string `json:"when"`
+	Why  string `json:"why"`
+	Raw  string `json:"raw"`
 }
 
 // ── Notes Q&A ──

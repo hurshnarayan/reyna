@@ -112,8 +112,16 @@ export const api = {
   // v2 — Commit staged files to Drive
   commitStaged: () => req('/files/staged/commit', { method: 'POST' }),
 
-  // v3 — NLP Conversational Retrieval
-  nlpRetrieve: (query, groupWaId) => req('/nlp/retrieve', { method: 'POST', body: JSON.stringify({ query, group_wa_id: groupWaId || '' }) }),
+  // v3 — NLP Conversational Retrieval with multi-turn history & document candidate selection
+  nlpRetrieve: (query, groupWaId, history = [], fileIds = []) => req('/nlp/retrieve', {
+    method: 'POST',
+    body: JSON.stringify({
+      query,
+      group_wa_id: groupWaId || '',
+      history: history || [],
+      file_ids: fileIds || [],
+    })
+  }),
 
   // v3 — Notes Q&A (with optional follow-up turn for multi-turn conversations)
   notesQA: (question, groupWaId, prev) => req('/nlp/qa', { method: 'POST', body: JSON.stringify({

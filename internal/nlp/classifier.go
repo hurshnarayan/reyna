@@ -2,18 +2,30 @@ package nlp
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 
+	"github.com/hurshnarayan/reyna/internal/docs"
 	"github.com/hurshnarayan/reyna/internal/integrations/llm"
+	"github.com/hurshnarayan/reyna/internal/model"
 )
 
 // geminiInlineMaxBytes is the safe ceiling for inline base64-encoded file data
 // in a single Gemini generateContent request. Gemini's documented inline limit
 // is ~20 MB total request size; we leave headroom for prompt + base64 overhead.
 const geminiInlineMaxBytes = 14 * 1024 * 1024
+
+var istLocation = func() *time.Location {
+	loc, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		return time.FixedZone("IST", 5*3600+30*60)
+	}
+	return loc
+}()
 
 // Classifier handles NLP-based file classification and intent detection
 type Classifier struct {
@@ -31,6 +43,16 @@ func (c *Classifier) IsEnabled() bool {
 	return c.llm != nil && c.llm.IsEnabled()
 }
 
+// OutOfAllowanceUntil reports whether the day's model allowance is spent, and
+// when it returns. Callers use it to answer plainly instead of doing work that
+// cannot produce an answer.
+func (c *Classifier) OutOfAllowanceUntil() (time.Time, bool) {
+	if c.llm == nil || !c.llm.IsEnabled() {
+		return time.Time{}, false
+	}
+	return llm.QuotaExhaustedUntil()
+}
+
 // ProviderName returns the active LLM provider name
 func (c *Classifier) ProviderName() string {
 	if c.llm == nil {
@@ -43,9 +65,10 @@ func (c *Classifier) ProviderName() string {
 
 // ClassifyFile determines the best folder for a file based on its name.
 // Folder Priority Logic (from PDF):
-//   1st: User-created folders — your structure wins
-//   2nd: Reyna-created folders — from past classifications
-//   3rd: Create new folder — only when nothing fits
+//
+//	1st: User-created folders — your structure wins
+//	2nd: Reyna-created folders — from past classifications
+//	3rd: Create new folder — only when nothing fits
 func (c *Classifier) ClassifyFile(fileName string, existingFolders []string) (folder string, isNew bool, confidence float64) {
 	// Priority 1 & 2: Try keyword match against existing folders (user + reyna folders)
 	if match, conf := c.keywordMatchFolder(fileName, existingFolders); match != "" {
@@ -71,35 +94,36 @@ func (c *Classifier) ClassifyFile(fileName string, existingFolders []string) (fo
 }
 
 // guessFolderFromFilename produces a sensible folder name from a filename when
-// no other signal is available. Tries course-code prefixes, then content-type
-// hints, then a generic "Notes" bucket.
+// no other signal is available.
+//
+// Deliberately vague. This runs only when the model is unavailable and the
+// filename is the only clue, and a wrong specific answer is worse than a
+// right vague one: a bank statement filed under "Assignments" is harder to
+// find than one left in a general bucket. It used to read leading course
+// codes like CSE201 and produce "CSE201 Notes", which was correct for a
+// class group and wrong for everyone else.
 func guessFolderFromFilename(fileName string) string {
-	base := strings.TrimSuffix(fileName, filepathExt(fileName))
-	lower := strings.ToLower(base)
-	// Course code: leading letters+digits like BAI103, BESC104C, CSE201
-	for i := 0; i < len(base); i++ {
-		if base[i] == '_' || base[i] == '-' || base[i] == ' ' || base[i] == '.' {
-			code := base[:i]
-			if isCourseCode(code) {
-				return strings.ToUpper(code) + " Notes"
-			}
-			break
+	lower := strings.ToLower(strings.TrimSuffix(fileName, filepathExt(fileName)))
+	switch {
+	case containsAny(lower, "invoice", "receipt", "bill", "payment"):
+		return "Receipts"
+	case containsAny(lower, "contract", "agreement", "lease", "policy", "nda"):
+		return "Contracts"
+	case containsAny(lower, "ticket", "boarding", "itinerary", "booking"):
+		return "Travel"
+	case containsAny(lower, "slide", "ppt", "deck", "presentation"):
+		return "Presentations"
+	}
+	return "Documents"
+}
+
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
 		}
 	}
-	if isCourseCode(base) {
-		return strings.ToUpper(base) + " Notes"
-	}
-	switch {
-	case strings.Contains(lower, "slide") || strings.Contains(lower, "ppt"):
-		return "Slides"
-	case strings.Contains(lower, "assign") || strings.Contains(lower, "hw"):
-		return "Assignments"
-	case strings.Contains(lower, "lab"):
-		return "Lab"
-	case strings.Contains(lower, "syllabus"):
-		return "Syllabus"
-	}
-	return "Notes"
+	return false
 }
 
 func filepathExt(name string) string {
@@ -109,24 +133,6 @@ func filepathExt(name string) string {
 		}
 	}
 	return ""
-}
-
-func isCourseCode(s string) bool {
-	if len(s) < 4 || len(s) > 10 {
-		return false
-	}
-	hasLetter, hasDigit := false, false
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
-			hasLetter = true
-		case r >= '0' && r <= '9':
-			hasDigit = true
-		default:
-			return false
-		}
-	}
-	return hasLetter && hasDigit
 }
 
 // keywordMatchFolder tries to match filename against existing folder names
@@ -140,20 +146,20 @@ func (c *Classifier) keywordMatchFolder(fileName string, folders []string) (stri
 		}
 		// Check common abbreviations
 		abbrevs := map[string][]string{
-			"dsa":           {"data structure", "algorithm", "sorting", "linked list", "tree", "graph"},
-			"os":            {"operating system", "process", "thread", "scheduling", "memory management"},
-			"dbms":          {"database", "sql", "normalization", "er diagram", "relational"},
-			"cn":            {"computer network", "networking", "tcp", "udp", "osi", "routing"},
-			"daa":           {"design and analysis", "algorithm", "complexity", "dynamic programming"},
-			"coa":           {"computer organization", "architecture", "pipeline", "cache"},
-			"compiler":      {"compiler design", "lexical", "parsing", "syntax"},
-			"maths":         {"math", "calculus", "linear algebra", "probability", "statistics"},
-			"physics":       {"physics", "mechanics", "thermodynamics", "optics", "quantum"},
-			"chemistry":     {"chemistry", "organic", "inorganic", "physical chemistry"},
-			"pyq":           {"previous year", "past paper", "exam paper", "question paper"},
-			"assignment":    {"assignment", "homework", "submission"},
-			"lab":           {"lab", "practical", "experiment"},
-			"notes":         {"notes", "lecture", "module", "unit"},
+			"dsa":        {"data structure", "algorithm", "sorting", "linked list", "tree", "graph"},
+			"os":         {"operating system", "process", "thread", "scheduling", "memory management"},
+			"dbms":       {"database", "sql", "normalization", "er diagram", "relational"},
+			"cn":         {"computer network", "networking", "tcp", "udp", "osi", "routing"},
+			"daa":        {"design and analysis", "algorithm", "complexity", "dynamic programming"},
+			"coa":        {"computer organization", "architecture", "pipeline", "cache"},
+			"compiler":   {"compiler design", "lexical", "parsing", "syntax"},
+			"maths":      {"math", "calculus", "linear algebra", "probability", "statistics"},
+			"physics":    {"physics", "mechanics", "thermodynamics", "optics", "quantum"},
+			"chemistry":  {"chemistry", "organic", "inorganic", "physical chemistry"},
+			"pyq":        {"previous year", "past paper", "exam paper", "question paper"},
+			"assignment": {"assignment", "homework", "submission"},
+			"lab":        {"lab", "practical", "experiment"},
+			"notes":      {"notes", "lecture", "module", "unit"},
 		}
 		if expanded, ok := abbrevs[fl]; ok {
 			for _, term := range expanded {
@@ -369,17 +375,23 @@ func (c *Classifier) ClassifyFileWithContent(fileName, mimeType string, fileData
 			metaBlock = "\nContext:\n" + metaBlock + "\n"
 		}
 
-		prompt := fmt.Sprintf(`You are a document analysis and classification agent for a university study group's shared file system. Analyze the attached document AND its sharing context, then:
-1. "content": detailed description of topics, concepts, chapters, key terms inside the document (max 800 chars). Read the actual document — do not guess from the filename.
+		prompt := fmt.Sprintf(`You are a document analysis and classification agent for a personal file archive. The files can be anything a person keeps: invoices, contracts, tickets, receipts, medical records, scanned paperwork, manuals, photos of documents, work files, study material. Analyze the attached document AND its sharing context, then:
+1. "content": the document's actual readable text, not a description of it. Transcribe what it says.
+   This is the only record kept of what is inside the file, and every later question is answered from it alone.
+   Copy every fact verbatim: names, dates, times, amounts, reference numbers, room and seat codes, table rows, deadlines, contact details, terms.
+   A table becomes one line per row with its columns separated by " | ".
+   Do NOT write "contains a timetable with room assignments". Write the rows, with the rooms in them.
+   Skip decoration and repeated headers. Up to 6000 characters; if the document is longer, keep the parts carrying specific facts and drop the prose.
+   Begin each page with a marker on its own line, exactly [[page 1]], [[page 2]] and so on, so a later answer can point at the page it came from. Number them as the document does if it prints page numbers, otherwise count from one.
 2. "summary": one-line summary (max 100 chars).
 3. "folder": classify into the best folder from: [%s]
 
    STRICT folder rules:
-   - Use an existing folder ONLY if the document is unambiguously about that exact subject. "Close enough" or "topically adjacent" is NOT a match. Each university subject is its own folder.
-   - Examples of WRONG matches: putting CAED (Computer Aided Engineering Drawing) under "Engineering Science"; putting DBMS under "Computer Science"; putting Operating Systems under "Computer Networks"; putting a Compiler Design PDF under "Programming". These are DIFFERENT subjects — never lump them.
-   - Examples of CORRECT matches: a Compiler Design lab manual → existing "Compiler Design" folder; a DBMS PYQ → existing "DBMS" folder.
-   - If no existing folder is an exact subject match, INVENT a new clean 2–3 word Title Case folder named after the document's actual subject (e.g. "CAED", "Engineering Drawing", "Compiler Design", "Operating Systems"). Recognise common Indian engineering course codes as their own subject: CAED, ESC, BESC, BCS, BEC, BCSL, etc. — these are distinct subjects, not generic "Engineering".
-   - NEVER return "None", "Unsorted", "Unknown", "Misc", "Other", "General", "Engineering", "Science" or any vague umbrella. Always pick or invent a SPECIFIC subject folder.
+   - Use an existing folder ONLY if the document is unambiguously about that exact thing. "Close enough" is not a match.
+   - Wrong: a phone bill under "Contracts"; a tax return under "Receipts"; a database exam paper under "Computer Science". These are different things, do not lump them.
+   - Right: an electricity bill → an existing "Electricity Bills" folder; a compiler design manual → an existing "Compiler Design" folder.
+   - If nothing matches exactly, invent a clean two or three word Title Case folder named after what the document actually is, for example "Electricity Bills", "Rental Agreement", "Flight Tickets", "Compiler Design".
+   - NEVER return "None", "Unsorted", "Unknown", "Misc", "Other" or "General". Always something specific.
 
 4. "is_new": true if you invented the folder, false if it already exists in the list above.
 5. "confidence": 0.0–1.0. Lower confidence (≤0.6) if you had to invent the folder or if the subject is ambiguous.
@@ -394,7 +406,10 @@ Respond ONLY with JSON:
 		// Only send the doc inline if it fits Gemini's request size budget.
 		// NEVER slice raw PDF bytes — that corrupts the file and Gemini returns 400.
 		if len(fileData) <= geminiInlineMaxBytes {
-			result, err := c.llm.CompleteWithDoc(prompt, fileData, mimeType, 1500)
+			// Room for the transcription asked for above. A tight budget here
+			// silently truncates the JSON and loses exactly the tail of the
+			// document where deadlines and totals tend to live.
+			result, err := c.llm.CompleteWithDoc(prompt, fileData, mimeType, 8000)
 			if err == nil {
 				var resp struct {
 					Content    string  `json:"content"`
@@ -454,7 +469,7 @@ func (c *Classifier) classifyFromExtractedText(fileName, mimeType, extractedText
 		extractedText = extractedText[:12000] + "..."
 	}
 
-	prompt := fmt.Sprintf(`You are a document analysis and classification agent for a university study group's shared file system. The document is a %s — its full text content (extracted from the file) is provided below. Analyze it and return:
+	prompt := fmt.Sprintf(`You are a document analysis and classification agent for a personal file archive. The files can be anything a person keeps: invoices, contracts, tickets, receipts, medical records, scanned paperwork, manuals, photos of documents, work files, study material. The document is a %s — its full text content (extracted from the file) is provided below. Analyze it and return:
 1. "summary": one-line summary of what the document is actually about (max 100 chars). Use the CONTENT, not the filename.
 2. "folder": classify into the best folder from: [%s]
 
@@ -528,7 +543,7 @@ func (c *Classifier) llmClassifyFile(fileName string, existingFolders []string) 
 		foldersStr = strings.Join(existingFolders, ", ")
 	}
 
-	prompt := fmt.Sprintf(`You are a file classification system for a university study group. Given a filename and a list of existing folders, determine the best folder for this file.
+	prompt := fmt.Sprintf(`You are a file classification system for a personal file archive covering any kind of document. Given a filename and a list of existing folders, determine the best folder for this file.
 
 Existing folders: [%s]
 
@@ -701,7 +716,7 @@ func (c *Classifier) keywordDetectIntent(msg string) (string, string) {
 
 // llmDetectIntent uses the configured LLM for ambiguous messages
 func (c *Classifier) llmDetectIntent(msg string) (string, string) {
-	prompt := fmt.Sprintf(`You are an intent classifier for Reyna, a file management bot in a WhatsApp study group. Classify this message into one of these intents:
+	prompt := fmt.Sprintf(`You are an intent classifier for Reyna, which files and finds documents shared in a person's chats. Classify this message into one of these intents:
 
 - "save" — user wants to save/stage/track a file
 - "push" — user wants to commit/upload staged files to Google Drive
@@ -744,48 +759,172 @@ Respond ONLY with JSON, no other text:
 // ExtractContent sends the actual file data to the LLM for deep content extraction.
 // PDFs are base64-encoded and sent as document blocks to Claude/Gemini.
 // For providers that don't support doc blocks (OpenAI/Grok), falls back to filename analysis.
-func (c *Classifier) ExtractContent(fileName, mimeType string, fileSize int64, fileData []byte) (content string, summary string) {
-	if !c.IsEnabled() {
-		return "", ""
+// ErrNotAttempted means the document was never actually read.
+//
+// It exists to separate "this file was opened and holds no text" from "the
+// reading could not be tried". The two used to be indistinguishable: any
+// failure returned empty content, and the caller recorded that as a document
+// with nothing in it and stopped ever offering the file again. On a free
+// allowance of twenty model calls a day, a single quota refusal was therefore
+// enough to retire a document permanently, and it did: "2CSE Module 1 ODE of
+// first order.pdf" was marked unreadable and could never answer a question
+// about module 1 ODE again.
+var ErrNotAttempted = errors.New("document was not read")
+
+func (c *Classifier) ExtractContent(fileName, mimeType string, fileSize int64, fileData []byte) (content string, summary string, err error) {
+	// Read it here when the format allows it.
+	//
+	// Free, instant, exact, and it does not touch a daily allowance measured
+	// in tens of calls. Only PDFs genuinely need the model, because nothing in
+	// the standard library turns a PDF into text.
+	if docs.CanExtract(fileName) {
+		if text, err := docs.Text(fileName, fileData); err == nil && strings.TrimSpace(text) != "" {
+			return text, c.summarise(fileName, text), nil
+		}
 	}
 
-	prompt := fmt.Sprintf(`You are a document analysis agent for a university study group file system.
-Analyze this document and extract:
-1. "content": detailed description of the topics, concepts, chapters, key terms it covers (max 800 chars)
-2. "summary": one-line summary (max 100 chars)
+	if !c.IsEnabled() {
+		return "", "", ErrNotAttempted
+	}
+
+	// Only PDFs and images reach the model. Everything else either was read
+	// above or cannot be read at all, and guessing a document's contents from
+	// its filename is worse than admitting it has not been read: it produces a
+	// confident paragraph about a document nobody has opened, and the answer
+	// generator has no way to tell that apart from a real reading.
+	canSend := len(fileData) > 0 && len(fileData) <= geminiInlineMaxBytes &&
+		(strings.Contains(mimeType, "pdf") || strings.Contains(mimeType, "image"))
+	if !canSend {
+		// Nothing was tried, so nothing was learned. A file too large to send
+		// today may be readable by another route later, and a file whose bytes
+		// never arrived is not a file without text.
+		return "", "", ErrNotAttempted
+	}
+
+	prompt := fmt.Sprintf(`Read this document and return what it actually says.
+
+1. "content": the document's readable text, not a description of it. Transcribe it.
+   Copy every fact verbatim: names, dates, times, amounts, reference numbers, room and seat codes, table rows, deadlines, contact details, terms, definitions, formulas.
+   A table becomes one line per row with its columns separated by " | ".
+   Do NOT write "contains a timetable with room assignments". Write the rows, with the rooms in them.
+   Skip decoration and repeated headers. Up to 6000 characters.
+   Begin each page with a marker on its own line, exactly [[page 1]], [[page 2]] and so on.
+2. "summary": one line, under 100 characters, saying what the document is.
 
 Filename: "%s"
 
 Respond ONLY with JSON, no other text:
 {"content": "...", "summary": "..."}`, fileName)
 
-	var result string
-	var err error
-
-	// Try sending actual file data for deep extraction (PDF, images).
-	// Never slice raw bytes — that corrupts the file. Only send if it fits inline.
-	if len(fileData) > 0 && len(fileData) <= geminiInlineMaxBytes && (strings.Contains(mimeType, "pdf") || strings.Contains(mimeType, "image")) {
-		result, err = c.llm.CompleteWithDoc(prompt, fileData, mimeType, 1500)
-	} else {
-		// For DOCXs and other types, use filename-based analysis
-		result, err = c.llm.Complete(prompt, 800)
-	}
-
+	result, err := c.llm.CompleteWithDoc(prompt, fileData, mimeType, 8000)
 	if err != nil {
-		log.Printf("[EXTRACT] Error: %v, falling back to filename analysis", err)
-		return c.extractFromFilename(fileName, mimeType, fileSize)
+		log.Printf("[EXTRACT] %s: %v", fileName, err)
+		return "", "", ErrNotAttempted
 	}
 
 	var resp struct {
 		Content string `json:"content"`
 		Summary string `json:"summary"`
 	}
-	result = llm.CleanJSON(result)
-	if err := json.Unmarshal([]byte(result), &resp); err != nil {
-		log.Printf("[EXTRACT] Parse error: %v", err)
-		return c.extractFromFilename(fileName, mimeType, fileSize)
+	if err := json.Unmarshal([]byte(llm.CleanJSON(result)), &resp); err != nil {
+		// A transcription that ran past the token ceiling is cut off mid-string
+		// and will never parse, and throwing it away loses a complete and
+		// correct reading of everything up to the cut. This is not a rare edge:
+		// a dense PDF of worked mathematics transcribes to far more text than
+		// the reply budget holds, and "2CSE Module 1 ODE of first order.pdf"
+		// returned fourteen thousand good characters that were discarded as a
+		// parse error, then recorded as a document containing nothing.
+		if salvaged := salvageJSONString(llm.CleanJSON(result), "content"); salvaged != "" {
+			log.Printf("[EXTRACT] %s: reply was cut short, kept %d chars of %d", fileName, len(salvaged), len(result))
+			return salvaged, c.summarise(fileName, salvaged), nil
+		}
+		log.Printf("[EXTRACT] %s: parse error: %v (reply was %d chars)", fileName, err, len(result))
+		// The model answered, but not in the shape asked for. That is a bad
+		// reply rather than a document with nothing in it, so the file stays
+		// eligible to be read again.
+		return "", "", ErrNotAttempted
 	}
-	return resp.Content, resp.Summary
+	return resp.Content, resp.Summary, nil
+}
+
+// salvageJSONString pulls one string field out of JSON that does not parse.
+//
+// Only useful for the one failure it is written for: a reply truncated at the
+// token ceiling, so the field's opening quote is present and its closing quote
+// never arrived. It walks the string honouring escapes, which is what keeps a
+// transcription containing quotation marks or backslashes from being cut at
+// the wrong place, and returns everything up to wherever the text stopped.
+func salvageJSONString(raw, field string) string {
+	key := `"` + field + `"`
+	i := strings.Index(raw, key)
+	if i < 0 {
+		return ""
+	}
+	rest := raw[i+len(key):]
+
+	// Step over the colon and any spacing to the opening quote.
+	j := 0
+	for j < len(rest) && (rest[j] == ' ' || rest[j] == '\t' || rest[j] == '\n' || rest[j] == ':') {
+		j++
+	}
+	if j >= len(rest) || rest[j] != '"' {
+		return ""
+	}
+	rest = rest[j+1:]
+
+	var b strings.Builder
+	for k := 0; k < len(rest); k++ {
+		ch := rest[k]
+		if ch == '\\' {
+			if k+1 >= len(rest) {
+				break // truncated mid-escape
+			}
+			k++
+			switch rest[k] {
+			case 'n':
+				b.WriteByte('\n')
+			case 't':
+				b.WriteByte('\t')
+			case 'r':
+				b.WriteByte('\r')
+			case 'u':
+				if k+4 < len(rest) {
+					var r rune
+					if _, err := fmt.Sscanf(rest[k+1:k+5], "%04x", &r); err == nil {
+						b.WriteRune(r)
+						k += 4
+					}
+				}
+			default:
+				b.WriteByte(rest[k])
+			}
+			continue
+		}
+		if ch == '"' {
+			break // the field closed properly after all
+		}
+		b.WriteByte(ch)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// summarise writes the one line shown beside a file, from text already in hand.
+//
+// Falls back to the opening line rather than spending a model call: the
+// summary is a label, and a label is not worth one of the day's few calls when
+// the full text is already stored and searchable.
+func (c *Classifier) summarise(fileName, text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "[[page") {
+			continue
+		}
+		if len(line) > 100 {
+			line = line[:100]
+		}
+		return line
+	}
+	return fileName
 }
 
 // extractFromFilename is the fallback when file data can't be sent to the LLM
@@ -813,25 +952,100 @@ Respond ONLY with JSON: {"content": "...", "summary": "..."}`, fileName, mimeTyp
 	return resp.Content, resp.Summary
 }
 
-// ── NLP Query Parsing (WHO/WHAT/WHEN/WHY) ──
+// ParsedNLPQuery represents the structured analysis of a search or retrieval query.
+type ParsedNLPQuery struct {
+	Who            string   `json:"who"`
+	What           string   `json:"what"`
+	When           string   `json:"when"`
+	Why            string   `json:"why"`
+	SearchTerms    []string `json:"search_terms"`
+	HasContentCues bool     `json:"has_content_cues"`
+}
 
-// ParseNLPQuery parses a natural language query into structured components.
-// Uses AI as primary parser, keyword as fallback (per PDF: "the main killer feature").
-func (c *Classifier) ParseNLPQuery(query string) (who, what, when, why string) {
-	// Primary: Use LLM for accurate parsing of any natural language
+// ParseNLPQueryDetailed parses a natural language query with conversation history into structured filters
+// including expanded search terms, alias resolution, and content-cue detection.
+func (c *Classifier) ParseNLPQueryDetailed(query string, history []model.ChatMessageContext) ParsedNLPQuery {
 	if c.IsEnabled() {
-		who, what, when, why = c.llmParseQuery(query)
-		if who != "" || what != "" {
-			// Drop generic filler words from WHAT that would over-filter results
-			what = c.cleanGenericWhat(what)
-			return
+		p := c.llmParseQueryDetailedWithHistory(query, history)
+		if strings.EqualFold(strings.TrimSpace(p.Who), "reyna") {
+			if p.What == "" {
+				p.What = "reyna"
+			} else if !strings.Contains(strings.ToLower(p.What), "reyna") {
+				p.What = "reyna " + p.What
+			}
+			p.Who = ""
+		}
+		p.What = c.cleanGenericWhat(p.What)
+		p.Why = normalizeRetrievalIntent(query, p.Why)
+		if p.Why == "smalltalk" || p.Who != "" || p.What != "" || len(p.SearchTerms) > 0 {
+			return p
 		}
 	}
 
 	// Fallback: keyword parsing (free, instant)
-	who, what, when, why = c.keywordParseQuery(query)
+	who, what, when, why := c.keywordParseQuery(query)
+	if strings.EqualFold(strings.TrimSpace(who), "reyna") {
+		if what == "" {
+			what = "reyna"
+		} else if !strings.Contains(strings.ToLower(what), "reyna") {
+			what = "reyna " + what
+		}
+		who = ""
+	}
 	what = c.cleanGenericWhat(what)
-	return
+	why = normalizeRetrievalIntent(query, why)
+	var terms []string
+	if what != "" {
+		terms = append(terms, what)
+	}
+	return ParsedNLPQuery{
+		Who:            who,
+		What:           what,
+		When:           when,
+		Why:            why,
+		SearchTerms:    terms,
+		HasContentCues: false,
+	}
+}
+
+// ParseNLPQuery parses a natural language query into structured components.
+// Uses AI as primary parser, keyword as fallback (per PDF: "the main killer feature").
+func (c *Classifier) ParseNLPQuery(query string) (who, what, when, why string) {
+	return c.ParseNLPQueryWithHistory(query, nil)
+}
+
+// ParseNLPQueryWithHistory parses a query with recent conversation history for pronoun/context resolution.
+func (c *Classifier) ParseNLPQueryWithHistory(query string, history []model.ChatMessageContext) (who, what, when, why string) {
+	p := c.ParseNLPQueryDetailed(query, history)
+	return p.Who, p.What, p.When, p.Why
+}
+
+// normalizeRetrievalIntent keeps the delivery contract independent of which
+// parser produced WHY. "Get me" and "send me" ask for the file itself; treating
+// them as search/QA made Reyna describe matches or ask the user to choose even
+// after the requested WhatsApp file had already reached the backend.
+func normalizeRetrievalIntent(query, parsed string) string {
+	if parsed == "fetch" {
+		return parsed
+	}
+
+	q := strings.ToLower(strings.Trim(strings.TrimSpace(query), "?.,! "))
+	for {
+		before := q
+		for _, prefix := range []string{"hey reyna ", "reyna, ", "reyna ", "please ", "can you ", "could you "} {
+			q = strings.TrimSpace(strings.TrimPrefix(q, prefix))
+		}
+		if q == before {
+			break
+		}
+	}
+
+	for _, request := range []string{"fetch", "get me", "send me"} {
+		if q == request || strings.HasPrefix(q, request+" ") {
+			return "fetch"
+		}
+	}
+	return parsed
 }
 
 // cleanGenericWhat removes filler words from WHAT that would incorrectly filter results.
@@ -878,10 +1092,11 @@ func (c *Classifier) keywordParseQuery(query string) (who, what, when, why strin
 		"the": true, "any": true, "anyone": true, "someone": true, "we": true,
 		"i": true, "you": true, "me": true, "my": true, "some": true,
 		"a": true, "an": true, "all": true, "those": true, "these": true,
+		"reyna": true,
 	}
 
 	// Action verbs that come AFTER a person's name: "X sent me", "X shared", "X uploaded"
-	actionVerbs := []string{" sent ", " shared ", " uploaded ", " gave ", " posted "}
+	actionVerbs := []string{" sent ", " shared ", " uploaded ", " gave ", " posted ", " forwarded "}
 	for _, verb := range actionVerbs {
 		if idx := strings.Index(lower, verb); idx > 0 {
 			// Everything before the verb is potentially the WHO
@@ -909,30 +1124,8 @@ func (c *Classifier) keywordParseQuery(query string) (who, what, when, why strin
 		}
 	}
 
-	// Pattern: "[what] by [who]" e.g. "physics notes by harsh" or "files by harsh"
-	if idx := strings.LastIndex(lower, " by "); idx >= 0 {
-		nameCandidate := strings.Trim(strings.TrimSpace(lower[idx+4:]), "?.,! ")
-		parts := strings.Fields(nameCandidate)
-		if len(parts) > 0 {
-			cand := parts[0]
-			if !skipWords[cand] && len(cand) > 1 {
-				who = cand
-				beforeBy := strings.TrimSpace(lower[:idx])
-				for _, noise := range []string{"show me", "get me", "find", "do we have", "any", "some", "the"} {
-					beforeBy = strings.TrimSpace(strings.ReplaceAll(beforeBy, noise, ""))
-				}
-				what = c.cleanGenericWhat(beforeBy)
-				why = "retrieve"
-				return who, what, when, why
-			}
-		}
-	}
-
-	// Pattern: "what did X share/send/upload" or "files by X"
-	prefixPatterns := []string{
-		"what did ", "did ", "has ", "from ", "files from ", "notes from ",
-		"files by ", "notes by ", "docs by ", "documents by ", "shared by ", "sent by ", "by ",
-	}
+	// Pattern: "what did X share/send/upload"
+	prefixPatterns := []string{"what did ", "did ", "has ", "from ", "files from ", "notes from ", "shared by "}
 	for _, p := range prefixPatterns {
 		if idx := strings.Index(lower, p); idx >= 0 {
 			rest := lower[idx+len(p):]
@@ -943,9 +1136,10 @@ func (c *Classifier) keywordParseQuery(query string) (who, what, when, why strin
 					who = candidate
 					// Rest after the name is the WHAT context
 					remaining := strings.Join(parts[1:], " ")
-					for _, noise := range []string{"share", "shared", "upload", "uploaded", "send", "sent", "about", "any", "the", "me"} {
-						remaining = strings.Replace(remaining, noise, "", -1)
-					}
+					remaining = stripPhrases(remaining, []string{
+						"share", "shared", "upload", "uploaded", "send", "sent",
+						"about", "any", "the", "me",
+					})
 					remaining = strings.Trim(strings.TrimSpace(remaining), "?.,! ")
 					if remaining != "" {
 						what = remaining
@@ -958,7 +1152,9 @@ func (c *Classifier) keywordParseQuery(query string) (who, what, when, why strin
 	}
 
 	// WHY patterns
-	if strings.Contains(lower, "find") || strings.Contains(lower, "search") || strings.Contains(lower, "get") {
+	if strings.HasPrefix(lower, "fetch") || strings.Contains(lower, "fetch") {
+		why = "fetch"
+	} else if strings.Contains(lower, "find") || strings.Contains(lower, "search") || strings.Contains(lower, "get") {
 		why = "search"
 	} else if strings.Contains(lower, "do we have") || strings.Contains(lower, "has anyone") || strings.Contains(lower, "is there") {
 		why = "check_existence"
@@ -970,11 +1166,15 @@ func (c *Classifier) keywordParseQuery(query string) (who, what, when, why strin
 
 	// WHAT — if not already set, clean up remaining text
 	if what == "" && lower != "" {
-		what = lower
-		for _, w := range []string{"share", "shared", "upload", "uploaded", "sent", "send", "about", "any", "the",
-			"do we have", "has anyone shared", "find", "search for", "get me", "show me", "me", "some"} {
-			what = strings.Replace(what, w, "", -1)
-		}
+		what = stripPhrases(lower, []string{
+			"please send me", "please get me", "please fetch me",
+			"can you find me", "can you show me", "can you get me", "can you find", "can you",
+			"fetch me", "fetch",
+			"find me", "show me", "get me", "search for", "find", "search",
+			"has anyone shared", "do we have", "share", "shared", "upload", "uploaded",
+			"sent", "send", "received", "receive", "about", "any", "the", "some",
+			"latest", "recently", "recent", "me",
+		})
 		what = strings.Trim(strings.TrimSpace(what), "?.,! ")
 	}
 
@@ -982,48 +1182,104 @@ func (c *Classifier) keywordParseQuery(query string) (who, what, when, why strin
 }
 
 func (c *Classifier) llmParseQuery(query string) (who, what, when, why string) {
-	prompt := fmt.Sprintf(`You are a query parser for a file retrieval system in a WhatsApp study group.
+	return c.ParseNLPQueryWithHistory(query, nil)
+}
+
+func (c *Classifier) llmParseQueryDetailedWithHistory(query string, history []model.ChatMessageContext) ParsedNLPQuery {
+	var histSection string
+	if len(history) > 0 {
+		var histBuf strings.Builder
+		histBuf.WriteString("Recent Conversation History:\n")
+		for _, h := range history {
+			role := "User"
+			if h.Role == "assistant" {
+				role = "Assistant"
+			}
+			fmt.Fprintf(&histBuf, "%s: %s\n", role, h.Text)
+			if len(h.FileNames) > 0 {
+				fmt.Fprintf(&histBuf, "  (Files cited: %s)\n", strings.Join(h.FileNames, ", "))
+			}
+		}
+		histBuf.WriteString("\n")
+		histSection = histBuf.String()
+	}
+
+	now := time.Now().In(istLocation)
+	calendarAnchor := fmt.Sprintf("REAL-WORLD CALENDAR CONTEXT: Today is %s; Tomorrow is %s; Yesterday was %s",
+		now.Format("Monday, 02 January 2006"),
+		now.AddDate(0, 0, 1).Format("Monday, 02 January 2006"),
+		now.AddDate(0, 0, -1).Format("Monday, 02 January 2006"))
+
+	prompt := fmt.Sprintf(`You are an intelligent query parser for a personal document retrieval assistant covering files shared in chats (invoices, tickets, receipts, IDs, notes, medical reports, contracts, spreadsheets, photos, etc.).
 Parse this natural language query into structured search filters.
 
-Query: "%s"
+%s
+%sCurrent Query: "%s"
 
 Rules:
-- "who": Extract the PERSON'S NAME if the user is asking about files from a specific person. Leave empty if no person mentioned.
-- "what": Extract the SPECIFIC TOPIC or SUBJECT being searched. If the user just says generic words like "notes", "files", "stuff", "documents" with no specific topic, leave this empty.
-- "when": Extract time reference as one of: today, yesterday, last_week, this_week, last_month. Leave empty if no time mentioned.
-- "why": One of: retrieve, search, check_existence, activity_check
+- "who": Extract the PERSON'S NAME ONLY if the user is asking about files sent/shared by a specific sender person (e.g. "what did Priya send", "files from Mohit", "Rahul ne kya bheja"). Leave empty if a person is named as the passenger, subject, or owner of a document (e.g. "ticket of Harsh and Khushi", "photo of Yash", "resume of Alice", "marksheet of Rahul" -> the persons belong in "what" and "search_terms", NOT in "who", because they are the passengers/subjects inside the document, not the WhatsApp sender).
+  IMPORTANT: The assistant/app itself is named "Reyna". "Reyna" is NEVER a sender person. If the user mentions "Reyna" (e.g. "Reyna script", "Reyna document", "hey Reyna find X"), "Reyna" belongs in "what" if it is part of the topic/document name, or ignored if used as a greeting. NEVER set "who" to "Reyna".
+- "what": Extract the SPECIFIC TOPIC, KEYWORD, or SUBJECT being searched. Correct any obvious typos or misspelled words (e.g. "compriot" -> "compatriot", "tikcet" -> "ticket", "depature" -> "departure").
+  CONTEXT RESOLUTION RULE: If the query uses pronouns or follow-up phrases (e.g. "can you find it?", "what does it say?", "explain module 1 from that", "open it", "summarize it", "who sent it?", "send that to me", "where is that exam?"), RESOLVE the referred topic or file from the Conversation History and output that specific topic/filename in "what".
+  CRITICAL RECENCY RULE FOR FOLLOW-UPS & FETCH: When resolving "fetch it", "send it", "open it", "fetch that", or pronouns, ALWAYS resolve to the entity, file, or topic discussed in the IMMEDIATELY PRECEDING turn (the last assistant message or last user query). NEVER skip over the most recent turn to pick a file or topic from older turns earlier in the conversation!
+  IMPORTANT: If the user is asking a GENERAL or SKEPTICAL schedule query (e.g. "tomorrow I've to go somewhere or what?", "tomorrow I've to go somewhere?", "do I have any plans tomorrow?", "is there any ticket for tomorrow?", "koi ticket hai kya?", "kal kahi jana hai kya?"), do NOT narrow "what" to a single previous file or flight! Keep "what" as general "travel plans" or "ticket" so all travel documents (trains, flights, buses) can be searched for that date!
+- "when": Extract time reference if present: today, tomorrow, yesterday, this_week, last_week, next_week, this_month, next_month, or specific calendar date. ONLY extract when an explicit calendar period is specified. Words like "latest", "recent", "newest", "last" indicate sorting order, NOT a time filter; leave "when" empty for them.
+- "why": One of: retrieve, search, check_existence, activity_check, qa, fetch, smalltalk.
+  * Set "smalltalk" for greetings, thanks ("thanks", "dhanyawad", "shukriya", "hi", "namaste") with no search request.
+  * Set "fetch" when the user asks to receive or open the file itself ("fetch", "get me", "send me").
+  * Set "qa" when they ask what a document says or ask a factual/informational question.
+- "search_terms": An array of 1 to 6 high-recall search keywords/aliases/synonyms for database search:
+  * Fix typos and include both corrected word and typed variant (e.g. "compriot" -> ["compatriot", "compriot"], "hyderbad" -> ["hyderabad", "hyderbad"], "chemstry" -> ["chemistry", "chemstry"]).
+  * Expand city, station, and transit aliases (e.g. if query mentions "Hyderabad", include "Hyderabad", "Secunderabad", "HYB", "SC"; if "Bengaluru", include "Bengaluru", "Bangalore", "SBC"; if "Delhi", include "Delhi", "NDLS").
+  * Expand travel/schedule terms (e.g. if query is "tomorrow I've to go somewhere?", include ["flight", "train", "ticket", "booking", "travel", "itinerary"]).
+  * For multilingual queries, include English translations and transliterated terms (e.g. "bijli ka bil" -> ["electricity bill", "bijli", "bill", "electricity"]).
+  * Include any numbers, codes, dates, or PNRs mentioned (e.g. "4656526133").
+- "has_content_cues": true if the query asks about details *inside* the file (departure times, amounts, dates, formulas, room numbers, specific clauses) rather than just asking for a file by name.
 
 Examples:
-- "mohit sent some notes" → {"who":"mohit","what":"","when":"","why":"retrieve"}
-- "files by harsh?" → {"who":"harsh","what":"","when":"","why":"retrieve"}
-- "notes by harsh" → {"who":"harsh","what":"","when":"","why":"retrieve"}
-- "do we have OS notes?" → {"who":"","what":"OS","when":"","why":"check_existence"}
-- "what did priya upload yesterday?" → {"who":"priya","what":"","when":"yesterday","why":"retrieve"}
-- "find compiler lab manual" → {"who":"","what":"compiler lab manual","when":"","why":"search"}
-- "rakesh shared quantum mechanics pdf" → {"who":"rakesh","what":"quantum mechanics","when":"","why":"retrieve"}
+- "something compriot file i had" → {"who":"","what":"compatriot file","when":"","why":"retrieve","search_terms":["compatriot","compriot","file"],"has_content_cues":false}
+- "ticket of harsh and khushi" → {"who":"","what":"ticket of harsh and khushi","when":"","why":"fetch","search_terms":["train","ticket","harsh","khushi","booking","travel"],"has_content_cues":false}
+- "tomorrow I've to go somewhere or what?" → {"who":"","what":"travel plans","when":"tomorrow","why":"qa","search_terms":["flight","train","ticket","booking","travel","itinerary"],"has_content_cues":true}
+- "tomorrow I've to go somewhere?" → {"who":"","what":"travel plans","when":"tomorrow","why":"qa","search_terms":["flight","train","ticket","booking","travel","itinerary"],"has_content_cues":true}
+- "can you find me the latest Reyna script received" → {"who":"","what":"Reyna script","when":"","why":"search","search_terms":["reyna","script"],"has_content_cues":false}
+- "at what time is my departure to Hyderabad" → {"who":"","what":"departure to Hyderabad","when":"","why":"qa","search_terms":["departure","Hyderabad","Secunderabad","ticket","train"],"has_content_cues":true}
+- "can you get me the train tikcet with 465" → {"who":"","what":"train ticket 465","when":"","why":"fetch","search_terms":["train","ticket","465"],"has_content_cues":false}
+- "bijli ka bil kitna aaya" → {"who":"","what":"electricity bill","when":"","why":"qa","search_terms":["electricity bill","bijli","bill","electricity"],"has_content_cues":true}
+- "dhanyawad reyna!" → {"who":"","what":"","when":"","why":"smalltalk","search_terms":[],"has_content_cues":false}
+- "what did priya upload yesterday?" → {"who":"priya","what":"","when":"yesterday","why":"retrieve","search_terms":[],"has_content_cues":false}
+- "find compiler lab manual" → {"who":"","what":"compiler lab manual","when":"","why":"search","search_terms":["compiler","lab manual","compiler design"],"has_content_cues":false}
 
 Respond ONLY with JSON, no other text:
-{"who":"","what":"","when":"","why":"retrieve"}`, query)
+{"who":"","what":"","when":"","why":"search","search_terms":[],"has_content_cues":false}`, calendarAnchor, histSection, query)
 
 	result, err := c.llm.Complete(prompt, 600)
 	if err != nil {
 		log.Printf("[NLP] LLM parse failed: %v, falling back to keyword parser", err)
-		// Fall back to keyword parser instead of returning raw query
-		return c.keywordParseQuery(query)
+		who, what, when, why := c.keywordParseQuery(query)
+		var terms []string
+		if what != "" {
+			terms = append(terms, what)
+		}
+		return ParsedNLPQuery{Who: who, What: what, When: when, Why: why, SearchTerms: terms}
 	}
 
-	var resp struct {
-		Who  string `json:"who"`
-		What string `json:"what"`
-		When string `json:"when"`
-		Why  string `json:"why"`
-	}
+	var resp ParsedNLPQuery
 	result = llm.CleanJSON(result)
 	if err := json.Unmarshal([]byte(result), &resp); err != nil {
 		log.Printf("[NLP] LLM parse JSON error: %v, falling back to keyword parser", err)
-		return c.keywordParseQuery(query)
+		who, what, when, why := c.keywordParseQuery(query)
+		var terms []string
+		if what != "" {
+			terms = append(terms, what)
+		}
+		return ParsedNLPQuery{Who: who, What: what, When: when, Why: why, SearchTerms: terms}
 	}
-	return resp.Who, resp.What, resp.When, resp.Why
+	return resp
+}
+
+func (c *Classifier) llmParseQueryWithHistory(query string, history []model.ChatMessageContext) (who, what, when, why string) {
+	p := c.llmParseQueryDetailedWithHistory(query, history)
+	return p.Who, p.What, p.When, p.Why
 }
 
 // ── Notes Q&A ──
@@ -1053,14 +1309,25 @@ type QAFollowup struct {
 // shared-at timestamp so the answer can say "Mohit shared this PDF this
 // morning — the Wien bridge oscillator works as follows…".
 func (c *Classifier) AnswerFromNotes(question string, sources []QASource) string {
-	return c.AnswerFromNotesWithContext(question, sources, nil)
+	return c.AnswerFromNotesWithContext(question, sources, nil, "")
 }
 
 // AnswerFromNotesWithContext is the multi-turn variant. If `prev` is non-nil
 // the prompt includes the previous question/answer so Gemini can build on it.
-func (c *Classifier) AnswerFromNotesWithContext(question string, sources []QASource, prev *QAFollowup) string {
+func (c *Classifier) AnswerFromNotesWithContext(question string, sources []QASource, prev *QAFollowup, currentUserName string) string {
 	if !c.IsEnabled() || len(sources) == 0 {
 		return "I don't have enough content from your notes to answer that. Make sure files have been shared and extracted."
+	}
+
+	now := time.Now().In(istLocation)
+	todayStr := now.Format("Monday, 02 January 2006")
+	tomorrowStr := now.AddDate(0, 0, 1).Format("Monday, 02 January 2006")
+	yesterdayStr := now.AddDate(0, 0, -1).Format("Monday, 02 January 2006")
+	currentDateTimeStr := now.Format("Monday, 02 January 2006, 15:04 MST")
+
+	userContext := "CURRENT USER IDENTITY: Unconfirmed / Device user (never assume user is the person named in documents unless verified)"
+	if currentUserName != "" {
+		userContext = fmt.Sprintf("CURRENT USER IDENTITY: Name: %q (only address user as traveler/recipient if this exact name matches the document)", currentUserName)
 	}
 
 	var context strings.Builder
@@ -1085,7 +1352,30 @@ func (c *Classifier) AnswerFromNotesWithContext(question string, sources []QASou
 		context.WriteString("\n\n")
 	}
 
-	prompt := fmt.Sprintf(`You are Reyna — a friendly study assistant living inside a WhatsApp study group. You help students find and understand things from notes their groupmates shared. You answer like a smart friend, not like a dry assistant.
+	prompt := fmt.Sprintf(`You are Reyna. You help someone find and understand documents that were shared in their chats, whatever those documents are: invoices, contracts, tickets, records, manuals, notes, anything. You answer like a smart friend, not like a dry assistant. Never assume the person is a student or that the files are course material.
+
+REAL-WORLD CALENDAR CONTEXT (GROUND TRUTH):
+- Current Date & Time: %s
+- TODAY is: %s
+- TOMORROW is: %s
+- YESTERDAY was: %s
+
+%s
+
+CRITICAL TEMPORAL VERIFICATION RULES:
+- When the question asks about relative time (e.g. "tomorrow", "today", "yesterday", "next week", "kal", "aaj"):
+  1. Check the event / journey / departure date inside the sources against the real-world calendar anchor above.
+  2. NEVER describe an event as "tomorrow" or "today" unless its actual date matches the calendar anchor!
+  3. If no event matches the requested date, clearly state so (e.g. "No travel/event is scheduled for tomorrow (%s).").
+
+CRITICAL PASSENGER & RECIPIENT IDENTITY RULES:
+- When a document contains passenger names, patient names, customer names, or recipient names:
+  1. Check if the current user's name or first name matches among the passengers or recipients (e.g. user "Harsh" matches passenger "HARSH NARAYAN").
+  2. If the user's name matches a passenger:
+     - You may say "Yes, you have a train/flight scheduled..." or "You and [co-passengers] are traveling...".
+  3. If the user's name is NOT among them, or if user identity is unconfirmed:
+     - NEVER say "You have a flight" or "You are traveling" or "Your appointment"!
+     - State the passenger/recipient names verbatim from the document.
 
 CRITICAL LANGUAGE RULE:
 - Detect the language of the QUESTION ITSELF, not the sender names. "rakesh" / "mohit" / "priya" are proper nouns and DO NOT indicate Hindi.
@@ -1128,9 +1418,9 @@ Formatting:
 SOURCE MATERIAL:
 %s
 %s
-STUDENT QUESTION: %s
+QUESTION: %s
 
-Your answer:`, context.String(), formatQAPrev(prev), question)
+Your answer:`, currentDateTimeStr, todayStr, tomorrowStr, yesterdayStr, userContext, tomorrowStr, context.String(), formatQAPrev(prev), question)
 
 	result, err := c.llm.Complete(prompt, 1200)
 	if err != nil {
@@ -1141,7 +1431,7 @@ Your answer:`, context.String(), formatQAPrev(prev), question)
 
 // formatQAPrev renders the previous Q&A turn as a context block, or empty
 // string if there's no prior turn. The block is wedged between the source
-// material and the student question in the prompt.
+// material and the person's question in the prompt.
 func formatQAPrev(prev *QAFollowup) string {
 	if prev == nil || prev.PrevQuestion == "" || prev.PrevAnswer == "" {
 		return ""
@@ -1170,13 +1460,13 @@ func (c *Classifier) MatchesQuery(query, fileName, mimeType string, fileData []b
 	if len(fileData) > 14*1024*1024 {
 		return false, 0
 	}
-	prompt := fmt.Sprintf(`You are Reyna's content retrieval agent. The student is searching their study notes with this natural-language query:
+	prompt := fmt.Sprintf(`You are Reyna's content retrieval agent. Someone is searching their own documents with this natural-language query:
 
 QUERY: "%s"
 
 The attached document's filename is: "%s"
 
-Read the document and determine: does this document satisfy what the student is looking for? Consider:
+Read the document and determine: does this document satisfy what the person is looking for? Consider:
 - Specific topics, concepts, or terms mentioned in the query
 - Visual cues ("diagram of...", "the figure showing...", "the chart with...")
 - Document type ("the PYQ paper", "the lab manual", "the assignment")
@@ -1213,7 +1503,7 @@ func (c *Classifier) MatchesQueryText(query, fileName, content string) (bool, fl
 	if len(content) > 8000 {
 		content = content[:8000]
 	}
-	prompt := fmt.Sprintf(`You are Reyna's content retrieval agent. The student is searching their study notes with this natural-language query:
+	prompt := fmt.Sprintf(`You are Reyna's content retrieval agent. Someone is searching their own documents with this natural-language query:
 
 QUERY: "%s"
 
@@ -1221,7 +1511,7 @@ Filename: "%s"
 Document summary/content (cached):
 %s
 
-Does this document satisfy what the student is asking for? Consider topics, concepts, recall hints in any language.
+Does this document satisfy what the person is asking for? Consider topics, concepts, recall hints in any language.
 
 Respond ONLY with JSON:
 {"matches": true/false, "confidence": 0.0-1.0, "snippet": "1-2 sentence reason"}`, query, fileName, content)
@@ -1255,9 +1545,13 @@ func cleanLLMReply(s string) string {
 	// If the whole thing is a JSON object with an "answer"/"reply"/"text" field,
 	// pull that field out. This is defensive — the prompt asks for plain text but
 	// the model occasionally still wraps.
-	if strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}") {
+	if strings.HasPrefix(s, "{") {
 		var obj map[string]interface{}
-		if err := json.Unmarshal([]byte(s), &obj); err == nil {
+		cleanJsonStr := s
+		if !strings.HasSuffix(cleanJsonStr, "}") {
+			cleanJsonStr = cleanJsonStr + "\"}"
+		}
+		if err := json.Unmarshal([]byte(cleanJsonStr), &obj); err == nil {
 			for _, key := range []string{"answer", "reply", "response", "text", "output", "result", "message"} {
 				if v, ok := obj[key]; ok {
 					if str, ok := v.(string); ok && str != "" {
@@ -1265,6 +1559,14 @@ func cleanLLMReply(s string) string {
 					}
 				}
 			}
+		}
+		// Regex fallback for `"answer": "..."`
+		re := regexp.MustCompile(`"(?:answer|reply|response|text|message)"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)`)
+		if matches := re.FindStringSubmatch(s); len(matches) > 1 {
+			val := matches[1]
+			val = strings.ReplaceAll(val, `\"`, `"`)
+			val = strings.ReplaceAll(val, `\n`, "\n")
+			return strings.TrimSpace(val)
 		}
 	}
 	return s
@@ -1274,9 +1576,38 @@ func cleanLLMReply(s string) string {
 // retrieval results. This replaces the old template-string buildNLPReply with
 // a conversational, multi-language, intent-aware response. Falls back to a
 // simple template if the LLM call fails.
-func (c *Classifier) GenerateRetrievalReply(rawQuery, who, what, when, why string, files []RetrievalFile, driveMatches []RetrievalFile) string {
+func (c *Classifier) GenerateRetrievalReply(rawQuery, who, what, when, why string, files []RetrievalFile, driveMatches []RetrievalFile, history []model.ChatMessageContext, currentUserName string) SourcedReply {
 	if !c.IsEnabled() {
-		return fallbackRetrievalReply(rawQuery, files, driveMatches, who, what, when)
+		return SourcedReply{Answer: fallbackRetrievalReply(rawQuery, files, driveMatches, who, what, when)}
+	}
+
+	now := time.Now().In(istLocation)
+	todayStr := now.Format("Monday, 02 January 2006")
+	tomorrowStr := now.AddDate(0, 0, 1).Format("Monday, 02 January 2006")
+	yesterdayStr := now.AddDate(0, 0, -1).Format("Monday, 02 January 2006")
+	currentDateTimeStr := now.Format("Monday, 02 January 2006, 15:04 MST")
+
+	userContext := "CURRENT USER IDENTITY: Unconfirmed / Device user (never assume user is the person named in documents unless verified)"
+	if currentUserName != "" {
+		userContext = fmt.Sprintf("CURRENT USER IDENTITY: Name: %q (address user as traveler/recipient only if this exact name matches the document)", currentUserName)
+	}
+
+	var histSection string
+	if len(history) > 0 {
+		var histBuf strings.Builder
+		histBuf.WriteString("RECENT CONVERSATION HISTORY:\n")
+		for _, h := range history {
+			role := "User"
+			if h.Role == "assistant" {
+				role = "Assistant (Reyna)"
+			}
+			fmt.Fprintf(&histBuf, "%s: %s\n", role, h.Text)
+			if len(h.FileNames) > 0 {
+				fmt.Fprintf(&histBuf, "  (Files cited: %s)\n", strings.Join(h.FileNames, ", "))
+			}
+		}
+		histBuf.WriteString("\n")
+		histSection = histBuf.String()
 	}
 
 	var ctx strings.Builder
@@ -1307,57 +1638,138 @@ func (c *Classifier) GenerateRetrievalReply(rawQuery, who, what, when, why strin
 		ctx.WriteString("(no matching files found in database or Drive)\n")
 	}
 
-	prompt := fmt.Sprintf(`You are Reyna — a smart, friendly study assistant inside a WhatsApp study group. The student just searched their notes. Write a natural, conversational reply describing what was found.
+	prompt := fmt.Sprintf(`You are Reyna. You are a personal document assistant helping someone find and understand files in their chats.
+Write a natural, conversational reply describing what was found or directly answering their question.
 
-CRITICAL LANGUAGE RULE — read this twice:
+REAL-WORLD CALENDAR CONTEXT (GROUND TRUTH):
+- Current Date & Time: %s
+- TODAY is: %s
+- TOMORROW is: %s
+- YESTERDAY was: %s
+
+%s
+
+CRITICAL TEMPORAL & JOURNEY VERIFICATION RULES:
+- When the query asks about relative time (e.g. "tomorrow", "today", "yesterday", "next week", "this month", "kal", "aaj", "parso"):
+  1. Inspect the journey, flight, train, departure, appointment, or due dates found INSIDE the document summaries.
+  2. Cross-reference them strictly against the real-world calendar anchor above.
+  3. If a document DOES have travel or an event scheduled for the requested date (e.g. tomorrow, Saturday, 12 September 2026):
+     - State YES clearly with the departure time, train/flight number, origin, destination, and passenger names!
+     - Example: If a train ticket is for 12-Sept-2026 departing at 20:00 on Rajdhani Exp (22691) from KSR Bengaluru to Secunderabad for Harsh Narayan and Khushi Mehta, state: "Yes! You have a train journey scheduled for tomorrow, Saturday, 12 September 2026. You and Khushi Mehta are traveling on the Rajdhani Express (22691) from KSR Bengaluru to Secunderabad, departing at 20:00 (PNR 4656526133)."
+  4. NEVER call an event date "tomorrow" or "today" unless the document date matches the exact calendar anchor date!
+     For example, if today is Friday, 11 September 2026, then tomorrow is Saturday, 12 September 2026. A flight on 17 October 2026 is OVER A MONTH AWAY and is NEVER tomorrow!
+  5. If NO document matches the requested relative date:
+     - Answer clearly that no event or travel is scheduled for that date (e.g. "No travel is scheduled for tomorrow (%s).").
+     - If an upcoming event or booking exists in the files for a different date (e.g. October 17, 2026), mention it with its REAL, EXACT date and day: "However, an upcoming flight booking was found for [passengers] on Saturday, 17 October 2026...".
+     - Never say "Yes, you have a flight scheduled for tomorrow, October 17, 2026".
+
+CRITICAL PASSENGER & RECIPIENT IDENTITY RULES:
+- Documents shared in WhatsApp chats often belong to family members, friends, or colleagues.
+- Inspect the passenger names, patient names, customer names, or recipient names in the document:
+  1. Check if the current user's name or first name matches a passenger or recipient (e.g. user "Harsh" matches passenger "HARSH NARAYAN").
+  2. If the user's name matches a passenger:
+     - You may say "Yes, you have a train/flight scheduled..." or "You and [co-passengers] are traveling...".
+  3. If the user's name is NOT among the passengers, or if user identity is unconfirmed:
+     - NEVER say "You have a flight" or "You are traveling" or "Your appointment"!
+     - State the passenger/recipient names verbatim from the document (e.g. "A flight booking was found for Mrs. Khushi Mehta...").
+
+%sCRITICAL LANGUAGE RULE — read this twice:
 - Detect the language of the QUERY ITSELF (not the sender names — "rakesh" or "mohit" are proper nouns and do NOT indicate Hindi).
 - If the query is written in English, reply ONLY in English.
 - If the query is written in Hindi (Devanagari), reply in Hindi.
 - If the query is written in Hinglish (Hindi words in Roman script like "kya bheja", "kal", "hain"), reply in Hinglish.
 - If the query is in Bhojpuri / Tamil / Bengali / Marathi / Kannada / Telugu / Malayalam, reply in that language.
 - Match the tone too — casual query → casual reply; formal query → formal reply.
-- A query like "rakesh shared notes or what?" is ENGLISH. Reply in English.
-- A query like "rakesh ne kya bheja?" is HINGLISH. Reply in Hinglish.
 
-Read the original query to understand intent:
-- "find / dhundo / dikhao" → list the files clearly
-- "kya bheja / what did X share" → list with sender + time
-- "do we have / hai kya" → confirm yes/no, then list
-- "what's new / kuch naya" → recency-focused list
-- Activity-check questions → confirm with names + counts
-If results are empty, say so honestly and suggest a different phrasing or topic.
+CONVERSATION CONTEXT & FOLLOW-UP QUESTIONS:
+- If recent conversation history is present above, this may be a follow-up (e.g. "can you find it?", "what does it say?", "explain module 1 from that", "who sent it?").
+- Connect pronouns ("it", "that", "this file") to the file or topic from recent conversation turns.
+- Answer naturally without asking the user to re-specify the file if it was already discussed!
+
+RESPOND ONLY WITH JSON, in exactly this shape and nothing around it:
+{"found": true, "answer": "...", "quotes": [{"file": "exact filename", "quote": "verbatim text copied from that file's summary"}]}
+
+- "found": true if the provided context answers the question or contains relevant information matching the request (including when clarifying that no event is scheduled for the requested date, but an upcoming event was found in the records); false if the documents do not contain the answer, do not match the query, or no relevant information is present.
+- "answer" is what the user asked for and nothing else. No raw filenames list. Write one or two clean, natural conversational sentences, under 50 words, plain text with no markdown and no bullets.
+- "quotes" is the evidence. Copy the lines from the summary that contain the answer, character for character. Do not paraphrase, do not tidy, do not translate. If the answer came from a table row, the quote is that row.
+- Every quote must appear word for word in a summary above. A quote that is only a filename is not evidence and will be discarded.
+- If nothing above answers the question, set "found": false, say so plainly in "answer" and return an empty "quotes" list. Never invent either one.
+
+ANSWER THE QUESTION FIRST:
+- Each file carries a "summary:" holding text taken from inside the document.
+- If the query asks something factual and the answer is in there, SAY THE ANSWER directly in plain sentences.
+  Example: "which room is the operating systems exam in" → "The Operating Systems exam is scheduled to be held in room B-207."
+  Example: "can you find me the latest Reyna script received" → "The latest Reyna script covers the meeting and presentation deck for SIH."
+  Example: "can you find it?" (after asking about C programming) → "I found the C programming lab manual in your Lab folder."
+- Do not dump lists of filenames in "answer". Put the evidence in "quotes" instead.
+- Never invent a fact that is not in a summary.
 
 CRITICAL TIME RULE:
-- The "shared:" line in each file's metadata below is the GROUND TRUTH — it already contains the relative time AND the absolute time. Use it VERBATIM.
-- NEVER compute or guess relative times yourself ("2 days ago", "this morning"). NEVER override what's written.
-- If the metadata says "5 minute(s) ago", say "5 minutes ago" — not "today" or "earlier".
+- The "shared:" line in each file's metadata below is the GROUND TRUTH. Use it verbatim if mentioning time.
 
 CRITICAL ATTRIBUTION RULE:
-- "sender:" is empty for files where we do not know who shared them. That is a fact about our records, not a gap for you to fill.
-- For those files, NEVER state or guess a person. Say where and when instead: "shared in Sem 5 CS, 18 August". Do not carry a name over from another file in the list.
-- If the user asked about a specific person and some results have no sender, list them and say plainly that you are not sure who shared those.
-
-Formatting:
-- Plain text with light markdown — bullets, **bold** for filenames, short paragraphs.
-- Mention if a file is from "Drive" vs "shared in WhatsApp".
-- Under 200 words. No envelopes, no curly braces — just write the reply.
+- "sender:" is empty for files where we do not know who shared them. For those, NEVER invent a sender. If the user asked about a specific person and some results have no sender, say you found the file but the original sender is unconfirmed.
 
 ORIGINAL QUERY: %s
 PARSED — who:%s what:%s when:%s why:%s
 
 %s
-Your reply:`, rawQuery, who, what, when, why, ctx.String())
+Your reply:`, currentDateTimeStr, todayStr, tomorrowStr, yesterdayStr, userContext, tomorrowStr, histSection, rawQuery, who, what, when, why, ctx.String())
 
-	result, err := c.llm.Complete(prompt, 600)
+	result, err := c.llm.Complete(prompt, 900)
 	if err != nil || result == "" {
-		return fallbackRetrievalReply(rawQuery, files, driveMatches, who, what, when)
+		return SourcedReply{Found: false, Answer: fallbackRetrievalReply(rawQuery, files, driveMatches, who, what, when)}
 	}
-	return cleanLLMReply(result)
+
+	var parsed struct {
+		Found  *bool  `json:"found"`
+		Answer string `json:"answer"`
+		Quotes []struct {
+			File  string `json:"file"`
+			Quote string `json:"quote"`
+		} `json:"quotes"`
+	}
+	if jerr := json.Unmarshal([]byte(llm.CleanJSON(result)), &parsed); jerr != nil || parsed.Answer == "" {
+		// The model wrote prose instead of JSON. Its answer is still worth
+		// showing; only the evidence is lost, and an answer with no sources
+		// button is better than an error.
+		isNeg := strings.Contains(strings.ToLower(result), "could not find") ||
+			strings.Contains(strings.ToLower(result), "couldn't find") ||
+			strings.Contains(strings.ToLower(result), "no information")
+		return SourcedReply{
+			Found:  !isNeg && (len(files) > 0 || len(driveMatches) > 0),
+			Answer: cleanLLMReply(result),
+		}
+	}
+
+	found := true
+	if parsed.Found != nil {
+		found = *parsed.Found
+	} else if len(parsed.Quotes) == 0 && (strings.Contains(strings.ToLower(parsed.Answer), "could not find") ||
+		strings.Contains(strings.ToLower(parsed.Answer), "couldn't find") ||
+		strings.Contains(strings.ToLower(parsed.Answer), "no information") ||
+		strings.Contains(strings.ToLower(parsed.Answer), "नहीं मिला") ||
+		strings.Contains(strings.ToLower(parsed.Answer), "nahi mila")) {
+		found = false
+	}
+
+	out := SourcedReply{
+		Found:  found,
+		Answer: cleanLLMReply(parsed.Answer),
+	}
+	for _, q := range parsed.Quotes {
+		if strings.TrimSpace(q.Quote) == "" {
+			continue
+		}
+		out.Quotes = append(out.Quotes, QuotedSource{FileName: q.File, Quote: q.Quote})
+	}
+	return out
 }
 
 // RetrievalFile is a flattened view of either a DB file or a Drive match for
 // passing into GenerateRetrievalReply without coupling to model.File.
 type RetrievalFile struct {
+	ID       int64
 	Name     string
 	Folder   string
 	Sender   string
@@ -1365,41 +1777,99 @@ type RetrievalFile struct {
 	Summary  string
 }
 
+// SourcedReply is an answer and the passages it rests on.
+type SourcedReply struct {
+	Found  bool
+	Answer string
+	Quotes []QuotedSource
+}
+
+// QuotedSource is one passage the model says it used.
+//
+// Unverified at this point. The caller checks each quote actually appears in
+// the file's stored text before it is shown, because a model asked to produce
+// evidence is being invited to invent some.
+type QuotedSource struct {
+	FileName string
+	Quote    string
+}
+
+// fallbackRetrievalReply is what Reyna says when it cannot read anything.
+//
+// Reached when the model call fails, which on a free allowance of about sixty
+// calls a day means the allowance is spent. It is a real state the user will
+// see, not a corner case, so it has to be honest about what happened rather
+// than dressing up a directory listing as a reply.
+//
+// What it used to do was print "Found 9 file(s) shared in your groups" over a
+// bulleted list of filenames, each tagged "(by device)" or "(by You)", ending
+// in "...and 4 more" that could not be tapped because it was a sentence rather
+// than a control. None of that answered the question, the parenthetical named
+// the phone as a person, and the count pointed at files the user had no way to
+// reach. The files themselves are already listed properly under the sources
+// button, which is a real control on real rows.
+//
+// So: say plainly that the documents were not read, name the two best matches
+// so the reply is still worth something, and stop.
 func fallbackRetrievalReply(rawQuery string, files, driveMatches []RetrievalFile, who, what, when string) string {
-	if len(files) == 0 && len(driveMatches) == 0 {
-		msg := "Couldn't find anything matching that"
+	total := len(files) + len(driveMatches)
+	if total == 0 {
+		msg := "I could not find anything matching that"
 		if who != "" {
 			msg += " from " + who
 		}
 		if what != "" {
 			msg += " about \"" + what + "\""
 		}
-		return msg + ". Try rephrasing or being more specific."
+		return msg + "."
 	}
+
+	// The best matches by name, which is the ordering the ranking already
+	// produced. Two, because this is a sentence and not a list.
+	named := make([]string, 0, 2)
+	for _, f := range files {
+		if len(named) == 2 {
+			break
+		}
+		named = append(named, f.Name)
+	}
+	for _, m := range driveMatches {
+		if len(named) == 2 {
+			break
+		}
+		named = append(named, m.Name)
+	}
+
+	// Named, not counted.
+	//
+	// A total here would be an overclaim: it includes everything the Drive
+	// walker returned, and that matches whole folders, so a request for a
+	// question paper about AI counts a textbook sitting in an "Artificial
+	// Intelligence" folder. Saying "16 documents that look right" asserts
+	// something about sixteen files that nothing has checked. The two best are
+	// ranked, so those can be named; the rest are behind the sources button
+	// where they are presented as matches rather than as answers.
 	var b strings.Builder
-	if len(files) > 0 {
-		b.WriteString(fmt.Sprintf("Found %d file(s) shared in your groups:\n", len(files)))
-		for i, f := range files {
-			if i >= 5 {
-				b.WriteString(fmt.Sprintf("...and %d more\n", len(files)-5))
-				break
-			}
-			b.WriteString(fmt.Sprintf("• **%s** — %s", f.Name, f.Folder))
-			if f.Sender != "" {
-				b.WriteString(" (by " + f.Sender + ")")
-			}
-			b.WriteString("\n")
-		}
-	}
-	if len(driveMatches) > 0 {
-		b.WriteString(fmt.Sprintf("\nPlus %d already in your Drive:\n", len(driveMatches)))
-		for i, m := range driveMatches {
-			if i >= 5 {
-				b.WriteString(fmt.Sprintf("...and %d more\n", len(driveMatches)-5))
-				break
-			}
-			b.WriteString(fmt.Sprintf("• **%s** — in %s/\n", m.Name, m.Folder))
-		}
-	}
+	b.WriteString("The closest I have is ")
+	b.WriteString(strings.Join(named, ", then "))
+	b.WriteString(".")
+
+	// The reason, stated rather than hidden. Someone whose question went
+	// unanswered is owed the cause.
+	//
+	// Running out of the daily allowance no longer reaches this function: it is
+	// detected before any work is done and answered directly, because it is the
+	// common case and deserves a plain sentence rather than a list. What is
+	// left here is a model call that failed for some other reason, so this must
+	// not claim to know which.
+	b.WriteString(" I could not read them to answer properly just now. Trying again may work.")
 	return b.String()
+}
+
+// Embed computes vector embeddings using the configured LLM provider.
+func (c *Classifier) Embed(text string) ([]float32, error) {
+	if c.llm == nil {
+		return nil, nil
+	}
+	return c.llm.Embed(text)
 }
