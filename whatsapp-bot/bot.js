@@ -894,6 +894,9 @@ async function handleMessage(sock, msg) {
     return handleDM(sock, msg);
   }
 
+  const messageType = getContentType(msg.message);
+  const isDocument = messageType === 'documentMessage' || messageType === 'documentWithCaptionMessage' || messageType === 'imageMessage';
+
   // Check for /reyna init BEFORE the fromMe filter — the linked user
   // (whose messages are fromMe) needs to be able to initialize groups.
   const initText = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
@@ -901,14 +904,16 @@ async function handleMessage(sock, msg) {
   if (isInit) {
     console.log(`  [INIT] detected /reyna init from ${msg.key.participant || chat} fromMe=${msg.key.fromMe}`);
   } else if (msg.key.fromMe) {
-    // For all other group messages, skip fromMe (bot's own replies)
-    return;
+    // If it's a file shared by the user, DO NOT drop it!
+    // Only skip if it's the bot's own text reply
+    if (!isDocument && (isBotEcho(initText) || initText.startsWith('*Reyna:*') || initText.startsWith('Reyna:'))) {
+      return;
+    }
   }
 
-  const sender = msg.key.participant || chat;
-  let senderPhone = phoneFromJid(sender);
-  let pushName = msg.pushName || '';
-  const messageType = getContentType(msg.message);
+  const sender = msg.key.participant || (msg.key.fromMe ? (sock.user?.id || chat) : chat);
+  let senderPhone = phoneFromJid(sender) || (msg.key.fromMe ? botOwnerPhone : '');
+  let pushName = msg.pushName || (msg.key.fromMe ? (sock.user?.name || 'Owner') : '');
 
   // If pushName is empty OR phone is a LID (not real), try to resolve from group metadata
   if ((!pushName || !isRealPhoneNumber(senderPhone)) && chat.endsWith('@g.us')) {
@@ -1045,23 +1050,37 @@ async function handleMessage(sock, msg) {
     return;
   }
 
-  // ── Track document shares ──
-  if (messageType === 'documentMessage' || messageType === 'documentWithCaptionMessage') {
+  // ── Track document / image shares ──
+  if (messageType === 'documentMessage' || messageType === 'documentWithCaptionMessage' || messageType === 'imageMessage') {
     const doc = msg.message.documentMessage ||
       msg.message?.documentWithCaptionMessage?.message?.documentMessage;
-    if (doc) {
+    const img = msg.message.imageMessage;
+    if (doc || img) {
       try {
         const buffer = await downloadMediaMessage(msg, 'buffer', {}, {
           logger, reuploadRequest: sock.updateMediaMessage,
         });
-        const fileName = doc.fileName || 'file';
+        let fileName, mimeType, fileSize;
+        if (doc) {
+          fileName = doc.fileName || 'file';
+          mimeType = doc.mimetype || 'application/octet-stream';
+          fileSize = Number(doc.fileLength || buffer.length);
+        } else {
+          mimeType = img.mimetype || 'image/jpeg';
+          const ext = mimeType.split('/')[1]?.split(';')[0] || 'jpg';
+          fileName = img.caption?.trim()
+            ? `${img.caption.slice(0, 30).replace(/[^a-zA-Z0-9_-]/g, '_')}.${ext}`
+            : `image_${msg.key.id.slice(0, 8)}.${ext}`;
+          fileSize = Number(img.fileLength || buffer.length);
+        }
         const msgId = msg.key.id;
         trackFile(chat, msgId, {
           fileName, buffer,
-          mimeType: doc.mimetype || 'application/octet-stream',
-          fileSize: Number(doc.fileLength || buffer.length),
+          mimeType,
+          fileSize,
           sender: senderPhone, senderName: pushName,
           postedAt: postedAtOf(msg),
+          key: msg.key,
           ts: Date.now(),
         });
 
@@ -1071,8 +1090,8 @@ async function handleMessage(sock, msg) {
         // AUTO MODE: stage immediately and silently
         if (mode === 'auto') {
           const resp = await uploadFile(chat, senderPhone, pushName, {
-            fileName, fileSize: Number(doc.fileLength || buffer.length),
-            mimeType: doc.mimetype || 'application/octet-stream',
+            fileName, fileSize,
+            mimeType,
             postedAt: postedAtOf(msg),
           }, buffer);
           markStaged(chat, msgId);
@@ -1240,9 +1259,9 @@ async function handleReaction(sock, reaction) {
   if (!validEmojis.includes(emoji)) return;
 
   const reactedMsgId = reaction.key.id;
-  const reactor = reaction.key.participant || chat;
-  const reactorPhone = phoneFromJid(reactor);
-  const reactorName = reaction.pushName || '';
+  const reactor = reaction.key.participant || (reaction.key.fromMe ? (sock.user?.id || chat) : chat);
+  const reactorPhone = phoneFromJid(reactor) || (reaction.key.fromMe ? botOwnerPhone : '');
+  const reactorName = reaction.pushName || (reaction.key.fromMe ? (sock.user?.name || 'Owner') : '');
 
   // Find the tracked file matching this message ID
   const tracker = getGroupTracker(chat);
@@ -1275,7 +1294,7 @@ async function handleReaction(sock, reaction) {
   // React with ✅ to confirm (minimal group footprint — no text message)
   try {
     await sock.sendMessage(chat, {
-      react: { text: '✅', key: { remoteJid: chat, id: reactedMsgId, participant: fileInfo.sender + '@s.whatsapp.net' } },
+      react: { text: '✅', key: fileInfo.key || { remoteJid: chat, id: reactedMsgId, participant: fileInfo.sender + '@s.whatsapp.net' } },
     });
   } catch (err) {
     // Fallback: can't react to the original message, just log
