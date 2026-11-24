@@ -1,178 +1,223 @@
-# reyna
+<div align="center">
+  <h1>reyna</h1>
+  <p>autonomous study-group document capture, classification, and retrieval for whatsapp</p>
+  <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go" alt="Go Version"></a>
+  <a href="https://react.dev"><img src="https://img.shields.io/badge/React-18-61DAFB?style=flat&logo=react" alt="React"></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node-20+-339933?style=flat&logo=node.js" alt="Node.js"></a>
+  <a href="https://ai.google.dev"><img src="https://img.shields.io/badge/Gemini-3.8--flash-4285F4?style=flat&logo=google" alt="Gemini"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg?style=flat" alt="License"></a>
+</div>
 
-a whatsapp bot + web dashboard that captures files from your study groups, reads whats inside them, classifies them into your google drive, and lets you search and ask questions from those notes later -- in any language.
+reyna is an autonomous document capture bot, semantic indexing pipeline, and web dashboard for WhatsApp. When documents are shared in student groups, reyna extracts their text, determines subject categorization via Gemini, uploads them into organized Google Drive folders, and provides natural-language search and multi-turn Q&A in WhatsApp direct messages and a web interface.
 
-built this because every group chat i've been in has the same problem: someone shares notes, 200 messages later its gone, and then "bro send that pyq again" becomes everyones daily routine.
+Highlights
+----------
 
----
+- **Automated Capture** // Ingests shared PDFs, Word documents, PowerPoint presentations, and spreadsheets directly from WhatsApp groups
+- **Content-Aware Classification** // Reads inner document text to determine subject folders rather than relying on arbitrary file names
+- **Zero-Dependency Office Parsing** // Unzips and extracts text from DOCX, PPTX, and XLSX files using the Go standard library without external dependencies
+- **Ranked SQL Search** // Performs sub-millisecond keyword matching and ranking directly in SQLite with multilingual stopword filtering
+- **Multilingual Retrieval** // Supports conversational search and contextual Q&A across English, Hindi, Hinglish, and regional scripts
+- **Self-Hosted Privacy** // All files are stored directly in your own Google Drive and local SQLite database; no third-party data tracking
 
-## privacy
+Table of Contents
+-----------------
 
-reyna processes your files to classify and search them. content gets sent to gemini for ai analysis and the files end up in your own google drive -- not on any third party server. extracted text summaries are cached locally in sqlite for search. we dont sell or train on your data.
+<!-- vim-markdown-toc GFM -->
 
-reyna can only see messages in groups where its been initialized. anything before that, or groups it hasnt been added to, it cant access. theres also a manual mode (pin reaction only) so if something sensitive gets shared just dont pin it.
+* [Highlights](#highlights)
+* [Architecture and Pipeline](#architecture-and-pipeline)
+* [Installation](#installation)
+    * [Prerequisites](#prerequisites)
+    * [Setup](#setup)
+* [Running Reyna](#running-reyna)
+    * [Service Execution](#service-execution)
+    * [Validating Environment](#validating-environment)
+* [Task Runner Recipes](#task-runner-recipes)
+* [Usage](#usage)
+    * [WhatsApp Bot Group Commands](#whatsapp-bot-group-commands)
+    * [WhatsApp Bot Direct Messages](#whatsapp-bot-direct-messages)
+    * [Web Dashboard](#web-dashboard)
+* [Configuration](#configuration)
+* [Privacy and Security](#privacy-and-security)
+* [License](#license)
 
-for anything actually private (bank stuff, medical docs etc) just dont add those groups to reyna. same deal as chatgpt, notion ai, grammarly -- the ai needs to read the content to be useful about it.
+<!-- vim-markdown-toc -->
 
----
+Architecture and Pipeline
+-------------------------
 
-## what it does
+Every file shared in an enabled WhatsApp group traverses a seven-stage pipeline before being synchronized with Google Drive:
 
-someone shares a file in your whatsapp study group. reyna picks it up, reads the actual content (not just the filename), figures out what subject it belongs to, and puts it in the right folder in your google drive. automatically. no commands.
+1. **Hash Deduplication**: Computes SHA-256 file hashes to detect identical uploads across groups. Same file shared multiple times is stored once; modified versions with identical names receive automatic version incrementing (`v2`).
+2. **Office Document Parsing**: DOCX, PPTX, and XLSX archives are unpacked in memory using Go standard library `archive/zip` and `encoding/xml`. Inner document XML is parsed to extract text with zero external binaries.
+3. **Tokenization and Normalization**: Strips conversational stopwords across English and Hinglish to isolate substantive search tokens.
+4. **Ranked SQL Search**: Scores documents against user queries using custom token matches executed inside SQLite.
+5. **Fuzzy Folder Matching**: Computes Jaccard similarity between suggested subject names and existing Google Drive directories to prevent duplicate or near-identical folders.
+6. **Gemini Classification**: Analyzes document contents alongside sender metadata, timestamps, and current folder hierarchies to determine the optimal destination folder.
+7. **Google Drive Synchronization**: Streams file bytes to Google Drive v3, resolves destination folders, and applies view permissions so generated links work seamlessly.
 
-later you dm reyna something like "that pdf rakesh shared tuesday about circuit diagrams" and it finds it. drops you a drive link. you can ask follow up questions about the file and it answers from the actual content, cites which page, and replies in whatever language you asked in.
+Installation
+------------
 
-you can also go to the web dashboard and do the same thing -- search, ask questions, browse files, manage which groups reyna tracks.
+### Prerequisites
 
----
+Ensure the following tools are installed on your system:
 
-## the pipeline (its not just "save file + call gemini")
+- Go 1.22 or higher
+- Node.js 20 or higher and npm
+- [just](https://github.com/casey/just) task runner
+- Google Cloud OAuth credentials (with Google Drive API enabled)
+- Google AI Studio Gemini API key
 
-every file goes through 7 stages before hitting drive. only 1 of them is an llm call:
+### Setup
 
-**1 -- hash dedup**
-sha-256 of the file bytes. same file shared 5 times? saved once. different content same filename? auto v2. race condition safe with per-group mutex + unique index in sqlite.
+Clone the repository and initialize the configuration file:
 
-**2 -- office doc parsing**
-docx/pptx/xlsx files are actually zip archives with xml inside. reyna unzips them with go stdlib, walks the xml, pulls out the text. no external libraries. no api call. free.
-
-**3 -- tokenization**
-when you search "give me the exact oscillator definition mohit sent today" it strips the noise words (give, exact, definition, today) and keeps whats actually useful: `oscillator`. 80-word stopword filter covering english + hindi/hinglish.
-
-**4 -- ranked sql search**
-hand-built scoring in sqlite. `ORDER BY (CASE WHEN token1 THEN 1 ELSE 0 END + CASE WHEN token2 ...)`. the search ranking is sql, not llm. fast and free.
-
-**5 -- fuzzy folder matching**
-gemini suggests "C Programming Lab" but "C Programming Laboratory" already exists? jaccard similarity catches it and snaps to the existing folder. no duplicate folders.
-
-**6 -- gemini api call** (this is the one llm stage)
-gets the file content + filename + who sent it + when + which group + existing folder list. real context not just a blind prompt. strict json mode, retry on 5xx.
-
-**7 -- drive sync**
-uploads to google drive + sets permissions to "anyone with link can view" automatically so when reyna drops a link in chat it just works. no "request access" popups.
-
----
-
-## analytics
-
-the dashboard stats are real sql aggregation queries:
-- subject distribution -- `GROUP BY subject`
-- top contributors -- `ORDER BY count DESC LIMIT 5`
-- storage used -- `SUM(file_size)`
-- group count -- `COUNT(DISTINCT group_id)`
-
-nothing llm generated. just sql on every page load.
-
----
-
-## the features
-
-**nlp retrieval**
-
-you can ask things like:
-- "what did rakesh share about data structures last week?"
-- "that pdf from tuesday that had a circuit diagram"
-- "mohit ne kal kya bheja?" (hindi)
-- "the pptx about file handling in python"
-
-it parses who/what/when/why from the query, searches across filenames + subjects + extracted content, and returns ranked results. works in english hindi hinglish bhojpuri tamil bengali kannada telugu marathi and mixed scripts.
-
-**content-aware classification**
-
-doesnt classify by filename. reads whats inside the document and decides. a file called `IMG_2847.pdf` that contains compiler design content goes into "Compiler Design" folder, not "Unsorted". prioritizes your existing drive folders before creating new ones.
-
-**multi-turn q&a**
-
-ask a question about any shared file. follow up with "in simpler words" or "give me an example" or "aur asaan shabdon mein batao" and it keeps the conversation going, remembers context, switches language to match yours.
-
-```
-you:   explain wien bridge oscillator from mohits notes
-reyna: according to hii.pdf shared by mohit this morning, a wien bridge
-       oscillator uses a lead-lag RC network to produce zero phase shift
-       at the resonant frequency. formula: f = 1/(2*pi*R*C)
-
-you:   simpler?
-reyna: its basically a circuit that picks one specific frequency to
-       vibrate at. like a tuning fork but electronic.
-
-you:   aur formula bata do
-reyna: f = 1/(2*pi*R*C) -- yahi formula hai, page 3 pe hai mohit ki pdf me
-```
-
-**whatsapp dm**
-
-dm the bot number with `reyna find python notes` and it drops drive links right in chat. for 10 minutes after reyna replies you dont need the `reyna` prefix for follow ups. strangers who dm without the prefix get ignored.
-
----
-
-## project structure
-
-```
-reyna/
-├── cmd/server/main.go          -- go backend entry point
-├── internal/
-│   ├── api/                    -- http handlers
-│   ├── repository/             -- sqlite + tokenizer + ranked search
-│   ├── model/                  -- domain types
-│   ├── nlp/                    -- classifier, folder snap, office text extractor
-│   ├── integrations/
-│   │   ├── gdrive/             -- drive api + oauth + auto-public links
-│   │   └── llm/                -- provider-agnostic (gemini/claude/grok/openai)
-│   ├── auth/                   -- jwt
-│   ├── config/                 -- env loader
-│   └── reyna/                  -- bot reply generation
-├── web/                        -- react + vite dashboard
-├── whatsapp-bot/bot.js         -- baileys whatsapp bot
-├── go.mod
-├── .env.example
-└── Makefile
-```
-
----
-
-## running it
-
-need: go 1.22+, node 20+, a gemini api key, google oauth credentials
-
-```bash
+```sh
 git clone https://github.com/hurshnarayan/reyna.git
 cd reyna
-cp .env.example .env
-# fill in GEMINI_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, JWT_SECRET
+just env-init
 ```
 
-```bash
-make install    # installs js deps
-make backend    # starts go server on :8080
-make frontend   # starts react on :5173 (separate terminal)
-make bot        # starts whatsapp bot (separate terminal, scan qr)
+`just env-init` creates a `.env` file populated with cryptographically random keys for `JWT_SECRET` and `DEVICE_TOKEN`.
+
+Open `.env` and provide your credentials:
+
+```env
+GEMINI_API_KEY=your_gemini_api_key
+GOOGLE_CLIENT_ID=your_oauth_client_id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your_oauth_client_secret
 ```
 
-`make fresh` wipes the db and starts the backend. thats probably what youll use day to day.
+Install frontend and bot dependencies:
 
-the makefile auto-loads your .env so you dont need to manually export anything. works in bash zsh and fish.
+```sh
+just install
+```
 
----
+Running Reyna
+-------------
 
-## cost
+### Service Execution
 
-new google cloud accounts get $300 in free credits (90 days). you need to add a payment method to activate it (they do a small verification charge thats refunded) but they dont actually charge until the credits run out. $300 is enough for months. after that its like 1-5 rs per day for a normal study group.
+Reyna comprises three core components that should be executed in separate terminals:
 
-get your api key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey), enable billing on the linked project at [console.cloud.google.com/billing](https://console.cloud.google.com/billing).
+```sh
+# Terminal 1: Go backend API server (runs on http://localhost:8080)
+just backend
 
----
+# Terminal 2: React Vite web dashboard (runs on http://localhost:5173)
+just frontend
 
-## stack
+# Terminal 3: Baileys WhatsApp bot daemon
+just bot
+```
 
-- backend: go, sqlite, stdlib http, zero orm
-- ai: gemini 2.5 flash (swappable to claude/grok/openai via env var)
-- storage: google drive api v3
-- frontend: react + vite, no component library
-- bot: node.js + baileys
-- auth: jwt
+On first startup of `just bot`, scan the terminal QR code using WhatsApp (Linked Devices > Link a Device).
 
----
+> [!NOTE]
+> The WhatsApp bot automatically outputs a live pairing QR code as an SVG to `web/public/qr.svg`, accessible in your browser at `http://localhost:5173/qr.svg`.
 
-## license
+> [!TIP]
+> The bot daemon includes single-instance process locking via `.bot.pid`. Starting `just bot` automatically terminates any stale background instance to prevent connection replacement conflicts (code 440).
 
-mit. your data stays in your drive.
+### Validating Environment
+
+Run the built-in doctor command to verify your toolchains, environment variables, and active services:
+
+```sh
+just doctor
+```
+
+Task Runner Recipes
+-------------------
+
+The repository provides a `justfile` managing build, execution, and cleanup tasks:
+
+| Command | Description |
+| ------- | ----------- |
+| `just doctor` | Checks toolchains, configurations, dependencies, and service reachability |
+| `just env-init` | Generates a `.env` file with fresh `JWT_SECRET` and `DEVICE_TOKEN` |
+| `just install` | Installs npm dependencies for both `web/` and `whatsapp-bot/` |
+| `just build` | Compiles the Go server binary and builds Vite production assets |
+| `just backend` | Runs the Go backend server on port 8080 |
+| `just frontend` | Runs the Vite development server on port 5173 |
+| `just bot` | Runs the WhatsApp bot daemon with process lock protection |
+| `just fresh` | Removes the local SQLite database and starts a fresh backend |
+| `just clean` | Removes database files, local drive cache, and saved bot credentials |
+| `just dev` | Prints service startup instructions for multi-terminal execution |
+
+Usage
+-----
+
+### WhatsApp Bot Group Commands
+
+Add the bot's WhatsApp account to any group and issue commands in the group chat:
+
+- `/reyna init`: Enables file tracking in the current group.
+- `/reyna mode auto`: Switches to automatic mode, capturing every document shared in the group.
+- `/reyna mode reaction`: Switches to reaction mode, staging only documents that receive the trigger reaction.
+- `/reyna emoji [emoji]`: Sets the trigger emoji for reaction staging (default: 📌).
+- `/reyna stop`: Pauses tracking for the current group.
+
+### WhatsApp Bot Direct Messages
+
+Send direct messages to the bot number to search and ask questions:
+
+```
+User:  reyna find probability notes
+Reyna: Found 2 files:
+       1. Probability Mod 1_scribs.pdf (Mathematics) - https://drive.google.com/...
+       2. CSE Sem 3 Mod 3 Joint Prob.pdf (Notes) - https://drive.google.com/...
+
+User:  explain bayes theorem from mod 1
+Reyna: According to Probability Mod 1_scribs.pdf (page 4), Bayes' theorem calculates
+       conditional probability: P(A|B) = [P(B|A) * P(A)] / P(B).
+```
+
+Follow-up questions do not require the `reyna` prefix for 10 minutes following a reply.
+
+### Web Dashboard
+
+Access the interface at `http://localhost:5173`:
+
+- **Dashboard**: High-level overview displaying committed storage, group counts, active tracking status, and recent files.
+- **Files**: Complete file repository featuring subject pill filters, sort toggles, live document preview, download links, and batch deletion.
+- **Groups**: Central management for connected groups. Toggle tracking on or off, switch between auto and reaction capture, customize reaction emojis, and remove groups.
+- **Staging**: Staging queue for reaction-mode documents awaiting batch commit to Google Drive.
+
+Configuration
+-------------
+
+The following variables can be configured in `.env`:
+
+| Variable | Description | Default |
+| -------- | ----------- | ------- |
+| `PORT` | HTTP port for the Go backend server | `8080` |
+| `BACKEND_URL` | Backend URL used by the WhatsApp bot | `http://localhost:8080` |
+| `DEVICE_TOKEN` | Shared authentication token between bot and backend | Required |
+| `JWT_SECRET` | Signing key for web user session tokens | Required |
+| `GEMINI_API_KEY` | Google AI Studio API key | Required |
+| `GEMINI_MODEL` | Gemini model identifier used for analysis | `gemini-3.8-flash` |
+| `GOOGLE_CLIENT_ID` | OAuth 2.0 client ID for Google Drive | Required |
+| `GOOGLE_CLIENT_SECRET` | OAuth 2.0 client secret for Google Drive | Required |
+| `GOOGLE_REDIRECT_URL` | OAuth redirect URL | `http://localhost:8080/api/auth/google/callback` |
+| `AUTH_DIR` | Directory storing Baileys session credentials | `./auth_state` |
+
+Privacy and Security
+--------------------
+
+Reyna processes files locally and streams them directly into your Google Drive:
+
+- Files and text extractions are stored in your own SQLite database and Google Drive.
+- Group messages are monitored only in groups explicitly activated via `/reyna init`.
+- The bot only interacts with groups where it has been added and enabled.
+- For sensitive contexts, reaction mode ensures that only intentionally pinned documents are captured.
+
+License
+-------
+
+The MIT License (MIT)
+
+Copyright (c) 2026 Harsh Narayan
