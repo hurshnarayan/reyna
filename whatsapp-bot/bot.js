@@ -8,6 +8,13 @@ const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
 
+// Auto-load .env from parent dir or local dir if not already in process.env
+for (const envPath of [path.resolve(__dirname, '../.env'), path.resolve(__dirname, '.env')]) {
+  if (fs.existsSync(envPath)) {
+    try { process.loadEnvFile(envPath); break; } catch {}
+  }
+}
+
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8080';
 const AUTH_DIR = process.env.AUTH_DIR || './auth_state';
 const DEVICE_TOKEN = process.env.DEVICE_TOKEN || '';
@@ -1115,7 +1122,14 @@ async function handleMessage(sock, msg) {
           // (WhatsApp throttles rapid-fire reactions when multiple files land at once)
           for (let attempt = 0; attempt < 2; attempt++) {
             try {
-              await sock.sendMessage(chat, { react: { text: '✅', key: msg.key } });
+              const reactKey = {
+                remoteJid: chat,
+                id: msg.key.id,
+                fromMe: !!msg.key.fromMe,
+                ...(msg.key.participant ? { participant: msg.key.participant } : {})
+              };
+              await sock.sendMessage(chat, { react: { text: '✅', key: reactKey } });
+              console.log(`  [REACT] Sent ✅ on ${fileName}`);
               break;
             } catch (reactErr) {
               if (attempt === 0) {
