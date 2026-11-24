@@ -84,6 +84,7 @@ export const icons = {
 
   // Status / State
   staging:      'fa-clock',
+  snowflake:    'fa-snowflake',
   warning:      'fa-exclamation-triangle',
   error:        'fa-times',
   success:      'fa-check',

@@ -472,8 +472,11 @@ export default function Dashboard() {
         {/* staging area */}
         <div style={{ ...cardStyle, padding: '18px 22px', borderRadius: 16, minWidth: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-            <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-color, #111827)', display: 'flex', alignItems: 'center', gap: 10, margin: 0, letterSpacing: '-0.01em' }}>
-              <Fa icon={icons.staging} style={{ fontSize: 15, color: 'var(--text-color, #111827)' }} /> staging area
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-color, #111827)', display: 'flex', alignItems: 'center', gap: 9, margin: 0, letterSpacing: '-0.01em', lineHeight: 1.2 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', transform: 'translateY(1px)', flexShrink: 0 }}>
+                <Fa icon={icons.staging} style={{ fontSize: 15, color: 'var(--text-color, #111827)' }} />
+              </span>
+              staging area
             </h2>
             {stagedFiles.length > 0 && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -690,8 +693,11 @@ export default function Dashboard() {
         {/* Group Management */}
         <div style={{ ...cardStyle, padding: '18px 22px', borderRadius: 16, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-            <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-color, #111827)', display: 'flex', alignItems: 'center', gap: 10, margin: 0, letterSpacing: '-0.01em' }}>
-              <Fa icon={icons.groups} style={{ fontSize: 15, color: 'var(--text-color, #111827)' }} /> active groups
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-color, #111827)', display: 'flex', alignItems: 'center', gap: 9, margin: 0, letterSpacing: '-0.01em', lineHeight: 1.2 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', transform: 'translateY(1.5px)', flexShrink: 0 }}>
+                <Fa icon={icons.groups} style={{ fontSize: 15, color: 'var(--text-color, #111827)' }} />
+              </span>
+              active groups
             </h2>
             <button
               onClick={() => navigate('/groups')}
@@ -755,23 +761,41 @@ export default function Dashboard() {
 
                     {/* Top row: Name, active badge, toggle */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'relative', zIndex: 1 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontSize: 15, fontWeight: 700, color: '#111827', letterSpacing: '-0.01em', textTransform: 'lowercase' }}>
-                          {(gs.group?.name || 'whatsapp group').toLowerCase()}
-                        </span>
-                        <span style={{
-                          fontSize: 11,
-                          fontWeight: 600,
-                          color: enabled ? '#15803d' : '#6b7280',
-                          background: enabled ? '#dcfce7' : '#f3f4f6',
-                          padding: '2px 8px',
-                          borderRadius: 9999,
-                          display: 'inline-flex',
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                        <div style={{
+                          width: 24,
+                          height: 24,
+                          borderRadius: 6,
+                          background: enabled ? '#f4f4f5' : '#f3f4f6',
+                          border: '1px solid #e4e4e7',
+                          color: enabled ? '#000000' : '#9ca3af',
+                          display: 'flex',
                           alignItems: 'center',
-                          lineHeight: 1.2,
+                          justifyContent: 'center',
+                          fontSize: 12,
+                          flexShrink: 0,
+                          transition: 'all 0.2s',
                         }}>
-                          {enabled ? 'active' : 'inactive'}
-                        </span>
+                          <Fa icon={icons.snowflake} />
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: 15, fontWeight: 700, color: '#111827', letterSpacing: '-0.01em', textTransform: 'lowercase' }}>
+                            {(gs.group?.name || 'whatsapp group').toLowerCase()}
+                          </span>
+                          <span style={{
+                            fontSize: 11,
+                            fontWeight: 600,
+                            color: enabled ? '#15803d' : '#6b7280',
+                            background: enabled ? '#dcfce7' : '#f3f4f6',
+                            padding: '2px 8px',
+                            borderRadius: 9999,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            lineHeight: 1.2,
+                          }}>
+                            {enabled ? 'active' : 'inactive'}
+                          </span>
+                        </div>
                       </div>
                       <label style={{ position: 'relative', display: 'inline-block', width: 38, height: 22, cursor: 'pointer', flexShrink: 0 }}>
                         <input
@@ -866,7 +890,7 @@ export default function Dashboard() {
                         zIndex: 1,
                       }}>
                         {mode === 'auto'
-                          ? 'every document shared in this group is automatically staged and synced.'
+                          ? 'choose how reyna handles files shared in this group'
                           : 'only files that get a pin reaction are staged. everything else is ignored.'}
                       </div>
                     )}
