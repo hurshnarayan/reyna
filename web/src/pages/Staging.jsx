@@ -94,18 +94,25 @@ export function StagingView({ isModal = false, onClose }) {
   }
 
   const commitAllStaged = async () => {
+    if (committing) return
+    const count = stagedFiles.length
     setCommitting(true)
-    notify.info('Pushing staged files to Google Drive...')
     try {
-      const res = await api.commitStaged()
-      if (res?.error) {
-        notify.error('Commit failed: ' + res.error)
-      } else {
-        notify.success(`Pushed ${res?.committed || stagedFiles.length} file(s) to Google Drive!`)
-        await fetchStaged()
-      }
-    } catch (err) {
-      notify.error('Commit failed: ' + (err.message || err))
+      await notify.task(
+        async () => {
+          const res = await api.commitStaged()
+          if (res?.error) throw new Error(res.error)
+          return res
+        },
+        {
+          loading: `pushing ${count} staged file(s) to google drive...`,
+          success: (res) => `successfully pushed ${res?.committed || count} file(s) to google drive`,
+          error: (err) => `commit failed: ${err.message || err}`,
+        }
+      )
+      await fetchStaged()
+    } catch {
+      // error toast handled by notify.task
     } finally {
       setCommitting(false)
     }

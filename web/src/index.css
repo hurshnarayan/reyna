@@ -98,6 +98,39 @@ code { font-family: var(--font-mono); }
 @keyframes reynaLoader { 0% { transform: translateX(-100%) scaleX(0); } 50% { transform: translateX(0) scaleX(1); } 100% { transform: translateX(100%) scaleX(0); } }
 @keyframes notifEnter { from { opacity: 0; } to { opacity: 1; } }
 @keyframes notifExit { from { opacity: 1; height: auto; margin-bottom: 16px; } to { opacity: 0; height: 0; margin-bottom: 0; } }
+
+/* ── Reyna Bottom-Up Stacking Toast Notifications ── */
+@keyframes reynaToastEnter {
+  0% {
+    transform: translateY(100%) scale(0.96);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+@keyframes reynaToastExit {
+  0% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+    max-height: 80px;
+  }
+  100% {
+    transform: translateY(16px) scale(0.96);
+    opacity: 0;
+    max-height: 0px;
+    margin-bottom: 0px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+  }
+}
+.reyna-toast-enter {
+  animation: reynaToastEnter 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.reyna-toast-exit {
+  animation: reynaToastExit 0.22s ease-in forwards;
+}
 @keyframes alertsSlideIn { from { margin-right: -10rem; } to { margin-right: 0; } }
 
 .reyna-loader-bar { animation: reynaLoader 2s ease-in-out infinite; }

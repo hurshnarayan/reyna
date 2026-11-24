@@ -306,18 +306,29 @@ export default function Dashboard() {
     api.dashboard().then(d => setData(d)).catch(() => {})
   }
   const commitAllStaged = async () => {
+    if (committing) return
+    const count = stagedFiles.length
     setCommitting(true)
     try {
-      const resp = await api.commitStaged()
-      if (resp?.committed > 0) {
-        notify.success(`${resp.committed} file(s) committed${resp.uploaded > 0 ? `, ${resp.uploaded} pushed to Drive` : ''}`)
-      }
-    } catch (e) {
-      notify.error('Commit failed: ' + e.message)
+      await notify.task(
+        async () => {
+          const resp = await api.commitStaged()
+          if (resp?.error) throw new Error(resp.error)
+          return resp
+        },
+        {
+          loading: `pushing ${count} staged file(s) to google drive...`,
+          success: (resp) => `successfully pushed ${resp?.committed || count} file(s) to drive`,
+          error: (e) => `commit failed: ${e.message || e}`,
+        }
+      )
+      refreshStaged()
+      api.dashboard().then(d => setData(d)).catch(() => {})
+    } catch {
+      // error toast handled by notify.task
+    } finally {
+      setCommitting(false)
     }
-    setCommitting(false)
-    refreshStaged()
-    api.dashboard().then(d => setData(d)).catch(() => {})
   }
 
   function hoursUntilCommit(createdAt) {
