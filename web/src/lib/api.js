@@ -21,7 +21,13 @@ async function req(path, opts = {}) {
       window.location.href = '/login';
       return null;
     }
-    const data = await res.json();
+    const text = await res.text();
+    let data;
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = { error: text || res.statusText || 'Unknown server error' };
+    }
     // Only show error toasts for user-initiated mutations, not background polling GETs.
     // Skip auth endpoints — the Login page handles those errors inline.
     const isAuthPath = path.startsWith('/auth/login') || path.startsWith('/auth/register')

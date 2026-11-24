@@ -1302,7 +1302,15 @@ func (s *Server) handleDriveFolderCreate(w http.ResponseWriter, r *http.Request)
 	folderID, err := s.drive.CreateDriveFolder(token, req.Name, parentID)
 	if err != nil {
 		log.Printf("❌ Create folder error: %v", err)
-		http.Error(w, fmt.Sprintf(`{"error":"failed to create folder: %s"}`, err.Error()), 500)
+		errMsg := "failed to create folder"
+		if strings.Contains(err.Error(), "insufficient") || strings.Contains(err.Error(), "PERMISSION_DENIED") || strings.Contains(err.Error(), "SCOPE_INSUFFICIENT") {
+			errMsg = "Google Drive permission not granted. Please disconnect and reconnect Google Drive, and make sure to check the box granting Google Drive file access."
+		} else {
+			errMsg = fmt.Sprintf("failed to create folder: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": errMsg})
 		return
 	}
 
