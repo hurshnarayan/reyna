@@ -473,14 +473,68 @@ export default function Dashboard() {
               <Fa icon={icons.staging} style={{ fontSize: 15, color: 'var(--text-color, #111827)' }} /> staging area
             </h2>
             {stagedFiles.length > 0 && (
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button onClick={async () => {
-                  for (const f of stagedFiles) await removeFromStaging(f.id)
-                }} style={{ ...btnBase, padding: '4px 10px', fontSize: 11, borderRadius: 20, color: 'var(--error-color)' }}>
-                  <Fa icon={icons.close} style={{ fontSize: 8 }} /> clear all
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <button
+                  onClick={async () => {
+                    for (const f of stagedFiles) await removeFromStaging(f.id)
+                  }}
+                  style={{
+                    background: '#ffffff',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 10,
+                    padding: '6px 14px',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: '#dc2626',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    fontFamily: 'inherit',
+                    transition: 'all 0.15s',
+                  }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.borderColor = '#fca5a5'
+                    e.currentTarget.style.background = '#fef2f2'
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.borderColor = '#e5e7eb'
+                    e.currentTarget.style.background = '#ffffff'
+                  }}
+                >
+                  <Fa icon={icons.close} style={{ fontSize: 9 }} /> clear all
                 </button>
-                <button onClick={commitAllStaged} disabled={committing} style={{ ...btnPrimary, padding: '4px 12px', fontSize: 11, borderRadius: 20, opacity: committing ? 0.6 : 1 }}>
-                  {committing ? <><Fa icon={icons.loading} spin style={{ fontSize: 9 }} /> pushing...</> : <>push all to drive <Fa icon={icons.arrowRight} style={{ fontSize: 9 }} /></>}
+                <button
+                  onClick={commitAllStaged}
+                  disabled={committing}
+                  style={{
+                    background: '#22c55e',
+                    border: 'none',
+                    borderRadius: 10,
+                    padding: '7px 18px',
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: '#ffffff',
+                    cursor: committing ? 'not-allowed' : 'pointer',
+                    opacity: committing ? 0.7 : 1,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    fontFamily: 'inherit',
+                    transition: 'all 0.15s',
+                  }}
+                  onMouseEnter={e => { if (!committing) e.currentTarget.style.background = '#16a34a' }}
+                  onMouseLeave={e => { if (!committing) e.currentTarget.style.background = '#22c55e' }}
+                >
+                  {committing ? (
+                    <>
+                      <Fa icon={icons.loading} spin style={{ fontSize: 10 }} /> pushing...
+                    </>
+                  ) : (
+                    <>
+                      push all to drive <Fa icon={icons.arrowRight} style={{ fontSize: 10 }} />
+                    </>
+                  )}
                 </button>
               </div>
             )}
@@ -501,37 +555,98 @@ export default function Dashboard() {
             </div>
           ) : (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-              <div style={{ fontSize: 12, color: 'var(--sub-color, #6b7280)', marginBottom: 8 }}>auto-commit in 24 hours. push now or remove files below.</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {stagedFiles.slice(0, 5).map((f, i) => (
-                  <div key={f.id} style={{
-                    display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px',
-                    background: 'var(--bg-color, #f9fafb)', borderRadius: 10, border: '1px solid var(--card-border, #e5e7eb)',
-                  }}>
-                    <IconBox icon={icons.staging} color="var(--reyna-accent, #10b981)" bg="rgba(16, 185, 129, 0.1)" size={28} iconSize={12} rounded={6} />
-                    <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
-                      <div title={f.file_name} style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-color, #111827)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <div style={{ fontSize: 13, color: '#6b7280', margin: '4px 0 14px 0' }}>
+                auto-commit in 24 hours. push now or remove files below.
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                {stagedFiles.slice(0, 6).map((f, i) => (
+                  <div
+                    key={f.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 12,
+                      padding: '12px 0',
+                      borderBottom: i < Math.min(stagedFiles.length, 6) - 1 ? '1px solid #f3f4f6' : 'none',
+                    }}
+                  >
+                    <div style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 10,
+                      background: '#ecfdf5',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0,
+                    }}>
+                      <Fa icon={icons.staging} style={{ fontSize: 13, color: '#111827' }} />
+                    </div>
+
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div
+                        title={f.file_name}
+                        style={{
+                          fontSize: 15,
+                          fontWeight: 700,
+                          color: '#111827',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          lineHeight: 1.3,
+                        }}
+                      >
                         {shortenFilename(f.file_name)}
                       </div>
-                      <div style={{ fontSize: 12, color: 'var(--sub-color, #6b7280)' }}>
+                      <div style={{ fontSize: 13, color: '#71717a', marginTop: 2, display: 'flex', alignItems: 'center', gap: 5 }}>
                         {f.subject === 'classifying...' ? (
-                          <span style={{ color: '#d97706' }}><Fa icon={icons.loading} spin style={{ fontSize: 9, marginRight: 3 }} />classifying...</span>
+                          <span style={{ color: '#d97706', display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 500 }}>
+                            <Fa icon={icons.loading} spin style={{ fontSize: 10 }} /> classifying...
+                          </span>
                         ) : (
                           <span>{f.subject || 'General'}</span>
-                        )} · {formatBytes(f.file_size)}
+                        )}
+                        <span>·</span>
+                        <span>{formatBytes(f.file_size)}</span>
                       </div>
                     </div>
-                    <div style={{ fontSize: 11, color: 'var(--main-color, #10b981)', fontWeight: 500, flexShrink: 0 }}>
+
+                    <div style={{ fontSize: 13, color: '#111827', fontWeight: 500, flexShrink: 0, marginRight: 6 }}>
                       {hoursUntilCommit(f.created_at)}
                     </div>
-                    <button onClick={() => removeFromStaging(f.id)} title="Remove from staging" style={{ ...btnBase, padding: '3px 7px', fontSize: 10, borderRadius: 6 }}>
-                      <Fa icon={icons.close} style={{ fontSize: 8 }} />
+
+                    <button
+                      onClick={() => removeFromStaging(f.id)}
+                      title="Remove from staging"
+                      style={{
+                        background: '#ffffff',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: 9999,
+                        padding: '2px 8px',
+                        fontSize: 11,
+                        color: '#6b7280',
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        transition: 'all 0.15s',
+                      }}
+                      onMouseEnter={e => {
+                        e.currentTarget.style.borderColor = '#dc2626'
+                        e.currentTarget.style.color = '#dc2626'
+                      }}
+                      onMouseLeave={e => {
+                        e.currentTarget.style.borderColor = '#e5e7eb'
+                        e.currentTarget.style.color = '#6b7280'
+                      }}
+                    >
+                      <Fa icon={icons.close} style={{ fontSize: 9 }} />
                     </button>
                   </div>
                 ))}
-                {stagedFiles.length > 5 && (
-                  <div style={{ fontSize: 12, color: 'var(--sub-color, #6b7280)', textAlign: 'center', padding: '4px 0' }}>
-                    +{stagedFiles.length - 5} more
+                {stagedFiles.length > 6 && (
+                  <div style={{ fontSize: 13, color: '#6b7280', textAlign: 'center', padding: '10px 0 2px' }}>
+                    +{stagedFiles.length - 6} more
                   </div>
                 )}
               </div>
