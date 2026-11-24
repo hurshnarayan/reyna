@@ -689,17 +689,32 @@ export default function Dashboard() {
 
         {/* Group Management */}
         <div style={{ ...cardStyle, padding: '18px 22px', borderRadius: 16, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-            <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-color, #111827)', display: 'flex', alignItems: 'center', gap: 10, margin: 0, letterSpacing: '-0.01em' }}>
-              <Fa icon={icons.groups} style={{ fontSize: 15, color: 'var(--text-color, #111827)' }} /> active groups
-            </h2>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-color, #111827)', display: 'flex', alignItems: 'center', gap: 8, margin: 0, letterSpacing: '-0.01em' }}>
+                <Fa icon={icons.groups} style={{ fontSize: 14, color: 'var(--text-color, #111827)' }} /> active groups
+              </h2>
+              {groupSettings.length > 0 && (
+                <span style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: '#15803d',
+                  background: '#dcfce7',
+                  padding: '1px 8px',
+                  borderRadius: 9999,
+                  lineHeight: 1.3,
+                }}>
+                  {groupSettings.filter(g => g.settings?.enabled).length} active
+                </span>
+              )}
+            </div>
             <button
               onClick={() => navigate('/groups')}
               style={{
                 background: '#fff',
                 border: '1px solid #e5e7eb',
                 borderRadius: 9999,
-                padding: '4px 14px',
+                padding: '4px 12px',
                 fontSize: 12,
                 fontWeight: 500,
                 color: '#111827',
@@ -715,7 +730,7 @@ export default function Dashboard() {
               view all groups <span style={{ fontSize: 12, lineHeight: 1 }}>&rarr;</span>
             </button>
           </div>
-          <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 14px 0', lineHeight: 1.4 }}>
+          <p style={{ fontSize: 12, color: '#6b7280', margin: '4px 0 14px 0', lineHeight: 1.45, maxWidth: 290 }}>
             choose which groups reyna monitors and how files are tracked.
           </p>
           {groupSettings.length === 0 ? (
@@ -734,9 +749,10 @@ export default function Dashboard() {
                     position: 'relative',
                     overflow: 'hidden',
                     padding: '16px 20px',
-                    background: '#f0fdf4',
-                    border: '1px solid #dcfce7',
+                    background: enabled ? '#f0fdf4' : '#f9fafb',
+                    border: `1px solid ${enabled ? '#dcfce7' : '#e5e7eb'}`,
                     borderRadius: 14,
+                    transition: 'all 0.2s ease',
                   }}>
                     {/* Subtle bottom-left polygon accent from screenshot */}
                     <div style={{
@@ -745,30 +761,49 @@ export default function Dashboard() {
                       left: 0,
                       width: 140,
                       height: 80,
-                      background: 'linear-gradient(135deg, rgba(209, 250, 229, 0.65) 0%, rgba(240, 253, 244, 0) 70%)',
+                      background: enabled
+                        ? 'linear-gradient(135deg, rgba(209, 250, 229, 0.65) 0%, rgba(240, 253, 244, 0) 70%)'
+                        : 'none',
                       pointerEvents: 'none',
                       clipPath: 'polygon(0 100%, 0 0, 100% 100%)',
                     }} />
 
                     {/* Top row: Name, active badge, toggle */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'relative', zIndex: 1 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontSize: 15, fontWeight: 700, color: '#111827', letterSpacing: '-0.01em', textTransform: 'lowercase' }}>
-                          {(gs.group?.name || 'whatsapp group').toLowerCase()}
-                        </span>
-                        <span style={{
-                          fontSize: 11,
-                          fontWeight: 600,
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <div style={{
+                          width: 28,
+                          height: 28,
+                          borderRadius: 8,
+                          background: enabled ? '#dcfce7' : '#e5e7eb',
                           color: enabled ? '#15803d' : '#6b7280',
-                          background: enabled ? '#dcfce7' : '#f3f4f6',
-                          padding: '2px 8px',
-                          borderRadius: 9999,
-                          display: 'inline-flex',
+                          display: 'flex',
                           alignItems: 'center',
-                          lineHeight: 1.2,
+                          justifyContent: 'center',
+                          fontSize: 12,
+                          flexShrink: 0,
+                          transition: 'all 0.2s',
                         }}>
-                          {enabled ? 'active' : 'inactive'}
-                        </span>
+                          <Fa icon={icons.groups} />
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: 14.5, fontWeight: 700, color: '#111827', letterSpacing: '-0.01em', textTransform: 'lowercase' }}>
+                            {(gs.group?.name || 'whatsapp group').toLowerCase()}
+                          </span>
+                          <span style={{
+                            fontSize: 11,
+                            fontWeight: 600,
+                            color: enabled ? '#15803d' : '#6b7280',
+                            background: enabled ? '#dcfce7' : '#f3f4f6',
+                            padding: '2px 8px',
+                            borderRadius: 9999,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            lineHeight: 1.2,
+                          }}>
+                            {enabled ? 'active' : 'inactive'}
+                          </span>
+                        </div>
                       </div>
                       <label style={{ position: 'relative', display: 'inline-block', width: 38, height: 22, cursor: 'pointer', flexShrink: 0 }}>
                         <input
@@ -826,6 +861,18 @@ export default function Dashboard() {
                               fontFamily: 'inherit',
                               boxShadow: isSelected ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
                             }}
+                            onMouseEnter={e => {
+                              if (!isSelected) {
+                                e.currentTarget.style.background = '#f0fdf4'
+                                e.currentTarget.style.borderColor = '#86efac'
+                              }
+                            }}
+                            onMouseLeave={e => {
+                              if (!isSelected) {
+                                e.currentTarget.style.background = '#ffffff'
+                                e.currentTarget.style.borderColor = '#bbf7d0'
+                              }
+                            }}
                           >
                             <Fa
                               icon={opt.icon}
@@ -843,16 +890,28 @@ export default function Dashboard() {
                     {/* Caption */}
                     {enabled && (
                       <div style={{
-                        fontSize: 12,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 7,
+                        fontSize: 11.5,
                         color: '#4b5563',
                         marginTop: 11,
                         lineHeight: 1.4,
                         position: 'relative',
                         zIndex: 1,
                       }}>
-                        {mode === 'auto'
-                          ? 'every document shared in this group is automatically staged and synced.'
-                          : 'only files that get a pin reaction are staged. everything else is ignored.'}
+                        <span style={{
+                          width: 6,
+                          height: 6,
+                          borderRadius: '50%',
+                          background: mode === 'auto' ? '#16a34a' : '#d97706',
+                          flexShrink: 0,
+                        }} />
+                        <span>
+                          {mode === 'auto'
+                            ? 'every document shared in this group is automatically staged and synced.'
+                            : 'only files that get a pin reaction are staged. everything else is ignored.'}
+                        </span>
                       </div>
                     )}
                   </div>
