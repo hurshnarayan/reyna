@@ -384,7 +384,7 @@ export default function Groups() {
                         />
                       </td>
 
-                      {/* Group Name & WA ID */}
+                      {/* Group Name */}
                       <td style={{ padding: '14px 14px' }}>
                         <div
                           onClick={() => openConfig(gs)}
@@ -405,19 +405,14 @@ export default function Groups() {
                           }}>
                             <Fa icon={icons.groups} />
                           </div>
-                          <div>
-                            <div style={{
-                              fontSize: 14,
-                              fontWeight: 600,
-                              color: '#111827',
-                              textTransform: 'lowercase',
-                              letterSpacing: '-0.01em',
-                            }}>
-                              {(gs.group?.name || 'whatsapp group').toLowerCase()}
-                            </div>
-                            <div style={{ fontSize: 12, color: '#9ca3af', fontFamily: 'monospace' }}>
-                              {gs.group?.wa_id || 'ID unknown'}
-                            </div>
+                          <div style={{
+                            fontSize: 14,
+                            fontWeight: 600,
+                            color: '#111827',
+                            textTransform: 'lowercase',
+                            letterSpacing: '-0.01em',
+                          }}>
+                            {(gs.group?.name || 'whatsapp group').toLowerCase()}
                           </div>
                         </div>
                       </td>
