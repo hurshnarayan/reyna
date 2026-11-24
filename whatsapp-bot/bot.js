@@ -18,7 +18,42 @@ for (const envPath of [path.resolve(__dirname, '../.env'), path.resolve(__dirnam
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8080';
 const AUTH_DIR = process.env.AUTH_DIR || './auth_state';
 const DEVICE_TOKEN = process.env.DEVICE_TOKEN || '';
+const PID_FILE = path.join(__dirname, '.bot.pid');
 const logger = pino({ level: 'silent' });
+
+// Ensure single running instance to prevent WhatsApp DisconnectReason 440 (connectionReplaced) conflicts
+function acquireProcessLock() {
+  if (fs.existsSync(PID_FILE)) {
+    try {
+      const existingPid = parseInt(fs.readFileSync(PID_FILE, 'utf8').trim(), 10);
+      if (existingPid && existingPid !== process.pid) {
+        try {
+          process.kill(existingPid, 0); // Check if process is still alive
+          console.warn(`  [LOCK] Terminating previous bot process (PID ${existingPid}) to avoid 440 connectionReplaced conflicts...`);
+          try { process.kill(existingPid, 'SIGTERM'); } catch {}
+          const deadline = Date.now() + 1000;
+          while (Date.now() < deadline) {
+            try { process.kill(existingPid, 0); } catch { break; }
+          }
+        } catch {
+          // Process not alive; stale pid file
+        }
+      }
+    } catch {}
+  }
+  fs.writeFileSync(PID_FILE, String(process.pid));
+  const cleanup = () => {
+    try {
+      if (fs.existsSync(PID_FILE) && parseInt(fs.readFileSync(PID_FILE, 'utf8').trim(), 10) === process.pid) {
+        fs.unlinkSync(PID_FILE);
+      }
+    } catch {}
+  };
+  process.on('exit', cleanup);
+  process.on('SIGINT', () => { cleanup(); process.exit(0); });
+  process.on('SIGTERM', () => { cleanup(); process.exit(0); });
+}
+acquireProcessLock();
 
 if (!DEVICE_TOKEN) {
   console.error('');
@@ -1450,6 +1485,10 @@ async function startBot() {
         console.log('  Permanent logout detected. Clearing auth_state and restarting for new QR scan.');
         fs.rmSync(AUTH_DIR, { recursive: true, force: true });
         setTimeout(startBot, 2000);
+      } else if (code === DisconnectReason.connectionReplaced || code === 440) {
+        console.log('  [440] Connection replaced: another WhatsApp session or bot instance connected.');
+        console.log('  Backing off for 15s before reconnecting to prevent connection thrashing...');
+        setTimeout(startBot, 15000);
       } else {
         console.log(`  Transient disconnect (${code}). Reconnecting in 5s with existing session...`);
         setTimeout(startBot, 5000);

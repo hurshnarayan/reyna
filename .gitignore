@@ -46,6 +46,7 @@ web/.eslintcache
 whatsapp-bot/node_modules/
 whatsapp-bot/auth_state/
 whatsapp-bot/downloaded_files/
+*.pid
 
 # ── Generic node ──
 node_modules/
