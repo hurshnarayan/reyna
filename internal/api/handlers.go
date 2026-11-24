@@ -1758,6 +1758,13 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 				groupIDs = s.store.GetUserGroupIDs(user.ID)
 			}
 		}
+		// If still empty, search across all available groups
+		if len(groupIDs) == 0 {
+			all, _ := s.store.GetAllGroups()
+			for _, grp := range all {
+				groupIDs = append(groupIDs, grp.ID)
+			}
+		}
 	}
 	log.Printf("[NLP-RETRIEVE] groupIDs=%v", groupIDs)
 
@@ -1823,6 +1830,12 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	for i := range files {
+		if files[i].ContentSummary == "" {
+			_, files[i].ContentSummary = s.store.GetFileContent(files[i].ID)
+		}
+	}
+
 	// Build a conversational LLM-generated reply (multi-language, intent-aware).
 	// We pre-compute the time strings so the LLM can't hallucinate "2 days ago"
 	// when the file was actually shared 2 minutes ago. All times are in IST.
@@ -1840,7 +1853,7 @@ func (s *Server) handleNLPRetrieve(w http.ResponseWriter, r *http.Request) {
 			Folder:   f.Subject,
 			Sender:   sender,
 			SharedAt: formatSharedAt(f.SharedAt()),
-			Summary:  s.store.GetFileExtractedContent([]int64{f.ID})[f.ID],
+			Summary:  f.ContentSummary,
 		})
 	}
 	driveView := make([]nlp.RetrievalFile, 0, len(driveMatches))

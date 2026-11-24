@@ -3,7 +3,6 @@ import { isLoggedIn, logout, getUser, api } from '../lib/api'
 import { useEffect, useState, useRef } from 'react'
 import { NotificationBell } from './Notifications'
 import { Fa, icons } from './icons'
-import Spotlight from './Spotlight'
 
 const navItems = [
   { to: '/dashboard', label: 'dashboard', icon: icons.dashboard },
@@ -24,7 +23,6 @@ export default function Layout() {
   const user = getUser()
 
   const [showSettings, setShowSettings] = useState(false)
-  const [showSpotlight, setShowSpotlight] = useState(false)
   const [musicOn, setMusicOn] = useState(false)
   const [musicVol, setMusicVol] = useState(() => load('musicVol', 0.3))
   const [blobsOn, setBlobsOn] = useState(() => load('blobsOn', true))
@@ -55,17 +53,6 @@ export default function Layout() {
   useEffect(() => { document.body.classList.toggle('reyna-dark', darkMode); save('darkMode', darkMode) }, [darkMode])
   useEffect(() => { document.querySelectorAll('.reyna-blob').forEach(el => { el.style.opacity = blobsOn ? '0.1' : '0' }); save('blobsOn', blobsOn) }, [blobsOn])
   useEffect(() => { document.body.classList.toggle('reyna-no-btn-anim', !btnAnimOn); save('btnAnimOn', btnAnimOn) }, [btnAnimOn])
-
-  useEffect(() => {
-    const handleGlobalKey = (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault()
-        setShowSpotlight(prev => !prev)
-      }
-    }
-    window.addEventListener('keydown', handleGlobalKey)
-    return () => window.removeEventListener('keydown', handleGlobalKey)
-  }, [])
 
   const toggleMusic = () => {
     if (!audioRef.current) { audioRef.current = new Audio('/lusion_music.mp3'); audioRef.current.loop = true; audioRef.current.volume = musicVol }
@@ -167,54 +154,7 @@ export default function Layout() {
           </a>
         </div>
 
-        {/* ── Spotlight Quick Find Button ── */}
-        <div style={{ padding: '14px 16px 4px' }}>
-          <div
-            onClick={() => setShowSpotlight(true)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '8px 12px',
-              background: 'rgba(255, 255, 255, 0.05)',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
-              borderRadius: 10,
-              cursor: 'pointer',
-              color: '#9ca3af',
-              fontSize: 12,
-              fontWeight: 500,
-              transition: 'all 0.15s ease',
-            }}
-            onMouseEnter={e => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'
-              e.currentTarget.style.borderColor = 'rgba(37, 211, 102, 0.5)'
-              e.currentTarget.style.color = '#ffffff'
-            }}
-            onMouseLeave={e => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'
-              e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.1)'
-              e.currentTarget.style.color = '#9ca3af'
-            }}
-          >
-            <span style={{ display: 'flex', alignItems: 'center', gap: 8, textTransform: 'lowercase' }}>
-              <Fa icon="fa-bolt" style={{ color: '#22c55e', fontSize: 12 }} />
-              spotlight
-            </span>
-            <span style={{
-              fontSize: 10,
-              fontWeight: 600,
-              background: 'rgba(0, 0, 0, 0.35)',
-              padding: '2px 6px',
-              borderRadius: 4,
-              color: '#9ca3af',
-              border: '1px solid rgba(255, 255, 255, 0.08)',
-            }}>
-              ctrl+k
-            </span>
-          </div>
-        </div>
-
-        <nav style={{ flex: 1, padding: '12px 0' }}>
+        <nav style={{ flex: 1, padding: '16px 0' }}>
           {navItems.map(n => <SideNavLink key={n.to} {...n} />)}
           <NotificationBell />
           {navAfterAlerts.map(n => <SideNavLink key={n.to} {...n} />)}
@@ -348,9 +288,6 @@ export default function Layout() {
           <Outlet />
         </div>
       </main>
-
-      {/* ── Raycast Spotlight Overlay ── */}
-      <Spotlight isOpen={showSpotlight} onClose={() => setShowSpotlight(false)} />
     </div>
     </div>
   )

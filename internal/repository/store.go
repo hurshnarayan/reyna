@@ -365,7 +365,7 @@ func (s *Store) UpsertGroup(waID, name string, createdBy int64) (*model.Group, e
 func (s *Store) GetGroupByWAID(waID string) (*model.Group, error) {
 	g := &model.Group{}
 	err := s.db.QueryRow(
-		`SELECT id, wa_id, name, member_count, created_by, created_at, updated_at FROM groups_ WHERE wa_id=?`,
+		`SELECT id, wa_id, name, member_count, COALESCE(created_by, 0), created_at, updated_at FROM groups_ WHERE wa_id=?`,
 		waID,
 	).Scan(&g.ID, &g.WAID, &g.Name, &g.MemberCount, &g.CreatedBy, &g.CreatedAt, &g.UpdatedAt)
 	return g, err
@@ -399,7 +399,7 @@ func (s *Store) UpdateGroupName(groupID int64, name string) error {
 
 func (s *Store) GetAllGroups() ([]model.Group, error) {
 	rows, err := s.db.Query(
-		`SELECT id, wa_id, name, member_count, created_by, created_at, updated_at FROM groups_ ORDER BY name ASC`,
+		`SELECT id, wa_id, name, member_count, COALESCE(created_by, 0), created_at, updated_at FROM groups_ ORDER BY name ASC`,
 	)
 	if err != nil {
 		return nil, err
@@ -416,7 +416,7 @@ func (s *Store) GetAllGroups() ([]model.Group, error) {
 
 func (s *Store) GetUserGroups(userID int64) ([]model.Group, error) {
 	rows, err := s.db.Query(
-		`SELECT g.id, g.wa_id, g.name, g.member_count, g.created_by, g.created_at, g.updated_at
+		`SELECT g.id, g.wa_id, g.name, g.member_count, COALESCE(g.created_by, 0), g.created_at, g.updated_at
 		 FROM groups_ g JOIN group_members gm ON g.id = gm.group_id WHERE gm.user_id=? ORDER BY g.updated_at DESC`,
 		userID,
 	)

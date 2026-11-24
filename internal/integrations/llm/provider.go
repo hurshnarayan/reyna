@@ -252,16 +252,18 @@ type geminiProvider struct {
 func (g *geminiProvider) Name() string    { return "gemini" }
 func (g *geminiProvider) IsEnabled() bool { return g.apiKey != "" }
 
+func getGeminiModels() []string {
+	custom := os.Getenv("GEMINI_MODEL")
+	if custom != "" {
+		return []string{custom, "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"}
+	}
+	return []string{"gemini-3.5-flash-lite", "gemini-3.1-flash-lite"}
+}
+
 func (g *geminiProvider) Complete(prompt string, maxTokens int) (string, error) {
 	if maxTokens <= 0 {
 		maxTokens = 300
 	}
-
-	model := os.Getenv("GEMINI_MODEL")
-	if model == "" {
-		model = "gemini-3.8-flash"
-	}
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", model, g.apiKey)
 
 	// Only force application/json output when the prompt explicitly asks for
 	// JSON. Free-form answers (Q&A, NLP reply generation) must stay plain text
@@ -270,7 +272,6 @@ func (g *geminiProvider) Complete(prompt string, maxTokens int) (string, error) 
 	genConfig := map[string]interface{}{
 		"maxOutputTokens": maxTokens,
 		"temperature":     0.3,
-		"thinkingConfig":  map[string]interface{}{"thinkingBudget": 0},
 	}
 	if wantJSON {
 		genConfig["responseMimeType"] = "application/json"
@@ -289,7 +290,21 @@ func (g *geminiProvider) Complete(prompt string, maxTokens int) (string, error) 
 	}
 	jsonBody, _ := json.Marshal(body)
 
-	respBody, status, err := doGeminiRequestWithRetry(url, jsonBody)
+	var respBody []byte
+	var status int
+	var err error
+	for _, m := range getGeminiModels() {
+		url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", m, g.apiKey)
+		respBody, status, err = doGeminiRequestWithRetry(url, jsonBody)
+		if err == nil && status == 200 {
+			break
+		}
+		if status == 429 || status == 404 {
+			log.Printf("[LLM] Gemini model %s returned status %d, trying fallback model...", m, status)
+			continue
+		}
+		break
+	}
 	if err != nil {
 		return "", err
 	}
@@ -323,12 +338,6 @@ func (g *geminiProvider) CompleteWithDoc(prompt string, fileData []byte, mimeTyp
 		maxTokens = 500
 	}
 
-	model := os.Getenv("GEMINI_MODEL")
-	if model == "" {
-		model = "gemini-3.8-flash"
-	}
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", model, g.apiKey)
-
 	b64 := base64.StdEncoding.EncodeToString(fileData)
 
 	body := map[string]interface{}{
@@ -351,7 +360,6 @@ func (g *geminiProvider) CompleteWithDoc(prompt string, fileData []byte, mimeTyp
 			cfg := map[string]interface{}{
 				"maxOutputTokens": maxTokens,
 				"temperature":     0.3,
-				"thinkingConfig":  map[string]interface{}{"thinkingBudget": 0},
 			}
 			if strings.Contains(prompt, "JSON") || strings.Contains(prompt, "json") {
 				cfg["responseMimeType"] = "application/json"
@@ -362,7 +370,21 @@ func (g *geminiProvider) CompleteWithDoc(prompt string, fileData []byte, mimeTyp
 	}
 	jsonBody, _ := json.Marshal(body)
 
-	respBody, status, err := doGeminiRequestWithRetry(url, jsonBody)
+	var respBody []byte
+	var status int
+	var err error
+	for _, m := range getGeminiModels() {
+		url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", m, g.apiKey)
+		respBody, status, err = doGeminiRequestWithRetry(url, jsonBody)
+		if err == nil && status == 200 {
+			break
+		}
+		if status == 429 || status == 404 {
+			log.Printf("[LLM] Gemini doc model %s returned status %d, trying fallback model...", m, status)
+			continue
+		}
+		break
+	}
 	if err != nil {
 		return "", err
 	}

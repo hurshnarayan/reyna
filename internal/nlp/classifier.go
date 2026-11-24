@@ -909,8 +909,30 @@ func (c *Classifier) keywordParseQuery(query string) (who, what, when, why strin
 		}
 	}
 
-	// Pattern: "what did X share/send/upload"
-	prefixPatterns := []string{"what did ", "did ", "has ", "from ", "files from ", "notes from ", "shared by "}
+	// Pattern: "[what] by [who]" e.g. "physics notes by harsh" or "files by harsh"
+	if idx := strings.LastIndex(lower, " by "); idx >= 0 {
+		nameCandidate := strings.Trim(strings.TrimSpace(lower[idx+4:]), "?.,! ")
+		parts := strings.Fields(nameCandidate)
+		if len(parts) > 0 {
+			cand := parts[0]
+			if !skipWords[cand] && len(cand) > 1 {
+				who = cand
+				beforeBy := strings.TrimSpace(lower[:idx])
+				for _, noise := range []string{"show me", "get me", "find", "do we have", "any", "some", "the"} {
+					beforeBy = strings.TrimSpace(strings.ReplaceAll(beforeBy, noise, ""))
+				}
+				what = c.cleanGenericWhat(beforeBy)
+				why = "retrieve"
+				return who, what, when, why
+			}
+		}
+	}
+
+	// Pattern: "what did X share/send/upload" or "files by X"
+	prefixPatterns := []string{
+		"what did ", "did ", "has ", "from ", "files from ", "notes from ",
+		"files by ", "notes by ", "docs by ", "documents by ", "shared by ", "sent by ", "by ",
+	}
 	for _, p := range prefixPatterns {
 		if idx := strings.Index(lower, p); idx >= 0 {
 			rest := lower[idx+len(p):]
@@ -973,6 +995,8 @@ Rules:
 
 Examples:
 - "mohit sent some notes" → {"who":"mohit","what":"","when":"","why":"retrieve"}
+- "files by harsh?" → {"who":"harsh","what":"","when":"","why":"retrieve"}
+- "notes by harsh" → {"who":"harsh","what":"","when":"","why":"retrieve"}
 - "do we have OS notes?" → {"who":"","what":"OS","when":"","why":"check_existence"}
 - "what did priya upload yesterday?" → {"who":"priya","what":"","when":"yesterday","why":"retrieve"}
 - "find compiler lab manual" → {"who":"","what":"compiler lab manual","when":"","why":"search"}
