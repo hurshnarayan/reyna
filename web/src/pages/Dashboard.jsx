@@ -546,7 +546,7 @@ export default function Dashboard() {
               <Fa icon={icons.groups} style={{ fontSize: 15, color: 'var(--text-color, #111827)' }} /> active groups
             </h2>
             <button
-              onClick={() => {}}
+              onClick={() => navigate('/groups')}
               style={{
                 background: '#fff',
                 border: '1px solid #e5e7eb',
@@ -605,8 +605,8 @@ export default function Dashboard() {
                     {/* Top row: Name, active badge, toggle */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'relative', zIndex: 1 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontSize: 15, fontWeight: 700, color: '#111827', letterSpacing: '-0.01em' }}>
-                          {gs.group?.name || 'WhatsApp Group'}
+                        <span style={{ fontSize: 15, fontWeight: 700, color: '#111827', letterSpacing: '-0.01em', textTransform: 'lowercase' }}>
+                          {(gs.group?.name || 'whatsapp group').toLowerCase()}
                         </span>
                         <span style={{
                           fontSize: 11,

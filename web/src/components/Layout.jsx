@@ -7,6 +7,7 @@ import { Fa, icons } from './icons'
 const navItems = [
   { to: '/dashboard', label: 'dashboard', icon: icons.dashboard },
   { to: '/files', label: 'files', icon: icons.files },
+  { to: '/groups', label: 'groups', icon: icons.groups },
   { to: '/search', label: 'search', icon: icons.search },
 ]
 const navAfterAlerts = [
