@@ -378,27 +378,6 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* ── AI / LLM Status ── */}
-      {llmStatus && (
-        <div style={{ ...cardStyle, borderTop: `3px solid ${llmStatus.enabled ? '#7F77DD' : '#ddd'}`, marginBottom: 24, padding: '16px 24px', display: 'flex', alignItems: 'center', gap: 14 }}>
-          <Fa icon="fa-brain" style={{ fontSize: 20, color: llmStatus.enabled ? '#7F77DD' : '#ccc' }} />
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-color)' }}>
-              AI Pipeline {llmStatus.enabled ? 'Active' : 'Inactive'}
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--sub-color)', marginTop: 2 }}>
-              {llmStatus.enabled
-                ? `Powered by ${llmStatus.provider} - content extraction, classification, NLP features enabled`
-                : 'Set ANTHROPIC_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY, or XAI_API_KEY to enable AI features'}
-            </div>
-          </div>
-          <span style={{
-            padding: '4px 12px', borderRadius: 20, fontSize: 11, fontWeight: 600,
-            background: llmStatus.enabled ? '#EEEDFE' : '#f5f5f5',
-            color: llmStatus.enabled ? '#534AB7' : '#999',
-          }}>{llmStatus.enabled ? llmStatus.provider : 'keyword-only'}</span>
-        </div>
-      )}
 
       {/* ── google drive ── */}
       <div style={{
