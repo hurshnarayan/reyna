@@ -14,10 +14,9 @@ import (
 	"github.com/hurshnarayan/reyna/internal/model"
 )
 
-// geminiInlineMaxBytes is the safe ceiling for inline base64-encoded file data
-// in a single Gemini generateContent request. Gemini's documented inline limit
-// is ~20 MB total request size; we leave headroom for prompt + base64 overhead.
-const geminiInlineMaxBytes = 14 * 1024 * 1024
+// geminiInlineMaxBytes leaves room for base64 expansion and the prompt under
+// Gemini's 50 MB inline PDF request limit.
+const geminiInlineMaxBytes = 30 * 1024 * 1024
 
 var istLocation = func() *time.Location {
 	loc, err := time.LoadLocation("Asia/Kolkata")
@@ -133,6 +132,73 @@ func filepathExt(name string) string {
 		}
 	}
 	return ""
+}
+
+// SubjectFromContent overrides a model or filename guess only when the text
+// contains strong, subject-specific evidence.
+func (c *Classifier) SubjectFromContent(content string, existingFolders []string) (string, bool, bool) {
+	type signal struct {
+		folder string
+		phrase string
+		weight int
+	}
+	signals := []signal{
+		{"Data Structures", "circular queue", 5},
+		{"Data Structures", "priority queue", 5},
+		{"Data Structures", "queue data structure", 5},
+		{"Data Structures", "data structure", 4},
+		{"Data Structures", "linked list", 5},
+		{"Data Structures", "binary tree", 5},
+		{"Data Structures", "hash table", 5},
+		{"Data Structures", "infix to postfix", 5},
+		{"Data Structures", "postfix expression", 5},
+		{"Data Structures", "queue", 2},
+		{"Data Structures", "stack", 2},
+		{"Probability And Statistics", "probability distribution", 5},
+		{"Probability And Statistics", "random variable", 5},
+		{"Probability And Statistics", "queueing theory", 5},
+		{"Probability And Statistics", "expected value", 4},
+		{"Probability And Statistics", "standard deviation", 4},
+		{"Probability And Statistics", "binomial distribution", 4},
+		{"Probability And Statistics", "poisson distribution", 4},
+		{"Probability And Statistics", "bayes", 5},
+		{"Probability And Statistics", "probability", 3},
+		{"Probability And Statistics", "statistics", 3},
+		{"Probability And Statistics", "variance", 3},
+		{"Recursion Programs", "recursion", 5},
+		{"Recursion Programs", "recursive", 5},
+	}
+
+	lower := strings.ToLower(content)
+	scores := make(map[string]int)
+	for _, s := range signals {
+		if strings.Contains(lower, s.phrase) {
+			scores[s.folder] += s.weight
+		}
+	}
+
+	best, bestScore, secondScore := "", 0, 0
+	for folder, score := range scores {
+		if score > bestScore {
+			best, secondScore, bestScore = folder, bestScore, score
+		} else if score > secondScore {
+			secondScore = score
+		}
+	}
+	if bestScore < 4 || bestScore-secondScore < 2 {
+		return "", false, false
+	}
+
+	for _, existing := range existingFolders {
+		if strings.EqualFold(existing, best) {
+			return existing, false, true
+		}
+	}
+	snapped := snapToExistingFolder(best, existingFolders)
+	if !strings.EqualFold(snapped, best) {
+		return snapped, false, true
+	}
+	return best, true, true
 }
 
 // keywordMatchFolder tries to match filename against existing folder names
@@ -340,9 +406,15 @@ func formatMetaForPrompt(meta FileMeta) string {
 // Per PDF: "Collapses Agents 1 & 2 into a single Claude call — more reliable, less code, better classification accuracy."
 // meta carries sender/time context — Gemini uses these as additional signals.
 func (c *Classifier) ClassifyFileWithContent(fileName, mimeType string, fileData []byte, existingFolders []string, meta FileMeta) (folder string, isNew bool, confidence float64, content string, summary string) {
-	// Tier 1: keyword match against existing folders (free, instant)
-	if match, conf := c.keywordMatchFolder(fileName, existingFolders); match != "" {
-		return match, false, conf, "", ""
+	// A content-capable file must be read before a filename match can decide
+	// its folder. Filenames such as "Data Structures - probability.pdf" are
+	// not reliable evidence of what the document contains.
+	contentCapable := len(fileData) > 0 &&
+		(strings.Contains(mimeType, "pdf") || IsOfficeDoc(mimeType))
+	if !contentCapable {
+		if match, conf := c.keywordMatchFolder(fileName, existingFolders); match != "" {
+			return match, false, conf, "", ""
+		}
 	}
 
 	// Tier 2a: Office docs (DOCX/PPTX/XLSX) — extract text from the zipped XML
@@ -420,13 +492,18 @@ Respond ONLY with JSON:
 				}
 				result = llm.CleanJSON(result)
 				if jerr := json.Unmarshal([]byte(result), &resp); jerr == nil && isValidFolder(resp.Folder) {
-					// Snap to a near-matching existing folder if one exists
-					// — stops the LLM from inventing "C Programming Lab"
-					// when "C Programming Laboratory" already exists.
-					snapped := snapToExistingFolder(resp.Folder, existingFolders)
-					if snapped != resp.Folder {
-						resp.Folder = snapped
-						resp.IsNew = false
+					if contentFolder, contentIsNew, ok := c.SubjectFromContent(resp.Content+"\n"+resp.Summary, existingFolders); ok {
+						if !strings.EqualFold(resp.Folder, contentFolder) {
+							log.Printf("[NLP] Content evidence overrides folder for %s: %s → %s", fileName, resp.Folder, contentFolder)
+						}
+						resp.Folder, resp.IsNew = contentFolder, contentIsNew
+					} else {
+						// Snap to a near-matching existing folder if one exists.
+						snapped := snapToExistingFolder(resp.Folder, existingFolders)
+						if snapped != resp.Folder {
+							resp.Folder = snapped
+							resp.IsNew = false
+						}
 					}
 					log.Printf("[NLP] Combined extract+classify: %s → %s (%.0f%%) [sender=%s]", fileName, resp.Folder, resp.Confidence*100, meta.SenderName)
 					return resp.Folder, resp.IsNew, resp.Confidence, resp.Content, resp.Summary
@@ -511,6 +588,12 @@ Respond ONLY with JSON:
 	}
 	if !isValidFolder(resp.Folder) {
 		return "", false, 0, ""
+	}
+	if contentFolder, contentIsNew, ok := c.SubjectFromContent(extractedText+"\n"+resp.Summary, existingFolders); ok {
+		if !strings.EqualFold(resp.Folder, contentFolder) {
+			log.Printf("[NLP] Content evidence overrides folder for %s: %s → %s", fileName, resp.Folder, contentFolder)
+		}
+		return contentFolder, contentIsNew, resp.Confidence, resp.Summary
 	}
 	// Snap to a near-matching existing folder if one exists.
 	snapped := snapToExistingFolder(resp.Folder, existingFolders)

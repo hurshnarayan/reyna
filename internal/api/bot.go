@@ -2,6 +2,7 @@ package api
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -506,16 +507,20 @@ func (s *Server) handleBotUpload(w http.ResponseWriter, r *http.Request) {
 			s.store.UpdateFileSubject(fileID, classifySubject)
 		}
 
-		// Content extraction
+		// If the combined classifier call did not return text, extract it
+		// separately and use strong content evidence to correct its folder.
+		if extractedContent == "" {
+			extractedContent, contentSummary, _ = s.classifier.ExtractContent(fName, mime, fSize, data)
+		}
 		if extractedContent != "" {
-			s.store.UpdateFileContent(fileID, extractedContent, contentSummary)
-			log.Printf("[EXTRACT] Combined: %s → %s", fName, contentSummary)
-		} else {
-			content, summary, _ := s.classifier.ExtractContent(fName, mime, fSize, data)
-			if content != "" {
-				s.store.UpdateFileContent(fileID, content, summary)
-				log.Printf("[EXTRACT] Async: %s → %s", fName, summary)
+			if contentFolder, _, ok := s.classifier.SubjectFromContent(extractedContent+"\n"+contentSummary, existingFolders); ok &&
+				!strings.EqualFold(contentFolder, classifySubject) {
+				log.Printf("[NLP] Extracted content overrides folder for %s: %s → %s", fName, classifySubject, contentFolder)
+				classifySubject = contentFolder
+				s.store.UpdateFileSubject(fileID, classifySubject)
 			}
+			s.store.UpdateFileContent(fileID, extractedContent, contentSummary)
+			log.Printf("[EXTRACT] %s: %s", fName, contentSummary)
 		}
 	}(saved.ID, groupID, fileName, mimeType, fileSize, fileBytes, group)
 }
@@ -585,9 +590,11 @@ func (s *Server) handleBotReaction(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleBotSyncGroup(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" { http.Error(w, `{"error":"method not allowed"}`, 405); return }
 	var req struct {
-		WAID        string `json:"wa_id"`
-		Name        string `json:"name"`
-		MemberCount int    `json:"member_count"`
+		WAID         string   `json:"wa_id"`
+		Name         string   `json:"name"`
+		MemberCount  int      `json:"member_count"`
+		OwnerPhone   string   `json:"owner_phone"`
+		MemberPhones []string `json:"member_phones"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 	if req.WAID == "" { http.Error(w, `{"error":"wa_id required"}`, 400); return }
@@ -603,6 +610,44 @@ func (s *Server) handleBotSyncGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if group != nil {
+		if req.OwnerPhone != "" {
+			owner, err := s.store.UpsertUser(req.OwnerPhone, "")
+			if err != nil {
+				http.Error(w, `{"error":"group owner could not be linked"}`, http.StatusInternalServerError)
+				return
+			}
+			if err := s.store.AddGroupMember(group.ID, owner.ID, req.OwnerPhone, "admin"); err != nil {
+				http.Error(w, `{"error":"group owner could not be linked"}`, http.StatusInternalServerError)
+				return
+			}
+		}
+
+		linkedMembers := 0
+		for _, phone := range req.MemberPhones {
+			phone = strings.TrimSpace(phone)
+			if phone == "" {
+				continue
+			}
+			member, err := s.store.GetUserByPhone(phone)
+			if err == sql.ErrNoRows {
+				continue
+			}
+			if err != nil {
+				log.Printf("[SYNC-GROUP] Failed to find member account for group %d: %v", group.ID, err)
+				http.Error(w, `{"error":"group members could not be linked"}`, http.StatusInternalServerError)
+				return
+			}
+			if err := s.store.AddGroupMember(group.ID, member.ID, member.Phone, "member"); err != nil {
+				log.Printf("[SYNC-GROUP] Failed to link member account to group %d: %v", group.ID, err)
+				http.Error(w, `{"error":"group members could not be linked"}`, http.StatusInternalServerError)
+				return
+			}
+			linkedMembers++
+		}
+		if linkedMembers > 0 {
+			log.Printf("[SYNC-GROUP] Linked %d existing Reyna account(s) to group %d from WhatsApp membership", linkedMembers, group.ID)
+		}
+
 		// Only update name if we got a real one — never overwrite with empty or placeholder
 		if req.Name != "" && req.Name != "WhatsApp Group" && req.Name != group.Name {
 			s.store.UpdateGroupName(group.ID, req.Name)

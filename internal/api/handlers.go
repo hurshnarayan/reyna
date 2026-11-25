@@ -754,16 +754,18 @@ func (s *Server) handleDeviceUpload(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		if extractedContent == "" {
+			extractedContent, contentSummary, _ = s.classifier.ExtractContent(fName, mime, fSize, data)
+		}
 		if extractedContent != "" {
-			s.store.UpdateFileContent(fileID, extractedContent, contentSummary)
-			log.Printf("[EXTRACT] Combined: %s → %s", fName, contentSummary)
-		} else {
-			content, summary, _ := s.classifier.ExtractContent(fName, mime, fSize, data)
-			if content != "" {
-				extractedContent = content
-				s.store.UpdateFileContent(fileID, content, summary)
-				log.Printf("[EXTRACT] Async: %s → %s", fName, summary)
+			if contentFolder, _, ok := s.classifier.SubjectFromContent(extractedContent+"\n"+contentSummary, existingFolders); ok &&
+				!strings.EqualFold(contentFolder, classifySubject) {
+				log.Printf("[NLP] Extracted content overrides folder for %s: %s → %s", fName, classifySubject, contentFolder)
+				classifySubject = contentFolder
+				s.store.UpdateFileSubject(fileID, classifySubject)
 			}
+			s.store.UpdateFileContent(fileID, extractedContent, contentSummary)
+			log.Printf("[EXTRACT] %s: %s", fName, contentSummary)
 		}
 
 		// Generate and save 768-dim Gemini vector embedding
@@ -1544,7 +1546,27 @@ func (s *Server) handleGroupSettings(w http.ResponseWriter, r *http.Request) {
 			gs.ReactionEmoji = req.ReactionEmoji
 		}
 
-		s.store.UpsertGroupSettings(gs)
+		if err := s.store.UpsertGroupSettings(gs); err != nil {
+			log.Printf("Failed to update settings for group %d: %v", req.GroupID, err)
+			http.Error(w, `{"error":"group settings could not be saved"}`, http.StatusInternalServerError)
+			return
+		}
+		// Editing a visible group's settings is the dashboard user's explicit
+		// choice to manage that group's files. Link that account to the group
+		// so uploads from other members are visible in their staging list.
+		if !gs.Hidden {
+			user, err := s.store.GetUserByID(uid)
+			if err != nil {
+				log.Printf("Failed to load dashboard user %d while linking group %d: %v", uid, req.GroupID, err)
+				http.Error(w, `{"error":"dashboard user could not be loaded"}`, http.StatusInternalServerError)
+				return
+			}
+			if err := s.store.AddGroupMember(req.GroupID, uid, user.Phone, "admin"); err != nil {
+				log.Printf("Failed to link dashboard user %d to group %d: %v", uid, req.GroupID, err)
+				http.Error(w, `{"error":"dashboard user could not be linked to group"}`, http.StatusInternalServerError)
+				return
+			}
+		}
 		log.Printf("Group %d settings updated by user %d: enabled=%v mode=%s", req.GroupID, uid, gs.Enabled, gs.TrackingMode)
 		json.NewEncoder(w).Encode(gs)
 		return

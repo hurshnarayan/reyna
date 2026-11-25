@@ -4,6 +4,118 @@ import (
 	"testing"
 )
 
+type fixedDocProvider struct {
+	response string
+	docCalls *int
+}
+
+func (p fixedDocProvider) Complete(string, int) (string, error) {
+	return "", nil
+}
+
+func (p fixedDocProvider) CompleteWithDoc(string, []byte, string, int) (string, error) {
+	if p.docCalls != nil {
+		*p.docCalls++
+	}
+	return p.response, nil
+}
+
+func (p fixedDocProvider) Embed(string) ([]float32, error) {
+	return nil, nil
+}
+
+func (p fixedDocProvider) Name() string {
+	return "test"
+}
+
+func (p fixedDocProvider) IsEnabled() bool {
+	return true
+}
+
+func TestPDFClassificationTrustsStrongContentOverFilenameAndModel(t *testing.T) {
+	tests := []struct {
+		name     string
+		fileName string
+		content  string
+		model    string
+		want     string
+	}{
+		{
+			name:     "queue implementation is data structures",
+			fileName: "prog5 circular queue.pdf",
+			content:  "Study material about circular queue data structure implementation.",
+			model:    "Probability And Statistics",
+			want:     "Data Structures",
+		},
+		{
+			name:     "probability content beats folder words in filename",
+			fileName: "Data Structures probability.pdf",
+			content:  "Discrete random variable and probability distribution examples.",
+			model:    "Data Structures",
+			want:     "Probability And Statistics",
+		},
+	}
+
+	folders := []string{"Probability And Statistics", "Data Structures"}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response := `{"content":` + `"` + tt.content + `"` +
+				`,"summary":"` + tt.content + `","folder":"` + tt.model +
+				`","is_new":false,"confidence":0.95}`
+			classifier := New(fixedDocProvider{response: response})
+			folder, _, _, extracted, _ := classifier.ClassifyFileWithContent(
+				tt.fileName, "application/pdf", []byte("%PDF-test"), folders, FileMeta{},
+			)
+			if folder != tt.want {
+				t.Fatalf("folder = %q, want %q", folder, tt.want)
+			}
+			if extracted != tt.content {
+				t.Fatalf("content = %q, want %q", extracted, tt.content)
+			}
+		})
+	}
+}
+
+func TestPDFClassificationSendsFilesAbovePreviousInlineLimit(t *testing.T) {
+	content := "Discrete random variable and probability distribution examples."
+	response := `{"content":"` + content + `","summary":"` + content +
+		`","folder":"Probability And Statistics","is_new":false,"confidence":0.95}`
+	docCalls := 0
+	classifier := New(fixedDocProvider{response: response, docCalls: &docCalls})
+	data := make([]byte, 15*1024*1024)
+
+	folder, _, _, extracted, _ := classifier.ClassifyFileWithContent(
+		"probability notes.pdf", "application/pdf", data,
+		[]string{"Probability And Statistics", "Data Structures"}, FileMeta{},
+	)
+	if folder != "Probability And Statistics" {
+		t.Fatalf("folder = %q, want Probability And Statistics", folder)
+	}
+	if extracted != content {
+		t.Fatalf("PDF content was not returned: %q", extracted)
+	}
+	if docCalls != 1 {
+		t.Fatalf("CompleteWithDoc called %d times, want 1 for a file above the old 14 MiB cap", docCalls)
+	}
+}
+
+func TestSubjectFromContentRequiresSpecificEvidence(t *testing.T) {
+	classifier := New(nil)
+	folders := []string{"Probability And Statistics", "Data Structures"}
+
+	folder, isNew, ok := classifier.SubjectFromContent(
+		"Study material on circular queue implementation.",
+		folders,
+	)
+	if !ok || isNew || folder != "Data Structures" {
+		t.Fatalf("SubjectFromContent = (%q, %v, %v), want (Data Structures, false, true)", folder, isNew, ok)
+	}
+
+	if _, _, ok := classifier.SubjectFromContent("Queue", folders); ok {
+		t.Fatal("a generic mention of queue should not be enough to override classification")
+	}
+}
+
 func TestKeywordParseQueryReynaScript(t *testing.T) {
 	c := New(nil)
 	testCases := []struct {

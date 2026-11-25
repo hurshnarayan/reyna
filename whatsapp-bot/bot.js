@@ -327,6 +327,10 @@ async function sendReaction(groupJid, userPhone, userName, fileInfo) {
   }
 }
 
+function uploadWasAccepted(response) {
+  return response?.status === 'staged' || response?.status === 'duplicate';
+}
+
 // ─── Group Allowlist ───
 
 async function refreshEnabledGroups() {
@@ -654,9 +658,37 @@ function isReynaMessage(text) {
 // Only registers a group with the backend when /reyna init is used.
 const syncedGroups = new Set();
 
+function groupParticipantPhones(metadata) {
+  const phones = new Set();
+  for (const participant of metadata?.participants || []) {
+    const phone = phoneFromJid(participant.phoneNumber || participant.id);
+    if (isRealPhoneNumber(phone)) phones.add(phone);
+  }
+  return [...phones];
+}
+
+async function syncGroup(groupJid, name, memberCount, memberPhones = []) {
+  const res = await backendFetch(`${BACKEND_URL}/api/bot/sync-group`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      wa_id: groupJid,
+      name,
+      member_count: memberCount,
+      owner_phone: botOwnerPhone,
+      member_phones: memberPhones,
+    }),
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`HTTP ${res.status}${detail ? `: ${detail}` : ''}`);
+  }
+}
+
 async function ensureGroupSynced(sock, groupJid) {
   let groupName = null;
   let memberCount = 0;
+  let memberPhones = [];
 
   // Single attempt — no retries. Retries cause extra groupMetadata calls
   // which trigger 440 disconnects.
@@ -665,6 +697,7 @@ async function ensureGroupSynced(sock, groupJid) {
     if (metadata?.subject && metadata.subject !== '') {
       groupName = metadata.subject;
       memberCount = (metadata.participants || []).length;
+      memberPhones = groupParticipantPhones(metadata);
     }
   } catch {}
 
@@ -676,23 +709,17 @@ async function ensureGroupSynced(sock, groupJid) {
       // First time seeing this group — register it with a placeholder
       // but the backend will only store it if it doesn't already exist
       try {
-        await backendFetch(`${BACKEND_URL}/api/bot/sync-group`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ wa_id: groupJid, name: '', member_count: 0 }),
-        });
+        await syncGroup(groupJid, '', memberCount, memberPhones);
         syncedGroups.add(groupJid);
-      } catch {}
+      } catch (err) {
+        console.error(`  Group sync failed for ${groupJid}: ${err.message}`);
+      }
     }
     return;
   }
 
   try {
-    await backendFetch(`${BACKEND_URL}/api/bot/sync-group`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ wa_id: groupJid, name: groupName, member_count: memberCount }),
-    });
+    await syncGroup(groupJid, groupName, memberCount, memberPhones);
     syncedGroups.add(groupJid);
     console.log(`  Synced group: ${groupName} (${groupJid})`);
   } catch (err) {
@@ -708,13 +735,12 @@ async function refreshGroupNames(sock) {
     try {
       const metadata = await sock.groupMetadata(groupJid);
       const name = metadata?.subject;
+      const members = metadata?.participants || [];
       if (name && name !== 'WhatsApp Group' && name !== '') {
         console.log(`  [GROUP-NAME] ${groupJid} → "${name}"`);
-        await backendFetch(`${BACKEND_URL}/api/bot/sync-group`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ wa_id: groupJid, name, member_count: (metadata?.participants || []).length }),
-        });
+      }
+      if (metadata) {
+        await syncGroup(groupJid, name || '', members.length, groupParticipantPhones(metadata));
       }
     } catch (err) {
       console.log(`  [GROUP-NAME] Failed for ${groupJid}: ${err.message}`);
@@ -1129,7 +1155,19 @@ async function handleMessage(sock, msg) {
     ensureGroupSynced(sock, chat).catch(() => {});
   }
 
-  const { mode, enabled } = await getGroupMode(chat);
+  // Use the in-memory cache maintained by startGroupStateWatcher (updated every 2.5s).
+  // Fall back to a network call only on a cold cache miss (e.g. first message after startup
+  // before the watcher has ticked once). This avoids a /api/bot/group-mode round-trip on
+  // every single incoming message.
+  let enabled = lastKnownEnabled.get(chat);
+  let mode = lastKnownMode.get(chat);
+  if (enabled === undefined || mode === undefined) {
+    const fresh = await getGroupMode(chat);
+    enabled = fresh.enabled;
+    mode = fresh.mode;
+    lastKnownEnabled.set(chat, enabled);
+    lastKnownMode.set(chat, mode);
+  }
   console.log(`  [MODE] ${chat.slice(0,12)}... enabled=${enabled} mode=${mode}`);
 
   // If the group is disabled (toggle off in dashboard or /reyna stop), skip everything
@@ -1177,11 +1215,21 @@ async function handleMessage(sock, msg) {
 
         // AUTO MODE: stage immediately and silently
         if (mode === 'auto') {
-          const resp = await uploadFile(chat, senderPhone, pushName, {
+          // If the sender's phone is a WhatsApp LID (not a real number), fall back to
+          // botOwnerPhone so the backend can link this file to the dashboard owner's
+          // account. Without this, AutoLinkUserToGroups can never match and the
+          // staging area shows empty on the dashboard.
+          const uploadPhone = isRealPhoneNumber(senderPhone) ? senderPhone : (botOwnerPhone || senderPhone);
+          const resp = await uploadFile(chat, uploadPhone, pushName, {
             fileName, fileSize,
             mimeType,
+            subject: 'classifying...',
             postedAt: postedAtOf(msg),
           }, buffer);
+          if (!uploadWasAccepted(resp)) {
+            console.error(`  [UPLOAD] Backend did not confirm staging ${fileName}: ${resp?.error || resp?.reply || 'no success status'}`);
+            return;
+          }
           markStaged(chat, msgId);
 
           // Also stage any OTHER untracked files (handles mode switch from reaction→auto)
@@ -1189,11 +1237,16 @@ async function handleMessage(sock, msg) {
           for (const uf of stillUntracked) {
             if (uf.buffer && uf.buffer.length > 0) {
               console.log(`  Auto-staging previously untracked: ${uf.fileName}`);
-              await uploadFile(chat, uf.sender || senderPhone, uf.senderName || pushName, {
+              const ufPhone = isRealPhoneNumber(uf.sender) ? uf.sender : (botOwnerPhone || uf.sender || uploadPhone);
+              const ufResp = await uploadFile(chat, ufPhone, uf.senderName || pushName, {
                 fileName: uf.fileName, fileSize: uf.fileSize,
-                mimeType: uf.mimeType, postedAt: uf.postedAt,
+                mimeType: uf.mimeType, subject: 'classifying...', postedAt: uf.postedAt,
               }, uf.buffer);
-              markStaged(chat, uf.msgId);
+              if (uploadWasAccepted(ufResp)) {
+                markStaged(chat, uf.msgId);
+              } else {
+                console.error(`  [UPLOAD] Backend did not confirm staging ${uf.fileName}: ${ufResp?.error || ufResp?.reply || 'no success status'}`);
+              }
             }
           }
 
@@ -1260,24 +1313,35 @@ async function handleMessage(sock, msg) {
           fileName: last.fileName, fileSize: last.fileSize, mimeType: last.mimeType,
           postedAt: last.postedAt,
         }, last.buffer);
+        if (!uploadWasAccepted(resp)) {
+          await sock.sendMessage(chat, { text: `*Reyna:* Could not stage \`${last.fileName}\`: ${resp?.error || resp?.reply || 'backend did not confirm the upload'}` });
+          return;
+        }
         markStaged(chat, last.msgId);
         await sock.sendMessage(chat, { text: `*Reyna:* Staged \`${last.fileName}\`. Say "reyna push" to commit to Drive.` });
         return;
       }
       // Stage all untracked
       let staged = 0;
+      let failed = 0;
       const names = [];
       for (const f of untracked) {
-        await uploadFile(chat, senderPhone, pushName, {
+        const resp = await uploadFile(chat, senderPhone, pushName, {
           fileName: f.fileName, fileSize: f.fileSize, mimeType: f.mimeType,
           postedAt: f.postedAt,
         }, f.buffer);
-        markStaged(chat, f.msgId);
-        staged++;
-        names.push(f.fileName);
+        if (uploadWasAccepted(resp)) {
+          markStaged(chat, f.msgId);
+          staged++;
+          names.push(f.fileName);
+        } else {
+          failed++;
+          console.error(`  [UPLOAD] Backend did not confirm staging ${f.fileName}: ${resp?.error || resp?.reply || 'no success status'}`);
+        }
       }
       let reply = `*Reyna:* ${staged} file(s) staged.`;
       if (staged <= 3) reply += ' ' + names.join(', ');
+      if (failed > 0) reply += ` ${failed} upload(s) failed and remain unstaged; please retry.`;
       reply += '\nSay "reyna push" to commit, or manage on your dashboard.';
       await sock.sendMessage(chat, { text: reply });
       return;
@@ -1349,10 +1413,14 @@ async function handleReaction(sock, reaction) {
   const emoji = reaction.reaction?.text;
   if (!emoji || emoji === '') return; // Empty = reaction removed
 
-  // Check if this is a staging reaction (📌 by default, configurable)
-  const validEmojis = ['📌', '⭐', '🔖', '💾'];
-  if (!validEmojis.includes(emoji)) return;
+  // Only the group's configured reaction stages a file. The checkmark is sent
+  // by the bot as confirmation and is never itself a staging trigger.
+  const stagingEmoji = lastKnownEmoji.get(chat) || '📌';
+  if (emoji !== stagingEmoji) return;
 
+  // reaction.key.id      = ID of the message being reacted TO (the file) ← use this
+  // reaction.reaction.key = key of the reactor's own message (who reacted)
+  // reaction.reaction.text = the emoji
   const reactedMsgId = reaction.key.id;
   const reactor = reaction.key.participant || (reaction.key.fromMe ? (sock.user?.id || chat) : chat);
   const reactorPhone = phoneFromJid(reactor) || (reaction.key.fromMe ? botOwnerPhone : '');
@@ -1363,7 +1431,7 @@ async function handleReaction(sock, reaction) {
   const fileInfo = tracker.get(reactedMsgId);
 
   if (!fileInfo) {
-    console.log(`  Reaction ${emoji} on unknown msg ${reactedMsgId}`);
+    console.log(`  Reaction ${emoji} on unknown msg ${reactedMsgId} (reaction.key.id=${reaction.key.id})`);
     return;
   }
 
@@ -1374,15 +1442,23 @@ async function handleReaction(sock, reaction) {
 
   console.log(`  ${emoji} reaction on ${fileInfo.fileName} by ${reactorName}`);
 
-  // Upload file to backend (this stages it)
+  // Upload file to backend (this stages it).
   // postedAt comes from the tracked document message, not the reaction — the
   // file was shared when it was posted, not when someone reacted to it.
-  const resp = await uploadFile(chat, reactorPhone, reactorName, {
+  // If the reactor's phone is a WhatsApp LID (not a real number), fall back
+  // to botOwnerPhone so AutoLinkUserToGroups can match the dashboard owner.
+  const uploadPhone = isRealPhoneNumber(reactorPhone) ? reactorPhone : (botOwnerPhone || reactorPhone);
+  const resp = await uploadFile(chat, uploadPhone, reactorName, {
     fileName: fileInfo.fileName,
     fileSize: fileInfo.fileSize,
     mimeType: fileInfo.mimeType,
     postedAt: fileInfo.postedAt,
   }, fileInfo.buffer);
+
+  if (!uploadWasAccepted(resp)) {
+    console.error(`  [UPLOAD] Backend did not confirm staging ${fileInfo.fileName}: ${resp?.error || resp?.reply || 'no success status'}`);
+    return;
+  }
 
   markStaged(chat, reactedMsgId);
 

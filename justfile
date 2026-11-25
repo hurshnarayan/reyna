@@ -42,8 +42,16 @@ install:
     cd web && npm install
     cd whatsapp-bot && npm install
 
+# Ensure web frontend deps are installed
+_web-deps:
+    @[ -d web/node_modules ] || (echo "Installing web deps..." && cd web && npm install)
+
+# Ensure WhatsApp bot deps are installed
+_bot-deps:
+    @[ -d whatsapp-bot/node_modules ] || (echo "Installing bot deps..." && cd whatsapp-bot && npm install)
+
 # Build backend binary and frontend static assets
-build:
+build: _web-deps
     go build -o reyna-server ./cmd/server/
     cd web && npm run build
 
@@ -52,11 +60,11 @@ backend:
     go run ./cmd/server/
 
 # Start React Vite frontend dev server on :5173
-frontend:
+frontend: _web-deps
     cd web && npm run dev
 
 # Start WhatsApp bot (Baileys)
-bot:
+bot: _bot-deps
     cd whatsapp-bot && node bot.js
 
 # Instant fuzzy document retrieval via fzf (Raycast-style)

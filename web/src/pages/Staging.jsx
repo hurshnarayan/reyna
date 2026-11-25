@@ -51,7 +51,7 @@ export function StagingView({ isModal = false, onClose }) {
 
   const removeFromStaging = async (fileId) => {
     try {
-      await api.removeFromStaging(fileId)
+      await api.removeStaged(fileId)
       setStagedFiles(prev => prev.filter(f => f.id !== fileId))
       setSelectedIds(prev => {
         const next = new Set(prev)
@@ -69,7 +69,7 @@ export function StagingView({ isModal = false, onClose }) {
     if (!window.confirm('Clear all files from staging area?')) return
     try {
       for (const f of stagedFiles) {
-        await api.removeFromStaging(f.id)
+        await api.removeStaged(f.id)
       }
       setStagedFiles([])
       setSelectedIds(new Set())
@@ -83,7 +83,7 @@ export function StagingView({ isModal = false, onClose }) {
     if (selectedIds.size === 0) return
     try {
       for (const id of selectedIds) {
-        await api.removeFromStaging(id)
+        await api.removeStaged(id)
       }
       setStagedFiles(prev => prev.filter(f => !selectedIds.has(f.id)))
       setSelectedIds(new Set())
