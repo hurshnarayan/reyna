@@ -117,6 +117,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
           <Route path="/groups" element={<Groups />} />
           <Route path="/staging" element={<Staging />} />
           <Route path="/search" element={<Search />} />
+          <Route path="/chat" element={<Search />} />
           {/* <Route path="/bot" element={<BotDemo />} /> */}
         </Route>
         <Route path="*" element={<NotFound />} />

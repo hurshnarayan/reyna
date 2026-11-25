@@ -8,7 +8,7 @@ const navItems = [
   { to: '/dashboard', label: 'dashboard', icon: icons.dashboard },
   { to: '/files', label: 'files', icon: icons.files },
   { to: '/groups', label: 'groups', icon: icons.groups },
-  { to: '/search', label: 'search', icon: icons.search },
+  { to: '/search', label: 'chat', icon: 'fa-comments' },
 ]
 const navAfterAlerts = [
   // { to: '/bot', label: 'bot demo', icon: icons.bot },  // Removed — bot demo disabled
