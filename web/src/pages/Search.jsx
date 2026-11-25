@@ -434,138 +434,87 @@ export default function Search() {
   ]
 
   return (
-    <div style={{ padding: '40px 48px 60px', maxWidth: 1100 }} className="fade-in">
-      {/* ── Breadcrumb (identical to Files and Groups) ── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#6b7280', marginBottom: 20 }}>
-        <span
-          style={{ cursor: 'pointer', transition: 'color 0.15s' }}
-          onClick={() => navigate('/dashboard')}
-          onMouseEnter={e => e.currentTarget.style.color = '#111827'}
-          onMouseLeave={e => e.currentTarget.style.color = '#6b7280'}
-        >
-          reyna
-        </span>
-        <span style={{ color: '#d1d5db' }}>/</span>
-        <span style={{ color: '#111827', fontWeight: 600 }}>chat</span>
-      </div>
-
-      {/* ── Main Chat Workspace Card ── */}
-      <div style={{
+    <div
+      style={{
+        height: '100vh',
         background: '#ffffff',
-        border: '1px solid #e5e7eb',
-        borderRadius: 18,
-        padding: '22px 26px',
-        boxShadow: '0 4px 20px -2px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.02)',
         display: 'flex',
         flexDirection: 'column',
-        height: 'calc(100vh - 175px)',
-        minHeight: 580,
+        padding: '28px 48px 24px 48px',
         boxSizing: 'border-box',
-      }}>
-        {/* Controls Bar */}
-        <div style={{
+      }}
+      className="fade-in"
+    >
+      {/* ── Seamless Header ── */}
+      <div
+        style={{
           display: 'flex',
-          flexWrap: 'wrap',
           justifyContent: 'space-between',
           alignItems: 'center',
-          gap: 14,
-          marginBottom: 16,
           paddingBottom: 14,
           borderBottom: '1px solid #f3f4f6',
+          marginBottom: 16,
           flexShrink: 0,
-        }}>
-          {/* Left Title & Status Badge */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <h2 style={{ fontSize: 18, fontWeight: 700, color: '#111827', margin: 0, textTransform: 'lowercase', letterSpacing: '-0.01em' }}>
-              chat
-            </h2>
-            <span style={{
-              fontSize: 11,
-              fontWeight: 600,
-              color: '#15803d',
-              background: '#dcfce7',
-              padding: '2px 8px',
-              borderRadius: 9999,
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 5,
-            }}>
-              <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />
-              gemini 2.5
-            </span>
-          </div>
-
-          {/* Right Mode Switcher & Clear Button */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{
-              display: 'flex',
-              gap: 4,
-              background: '#f9fafb',
-              padding: 3,
-              borderRadius: 10,
-              border: '1px solid #f3f4f6',
-            }}>
-              {[
-                { key: 'chat', label: 'assistant', icon: 'fa-comments' },
-                { key: 'search', label: 'instant files', icon: icons.search },
-              ].map(tab => {
-                const isSelected = mode === tab.key
-                return (
-                  <button
-                    key={tab.key}
-                    onClick={() => { setMode(tab.key); setResults(null) }}
-                    style={{
-                      background: isSelected ? '#ffffff' : 'transparent',
-                      color: isSelected ? '#111827' : '#6b7280',
-                      border: isSelected ? '1px solid rgba(0,0,0,0.06)' : '1px solid transparent',
-                      borderRadius: 7,
-                      padding: '5px 12px',
-                      fontSize: 12,
-                      fontWeight: isSelected ? 600 : 500,
-                      cursor: 'pointer',
-                      fontFamily: 'inherit',
-                      textTransform: 'lowercase',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      boxShadow: isSelected ? '0 1px 2px rgba(0,0,0,0.04)' : 'none',
-                      transition: 'all 0.15s ease',
-                    }}
-                  >
-                    <Fa icon={tab.icon} style={{ fontSize: 11, color: isSelected ? '#15803d' : '#9ca3af' }} />
-                    {tab.label}
-                  </button>
-                )
-              })}
-            </div>
-
-            {mode === 'chat' && chatConversation.length > 0 && (
-              <button
-                onClick={clearChat}
-                title="Start new conversation"
-                style={{
-                  background: '#ffffff',
-                  border: '1px solid #e5e7eb',
-                  borderRadius: 8,
-                  padding: '5px 11px',
-                  fontSize: 12,
-                  fontWeight: 500,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  color: '#6b7280',
-                  transition: 'all 0.15s',
-                }}
-                onMouseEnter={e => { e.currentTarget.style.color = '#111827'; e.currentTarget.style.borderColor = '#d1d5db' }}
-                onMouseLeave={e => { e.currentTarget.style.color = '#6b7280'; e.currentTarget.style.borderColor = '#e5e7eb' }}
-              >
-                <Fa icon="fa-arrow-rotate-left" style={{ fontSize: 10 }} />
-                clear
-              </button>
-            )}
-          </div>
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 13, color: '#9ca3af', marginBottom: 2 }}>messages / chat</div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, color: '#111827', margin: 0, letterSpacing: '-0.02em' }}>
+            chat with reyna
+          </h1>
         </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button
+            onClick={() => {
+              setMode(m => (m === 'chat' ? 'search' : 'chat'))
+              setResults(null)
+            }}
+            style={{
+              background: '#f9fafb',
+              border: '1px solid #f3f4f6',
+              borderRadius: 9999,
+              padding: '6px 14px',
+              fontSize: 12.5,
+              fontWeight: 500,
+              color: '#4b5563',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              transition: 'all 0.15s ease',
+            }}
+            title={mode === 'chat' ? 'Switch to instant files search' : 'Switch to conversational assistant'}
+          >
+            <Fa icon={mode === 'chat' ? icons.search : 'fa-comments'} style={{ fontSize: 11 }} />
+            <span>{mode === 'chat' ? 'instant files' : 'chat'}</span>
+          </button>
+
+          {mode === 'chat' && chatConversation.length > 0 && (
+            <button
+              onClick={clearChat}
+              title="Clear conversation"
+              style={{
+                background: '#f9fafb',
+                border: '1px solid #f3f4f6',
+                borderRadius: 9999,
+                padding: '6px 12px',
+                fontSize: 12.5,
+                fontWeight: 500,
+                color: '#6b7280',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 5,
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <Fa icon="fa-arrow-rotate-left" style={{ fontSize: 10 }} />
+              <span>clear</span>
+            </button>
+          )}
+        </div>
+      </div>
 
       {/* ── CHAT MODE (Clean Conversation Canvas) ── */}
       {mode === 'chat' && (
@@ -575,7 +524,6 @@ export default function Search() {
             display: 'flex',
             flexDirection: 'column',
             minHeight: 0,
-            position: 'relative',
           }}
         >
           {/* Scrollable Conversation Thread */}
@@ -584,55 +532,37 @@ export default function Search() {
             style={{
               flex: 1,
               overflowY: 'auto',
-              paddingRight: 6,
+              paddingRight: 8,
               display: 'flex',
               flexDirection: 'column',
               gap: 16,
-              paddingBottom: 16,
             }}
           >
-            {/* Minimal Clean Empty State */}
-            {chatConversation.length === 0 ? (
-              <div
+            {/* Center Date Divider */}
+            <div style={{ display: 'flex', justifyContent: 'center', margin: '4px 0 12px' }}>
+              <span
                 style={{
-                  margin: 'auto 0',
-                  padding: '24px 0',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  textAlign: 'center',
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: '#6b7280',
+                  background: '#f3f4f6',
+                  padding: '4px 16px',
+                  borderRadius: 9999,
                 }}
               >
-                <div
-                  style={{
-                    width: 44,
-                    height: 44,
-                    borderRadius: 12,
-                    background: '#f0fdf4',
-                    border: '1px solid #dcfce7',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    marginBottom: 14,
-                  }}
-                >
-                  <Fa icon="fa-sparkles" style={{ fontSize: 18, color: '#15803d' }} />
-                </div>
-                <div
-                  style={{
-                    fontSize: 16,
-                    fontWeight: 700,
-                    color: '#111827',
-                    letterSpacing: '-0.01em',
-                    marginBottom: 6,
-                    textTransform: 'lowercase',
-                  }}
-                >
-                  how can i help you find or understand your documents?
-                </div>
-                <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 22, maxWidth: 460, lineHeight: 1.5, textTransform: 'lowercase' }}>
-                  ask anything about what was shared in your chats in english, hindi, or hinglish.
-                </div>
+                today
+              </span>
+            </div>
+
+            {/* Minimal Clean Empty State */}
+            {chatConversation.length === 0 ? (
+              <div style={{ margin: 'auto 0', textAlign: 'center', padding: '30px 0' }}>
+                <h2 style={{ fontSize: 20, fontWeight: 700, color: '#111827', marginBottom: 8, letterSpacing: '-0.01em' }}>
+                  how can i help you today?
+                </h2>
+                <p style={{ fontSize: 14, color: '#6b7280', maxWidth: 480, margin: '0 auto 24px', lineHeight: 1.5 }}>
+                  ask questions, retrieve files, or follow up across your WhatsApp documents in english, hindi, or hinglish.
+                </p>
 
                 {/* Clean Prompt Starter Pills */}
                 <div
@@ -642,6 +572,7 @@ export default function Search() {
                     gap: 8,
                     justifyContent: 'center',
                     maxWidth: 620,
+                    margin: '0 auto',
                   }}
                 >
                   {samplePrompts.map(p => (
@@ -650,31 +581,25 @@ export default function Search() {
                       onClick={() => sendChat(p)}
                       style={{
                         background: '#f9fafb',
-                        border: '1px solid #e5e7eb',
+                        border: '1px solid #f3f4f6',
                         borderRadius: 9999,
-                        padding: '8px 15px',
-                        fontSize: 12.5,
+                        padding: '8px 16px',
+                        fontSize: 13,
                         fontWeight: 500,
                         color: '#374151',
                         cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 8,
                         transition: 'all 0.15s ease',
                       }}
                       onMouseEnter={e => {
-                        e.currentTarget.style.background = '#f0fdf4'
-                        e.currentTarget.style.borderColor = '#86efac'
-                        e.currentTarget.style.color = '#15803d'
+                        e.currentTarget.style.background = '#ede9fe'
+                        e.currentTarget.style.color = '#5b21b6'
                       }}
                       onMouseLeave={e => {
                         e.currentTarget.style.background = '#f9fafb'
-                        e.currentTarget.style.borderColor = '#e5e7eb'
                         e.currentTarget.style.color = '#374151'
                       }}
                     >
-                      <span>{p}</span>
-                      <Fa icon="fa-arrow-right" style={{ fontSize: 9, opacity: 0.6 }} />
+                      {p}
                     </button>
                   ))}
                 </div>
@@ -691,11 +616,11 @@ export default function Search() {
                     width: '100%',
                   }}
                 >
-                  {/* ── USER CHAT BUBBLE (RIGHT HAND SIDE) ── */}
+                  {/* ── USER CHAT BUBBLE (RIGHT HAND SIDE - Soft Amber / Cream Pastel, NO AVATAR) ── */}
                   <div
                     style={{
                       alignSelf: 'flex-end',
-                      maxWidth: '75%',
+                      maxWidth: '72%',
                       display: 'flex',
                       flexDirection: 'column',
                       alignItems: 'flex-end',
@@ -703,12 +628,11 @@ export default function Search() {
                   >
                     <div
                       style={{
-                        background: '#f0fdf4',
-                        border: '1px solid #dcfce7',
-                        borderRadius: '16px 16px 4px 16px',
-                        padding: '11px 16px',
-                        fontSize: 14,
-                        color: '#14532d',
+                        background: '#fef3c7',
+                        borderRadius: '18px 18px 4px 18px',
+                        padding: '13px 18px',
+                        fontSize: 14.5,
+                        color: '#1f2937',
                         lineHeight: 1.55,
                         whiteSpace: 'pre-wrap',
                         wordBreak: 'break-word',
@@ -718,75 +642,45 @@ export default function Search() {
                     </div>
                     <span
                       style={{
-                        fontSize: 10.5,
+                        fontSize: 11,
                         color: '#9ca3af',
                         marginTop: 4,
-                        marginRight: 4,
+                        marginRight: 2,
                       }}
                     >
                       {formatClockTime(turn.ts)}
                     </span>
                   </div>
 
-                  {/* ── REYNA REPLY BUBBLE (LEFT HAND SIDE) ── */}
+                  {/* ── REYNA REPLY BUBBLE (LEFT HAND SIDE - Soft Lavender Pastel, NO AVATAR) ── */}
                   <div
                     style={{
                       alignSelf: 'flex-start',
-                      maxWidth: '82%',
+                      maxWidth: '74%',
                       display: 'flex',
                       flexDirection: 'column',
                       alignItems: 'flex-start',
-                      width: '100%',
                     }}
                   >
                     <div
                       style={{
-                        background: '#f9fafb',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '16px 16px 16px 4px',
-                        padding: '15px 18px',
-                        fontSize: 14,
+                        background: '#ede9fe',
+                        borderRadius: '18px 18px 18px 4px',
+                        padding: '13px 18px',
+                        fontSize: 14.5,
                         color: '#1f2937',
-                        lineHeight: 1.65,
+                        lineHeight: 1.6,
                         wordBreak: 'break-word',
                         width: '100%',
                         boxSizing: 'border-box',
                       }}
                     >
-                      {/* Sub-header */}
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 6,
-                          marginBottom: 8,
-                          fontSize: 11.5,
-                          fontWeight: 600,
-                          color: '#111827',
-                          textTransform: 'lowercase',
-                        }}
-                      >
-                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />
-                        <span>reyna</span>
-                        <span style={{ color: '#9ca3af', fontWeight: 400 }}>
-                          · {formatClockTime(turn.ts)}
-                        </span>
-                      </div>
-
                       {/* Thinking State */}
                       {turn.pending ? (
-                        <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 8,
-                            padding: '6px 0',
-                            fontSize: 13,
-                            color: 'var(--sub-color)',
-                          }}
-                        >
-                          <Fa icon={icons.loading} spin style={{ fontSize: 12, color: 'var(--reyna-accent)' }} />
-                          <span>reading documents…</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 2px' }}>
+                          <span className="typing-dot" />
+                          <span className="typing-dot" />
+                          <span className="typing-dot" />
                         </div>
                       ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -794,19 +688,14 @@ export default function Search() {
                           {turn.notice && (
                             <div
                               style={{
-                                background: 'rgba(245, 158, 11, 0.1)',
-                                border: '1px solid rgba(245, 158, 11, 0.25)',
+                                background: 'rgba(245, 158, 11, 0.15)',
                                 borderRadius: 10,
                                 padding: '8px 12px',
                                 fontSize: 12.5,
                                 color: '#b45309',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 8,
                               }}
                             >
-                              <Fa icon={icons.warning} style={{ fontSize: 12 }} />
-                              <span>{turn.reply}</span>
+                              {turn.reply}
                             </div>
                           )}
 
@@ -815,14 +704,8 @@ export default function Search() {
 
                           {/* Disambiguation: Which document did you mean? */}
                           {turn.candidates && turn.candidates.length > 0 && (
-                            <div
-                              style={{
-                                marginTop: 6,
-                                paddingTop: 10,
-                                borderTop: '1px solid rgba(0,0,0,0.06)',
-                              }}
-                            >
-                              <div style={{ fontSize: 12, fontWeight: 700, color: '#b45309', marginBottom: 8 }}>
+                            <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: '#6d28d9', marginBottom: 2 }}>
                                 which document did you mean?
                               </div>
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -831,10 +714,10 @@ export default function Search() {
                                     key={c.file_id}
                                     onClick={() => handleChooseCandidate(c, turn.question)}
                                     style={{
-                                      background: '#ffffff',
-                                      border: '1px solid #e5e7eb',
-                                      padding: '8px 12px',
+                                      background: 'rgba(255, 255, 255, 0.85)',
+                                      border: 'none',
                                       borderRadius: 10,
+                                      padding: '8px 12px',
                                       fontSize: 12,
                                       textAlign: 'left',
                                       display: 'flex',
@@ -843,24 +726,8 @@ export default function Search() {
                                       cursor: 'pointer',
                                       transition: 'all 0.15s ease',
                                     }}
-                                    onMouseEnter={e => {
-                                      e.currentTarget.style.borderColor = '#86efac'
-                                      e.currentTarget.style.background = '#f0fdf4'
-                                    }}
-                                    onMouseLeave={e => {
-                                      e.currentTarget.style.borderColor = '#e5e7eb'
-                                      e.currentTarget.style.background = '#ffffff'
-                                    }}
                                   >
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                      <Fa icon={icons.file} style={{ color: '#15803d', fontSize: 11 }} />
-                                      <span style={{ fontWeight: 600, color: '#111827' }}>{c.file_name}</span>
-                                      {c.folder && (
-                                        <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: '#f3f4f6', color: '#6b7280' }}>
-                                          {c.folder}
-                                        </span>
-                                      )}
-                                    </div>
+                                    <span style={{ fontWeight: 600, color: '#111827' }}>{c.file_name}</span>
                                     <span style={{ fontSize: 11, color: '#6b7280' }}>
                                       {c.sender ? `by ${c.sender}` : ''}
                                     </span>
@@ -884,10 +751,9 @@ export default function Search() {
                                 <div
                                   key={f.id}
                                   style={{
-                                    background: '#ffffff',
-                                    border: '1px solid #e5e7eb',
-                                    padding: '8px 12px',
+                                    background: 'rgba(255, 255, 255, 0.9)',
                                     borderRadius: 12,
+                                    padding: '8px 12px',
                                     display: 'flex',
                                     alignItems: 'center',
                                     justifyContent: 'space-between',
@@ -898,7 +764,7 @@ export default function Search() {
                                     <IconBox
                                       icon={fileIconClass(f.mime_type, f.file_name)}
                                       color="#111827"
-                                      bg="rgba(37,211,102,0.12)"
+                                      bg="rgba(109, 40, 217, 0.1)"
                                       size={30}
                                       iconSize={12}
                                     />
@@ -911,16 +777,15 @@ export default function Search() {
                                           whiteSpace: 'nowrap',
                                           overflow: 'hidden',
                                           textOverflow: 'ellipsis',
-                                          maxWidth: 340,
+                                          maxWidth: 320,
                                         }}
                                         title={f.file_name}
                                       >
                                         {f.file_name}
                                       </div>
                                       <div style={{ fontSize: 11, color: '#6b7280' }}>
-                                        {f.subject && <span style={{ fontWeight: 600, color: '#111827' }}>{f.subject} · </span>}
-                                        {f.shared_by_name ? `by ${f.shared_by_name}` : 'shared in chat'}
-                                        {f.posted_at || f.created_at ? ` · ${timeAgo(f.posted_at || f.created_at)}` : ''}
+                                        {f.subject && <span>{f.subject} · </span>}
+                                        {f.shared_by_name ? `by ${f.shared_by_name}` : ''}
                                       </div>
                                     </div>
                                   </div>
@@ -932,15 +797,14 @@ export default function Search() {
                                       style={{
                                         width: 28,
                                         height: 28,
-                                        borderRadius: 8,
-                                        border: '1px solid #e5e7eb',
-                                        background: '#f9fafb',
+                                        borderRadius: '50%',
+                                        border: 'none',
+                                        background: 'rgba(255,255,255,0.9)',
                                         cursor: 'pointer',
                                         display: 'flex',
                                         alignItems: 'center',
                                         justifyContent: 'center',
                                         padding: 0,
-                                        color: '#374151',
                                       }}
                                     >
                                       <Fa icon={icons.preview} style={{ fontSize: 11 }} />
@@ -951,15 +815,14 @@ export default function Search() {
                                       style={{
                                         width: 28,
                                         height: 28,
-                                        borderRadius: 8,
-                                        border: '1px solid #e5e7eb',
-                                        background: '#f9fafb',
+                                        borderRadius: '50%',
+                                        border: 'none',
+                                        background: 'rgba(255,255,255,0.9)',
                                         cursor: 'pointer',
                                         display: 'flex',
                                         alignItems: 'center',
                                         justifyContent: 'center',
                                         padding: 0,
-                                        color: '#374151',
                                       }}
                                     >
                                       <Fa icon={icons.download} style={{ fontSize: 11 }} />
@@ -975,9 +838,7 @@ export default function Search() {
                                           style={{
                                             width: 28,
                                             height: 28,
-                                            borderRadius: 8,
-                                            border: '1px solid #e5e7eb',
-                                            background: '#f9fafb',
+                                            borderRadius: '50%',
                                             display: 'flex',
                                             alignItems: 'center',
                                             justifyContent: 'center',
@@ -1000,20 +861,20 @@ export default function Search() {
                             <div>
                               <button
                                 onClick={() => toggleSources(turn.id)}
-                                className="glass-pill"
                                 style={{
-                                  padding: '4px 10px',
+                                  background: 'rgba(255, 255, 255, 0.7)',
+                                  border: 'none',
                                   borderRadius: 9999,
+                                  padding: '4px 10px',
                                   fontSize: 11,
                                   fontWeight: 600,
-                                  color: 'var(--sub-color)',
+                                  color: '#6d28d9',
                                   cursor: 'pointer',
                                   display: 'inline-flex',
                                   alignItems: 'center',
-                                  gap: 6,
+                                  gap: 5,
                                 }}
                               >
-                                <Fa icon={icons.file} style={{ fontSize: 9, color: 'var(--reyna-accent)' }} />
                                 <span>
                                   {turn.citations.length} verified passage{turn.citations.length > 1 ? 's' : ''}
                                 </span>
@@ -1021,36 +882,23 @@ export default function Search() {
                               </button>
 
                               {turn.showSources && (
-                                <div
-                                  className="glass-card"
-                                  style={{
-                                    marginTop: 8,
-                                    padding: 10,
-                                    borderRadius: 12,
-                                    display: 'flex',
-                                    flexDirection: 'column',
-                                    gap: 6,
-                                  }}
-                                >
+                                <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
                                   {turn.citations.map((c, ci) => (
                                     <div
                                       key={ci}
                                       style={{
                                         padding: '8px 10px',
-                                        background: 'rgba(255,255,255,0.7)',
+                                        background: 'rgba(255,255,255,0.85)',
                                         borderRadius: 8,
-                                        borderLeft: '3px solid var(--reyna-accent)',
+                                        borderLeft: '3px solid #7c3aed',
                                         fontSize: 12,
                                       }}
                                     >
                                       <div style={{ fontStyle: 'italic', marginBottom: 4, lineHeight: 1.5 }}>
                                         "{c.quote}"
                                       </div>
-                                      <div style={{ fontSize: 10, color: 'var(--sub-color)', display: 'flex', gap: 8 }}>
-                                        <span>
-                                          <strong>{c.file_name}</strong> (Page {c.page || 1})
-                                        </span>
-                                        {c.sender && <span>by {c.sender}</span>}
+                                      <div style={{ fontSize: 10, color: '#6b7280' }}>
+                                        <strong>{c.file_name}</strong> (Page {c.page || 1})
                                       </div>
                                     </div>
                                   ))}
@@ -1061,6 +909,16 @@ export default function Search() {
                         </div>
                       )}
                     </div>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        color: '#9ca3af',
+                        marginTop: 4,
+                        marginLeft: 2,
+                      }}
+                    >
+                      {formatClockTime(turn.ts)}
+                    </span>
                   </div>
                 </div>
               ))
@@ -1068,79 +926,66 @@ export default function Search() {
             <div ref={chatEndRef} style={{ height: 8 }} />
           </div>
 
-          {/* ── Follow-Up Suggestion Pills ── */}
-          {chatConversation.length > 0 &&
-            !chatConversation[chatConversation.length - 1].pending && (
-              <div
-                style={{
-                  display: 'flex',
-                  gap: 6,
-                  flexWrap: 'wrap',
-                  marginBottom: 10,
-                  paddingLeft: 2,
-                }}
-              >
-                {followUpSuggestions.map(s => (
-                  <button
-                    key={s}
-                    onClick={() => sendChat(s)}
-                    style={{
-                      background: '#ffffff',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: 9999,
-                      padding: '4px 11px',
-                      fontSize: 11.5,
-                      fontWeight: 500,
-                      cursor: 'pointer',
-                      color: '#4b5563',
-                      transition: 'all 0.15s ease',
-                    }}
-                    onMouseEnter={e => {
-                      e.currentTarget.style.borderColor = '#86efac'
-                      e.currentTarget.style.color = '#15803d'
-                      e.currentTarget.style.background = '#f0fdf4'
-                    }}
-                    onMouseLeave={e => {
-                      e.currentTarget.style.borderColor = '#e5e7eb'
-                      e.currentTarget.style.color = '#4b5563'
-                      e.currentTarget.style.background = '#ffffff'
-                    }}
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-            )}
-
-          {/* ── Bottom Integrated Composer ── */}
+          {/* ── Seamless Bottom Composer ── */}
           <div
             style={{
-              borderTop: '1px solid #f3f4f6',
-              paddingTop: 12,
+              paddingTop: 14,
               marginTop: 'auto',
               flexShrink: 0,
             }}
           >
+            {/* Follow-Up Suggestion Pills */}
+            {chatConversation.length > 0 &&
+              !chatConversation[chatConversation.length - 1].pending && (
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: 6,
+                    flexWrap: 'wrap',
+                    marginBottom: 10,
+                    paddingLeft: 2,
+                  }}
+                >
+                  {followUpSuggestions.map(s => (
+                    <button
+                      key={s}
+                      onClick={() => sendChat(s)}
+                      style={{
+                        background: '#f9fafb',
+                        border: '1px solid #f3f4f6',
+                        borderRadius: 9999,
+                        padding: '5px 12px',
+                        fontSize: 12,
+                        fontWeight: 500,
+                        cursor: 'pointer',
+                        color: '#4b5563',
+                        transition: 'all 0.15s ease',
+                      }}
+                      onMouseEnter={e => {
+                        e.currentTarget.style.background = '#ede9fe'
+                        e.currentTarget.style.color = '#5b21b6'
+                      }}
+                      onMouseLeave={e => {
+                        e.currentTarget.style.background = '#f9fafb'
+                        e.currentTarget.style.color = '#4b5563'
+                      }}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+            {/* Seamless Capsule input bar */}
             <div
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: 10,
+                gap: 12,
                 background: '#f9fafb',
-                border: '1px solid #e5e7eb',
-                borderRadius: 14,
-                padding: '7px 10px 7px 14px',
-                transition: 'border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease',
-              }}
-              onFocusCapture={e => {
-                e.currentTarget.style.borderColor = '#22c55e'
-                e.currentTarget.style.boxShadow = '0 0 0 3px rgba(34, 197, 94, 0.12)'
-                e.currentTarget.style.background = '#ffffff'
-              }}
-              onBlurCapture={e => {
-                e.currentTarget.style.borderColor = '#e5e7eb'
-                e.currentTarget.style.boxShadow = 'none'
-                e.currentTarget.style.background = '#f9fafb'
+                borderRadius: 9999,
+                padding: '8px 10px 8px 22px',
+                border: '1px solid #f3f4f6',
               }}
             >
               <textarea
@@ -1153,12 +998,12 @@ export default function Search() {
                   e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px'
                 }}
                 rows={1}
-                placeholder="ask reyna in english, hindi, or hinglish..."
+                placeholder="message reyna in english, hindi, or hinglish..."
                 style={{
                   flex: 1,
                   minWidth: 0,
                   padding: '6px 0',
-                  fontSize: 14,
+                  fontSize: 14.5,
                   background: 'transparent',
                   border: 'none',
                   color: '#111827',
@@ -1177,35 +1022,21 @@ export default function Search() {
                 disabled={!query.trim() || loading}
                 title="Send message"
                 style={{
-                  width: 34,
-                  height: 34,
-                  borderRadius: 10,
+                  background: '#111827',
+                  color: '#ffffff',
+                  borderRadius: 9999,
+                  padding: '8px 22px',
+                  fontSize: 13.5,
+                  fontWeight: 600,
                   border: 'none',
-                  background: query.trim() ? '#0d3824' : '#e5e7eb',
-                  color: query.trim() ? '#ffffff' : '#9ca3af',
                   cursor: query.trim() && !loading ? 'pointer' : 'default',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
+                  opacity: query.trim() && !loading ? 1 : 0.35,
                   transition: 'all 0.15s ease',
+                  flexShrink: 0,
                 }}
               >
-                <Fa icon="fa-paper-plane" style={{ fontSize: 12 }} />
+                send
               </button>
-            </div>
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                padding: '5px 4px 0',
-                fontSize: 11,
-                color: '#9ca3af',
-              }}
-            >
-              <span>enter to send · shift + enter for new line</span>
-              <span>supports english, hindi, and hinglish</span>
             </div>
           </div>
         </div>
@@ -1446,8 +1277,6 @@ export default function Search() {
           )}
         </div>
       )}
-
-      </div>
 
       {/* ── Document Preview Modal ── */}
       {previewFile &&
