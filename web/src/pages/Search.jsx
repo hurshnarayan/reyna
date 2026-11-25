@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
-import { api, getToken, getUser } from '../lib/api'
+import { api, getToken } from '../lib/api'
 import { notify } from '../components/Notifications'
 import { Fa, icons, fileIconClass, IconBox } from '../components/icons'
 
@@ -138,7 +138,6 @@ function renderInline(text) {
 }
 
 export default function Search() {
-  const currentUser = getUser()
   const [mode, setMode] = useState('chat') // 'chat' | 'search'
   const [query, setQuery] = useState('')
   const [results, setResults] = useState(null)
@@ -152,11 +151,8 @@ export default function Search() {
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [deleting, setDeleting] = useState(false)
 
-  // Conversational Chat & Retrieval Thread
+  // Conversational Chat Thread
   const [chatConversation, setChatConversation] = useState([])
-  const [llmStatus, setLlmStatus] = useState(null)
-  const [showPromptsMenu, setShowPromptsMenu] = useState(false)
-
   const chatEndRef = useRef(null)
   const inputRef = useRef(null)
   const debounceRef = useRef(null)
@@ -165,13 +161,9 @@ export default function Search() {
     if (chatEndRef.current) {
       chatEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' })
     }
-  }, [chatConversation])
+  }, [chatConversation, loading])
 
-  useEffect(() => {
-    api.llmStatus().then(s => setLlmStatus(s))
-  }, [])
-
-  // Live Instant Search (Mode: search)
+  // Instant File Search (Mode: search)
   const doLiveSearch = useCallback(async (q) => {
     if (!q.trim() || q.trim().length < 2) {
       setResults(null)
@@ -185,13 +177,12 @@ export default function Search() {
     notify.hideLoader()
   }, [])
 
-  // Send Conversational Chat Query (Mode: chat)
+  // Send Conversational Query (Mode: chat)
   const sendChat = async (promptText, fileIds = []) => {
     const q = promptText.trim()
     if (!q) return
     setLoading(true)
     notify.showLoader()
-    setShowPromptsMenu(false)
 
     const turnId = Date.now()
     const userTurn = {
@@ -202,7 +193,6 @@ export default function Search() {
       citations: [],
       candidates: [],
       notice: '',
-      parsed_query: null,
       status: 'answered',
       pending: true,
       showSources: false,
@@ -212,12 +202,11 @@ export default function Search() {
     setChatConversation(prev => [...prev, userTurn])
     setQuery('')
 
-    // Reset textarea height
     if (inputRef.current) {
       inputRef.current.style.height = 'auto'
     }
 
-    // Build chat history for multi-turn threading
+    // Build chat history for conversational follow-ups
     const history = chatConversation
       .filter(t => !t.pending)
       .flatMap(t => [
@@ -243,7 +232,6 @@ export default function Search() {
             citations: resp?.citations || [],
             candidates: resp?.candidates || [],
             notice: resp?.notice || '',
-            parsed_query: resp?.parsed_query || null,
             status: resp?.status || 'answered',
             pending: false,
           }
@@ -257,7 +245,7 @@ export default function Search() {
         if (idx !== -1) {
           copy[idx] = {
             ...copy[idx],
-            reply: 'Sorry, I encountered an issue processing that query. Please try again.',
+            reply: 'Sorry, I encountered an error while processing your request. Please try again.',
             pending: false,
           }
         }
@@ -351,7 +339,6 @@ export default function Search() {
     }
     if (e.key === 'Escape') {
       setShowSuggestions(false)
-      setShowPromptsMenu(false)
     }
   }
 
@@ -432,8 +419,8 @@ export default function Search() {
   const samplePrompts = [
     'bhai harsh ne kya bheja hai?',
     'do we have any notes on linear queue?',
-    'show me raspberry pi documents',
     'what travel tickets are booked for us?',
+    'show me raspberry pi documents',
   ]
 
   const followUpSuggestions = [
@@ -444,301 +431,193 @@ export default function Search() {
     'hindi me samjhao',
   ]
 
-  const userDisplayName = currentUser?.name || 'You'
-  const userInitials = userDisplayName.slice(0, 2).toUpperCase()
-
   return (
     <div
       style={{
-        height: 'calc(100vh - 36px)',
-        margin: '18px 24px',
         display: 'flex',
         flexDirection: 'column',
+        height: 'calc(100vh - 24px)',
+        padding: '24px 36px 12px 36px',
+        maxWidth: 960,
+        margin: '0 auto',
+        width: '100%',
+        boxSizing: 'border-box',
       }}
       className="fade-in"
     >
-      {/* ── Main Glassmorphic Panel (Matching Screenshot) ── */}
+      {/* ── Seamless Header (Clean typography, matches Files & Dashboard) ── */}
       <div
-        className="glass-container"
         style={{
-          flex: 1,
-          borderRadius: 24,
           display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-          position: 'relative',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          marginBottom: 16,
+          flexShrink: 0,
         }}
       >
-        {/* ── Top Bar ── */}
-        <div
-          style={{
-            height: 64,
-            padding: '0 24px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            borderBottom: '1px solid rgba(255, 255, 255, 0.4)',
-            background: 'rgba(255, 255, 255, 0.25)',
-            backdropFilter: 'blur(10px)',
-            flexShrink: 0,
-            zIndex: 10,
-          }}
-        >
-          {/* Left: Avatar & Identity */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ position: 'relative' }}>
-              <img
-                src="/reyna-badge.png"
-                alt="Reyna"
-                style={{
-                  width: 38,
-                  height: 38,
-                  borderRadius: '50%',
-                  objectFit: 'cover',
-                  border: '2px solid rgba(255, 255, 255, 0.8)',
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-                }}
-              />
-              <span
-                style={{
-                  position: 'absolute',
-                  bottom: -1,
-                  right: -1,
-                  width: 10,
-                  height: 10,
-                  borderRadius: '50%',
-                  background: '#25D366',
-                  border: '2px solid #fff',
-                  boxShadow: '0 0 6px rgba(37,211,102,0.6)',
-                }}
-              />
-            </div>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: -0.3, color: 'var(--text-color)' }}>
-                  Reyna
-                </span>
-                <span
-                  style={{
-                    fontSize: 9,
-                    fontWeight: 700,
-                    textTransform: 'uppercase',
-                    letterSpacing: 0.5,
-                    padding: '1px 6px',
-                    borderRadius: 10,
-                    background: 'rgba(37,211,102,0.15)',
-                    color: '#0e7a3d',
-                  }}
-                >
-                  AI
-                </span>
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--sub-color)', fontWeight: 500 }}>
-                {llmStatus?.enabled ? 'connected · multilingual assistant' : 'online · document capture'}
-              </div>
-            </div>
-          </div>
-
-          {/* Right: Mode Switch & Actions */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div
-              style={{
-                display: 'flex',
-                background: 'rgba(0, 0, 0, 0.05)',
-                borderRadius: 9999,
-                padding: 3,
-                border: '1px solid rgba(255, 255, 255, 0.4)',
-              }}
-            >
-              <button
-                onClick={() => setMode('chat')}
-                style={{
-                  padding: '6px 14px',
-                  borderRadius: 9999,
-                  border: 'none',
-                  fontSize: 12,
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  background: mode === 'chat' ? '#fff' : 'transparent',
-                  color: mode === 'chat' ? 'var(--text-color)' : 'var(--sub-color)',
-                  boxShadow: mode === 'chat' ? '0 2px 6px rgba(0,0,0,0.08)' : 'none',
-                  transition: 'all 0.15s ease',
-                }}
-              >
-                <Fa icon="fa-comments" style={{ fontSize: 11, color: mode === 'chat' ? 'var(--reyna-accent)' : 'inherit' }} />
-                <span>Chat</span>
-              </button>
-              <button
-                onClick={() => setMode('search')}
-                style={{
-                  padding: '6px 14px',
-                  borderRadius: 9999,
-                  border: 'none',
-                  fontSize: 12,
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  background: mode === 'search' ? '#fff' : 'transparent',
-                  color: mode === 'search' ? 'var(--text-color)' : 'var(--sub-color)',
-                  boxShadow: mode === 'search' ? '0 2px 6px rgba(0,0,0,0.08)' : 'none',
-                  transition: 'all 0.15s ease',
-                }}
-              >
-                <Fa icon={icons.search} style={{ fontSize: 11 }} />
-                <span>Files</span>
-              </button>
-            </div>
-
-            {mode === 'chat' && chatConversation.length > 0 && (
-              <button
-                onClick={clearChat}
-                title="New conversation"
-                style={{
-                  width: 32,
-                  height: 32,
-                  borderRadius: '50%',
-                  border: '1px solid rgba(255,255,255,0.6)',
-                  background: 'rgba(255,255,255,0.6)',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: 'var(--sub-color)',
-                  transition: 'all 0.15s ease',
-                }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.background = '#fff'
-                  e.currentTarget.style.color = 'var(--text-color)'
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.background = 'rgba(255,255,255,0.6)'
-                  e.currentTarget.style.color = 'var(--sub-color)'
-                }}
-              >
-                <Fa icon="fa-arrow-rotate-left" style={{ fontSize: 11 }} />
-              </button>
-            )}
-          </div>
+        <div>
+          <h1
+            style={{
+              fontSize: 34,
+              fontWeight: 900,
+              letterSpacing: -0.8,
+              margin: 0,
+              color: 'var(--text-color)',
+              textTransform: 'lowercase',
+            }}
+          >
+            {mode === 'chat' ? 'chat' : 'search'}
+          </h1>
+          <p style={{ fontSize: 13, color: 'var(--sub-color)', margin: '4px 0 0 0' }}>
+            {mode === 'chat'
+              ? 'ask questions, retrieve files, or follow up in any language.'
+              : 'instant keyword matching across your documents.'}
+          </p>
         </div>
 
-        {/* ── Chat Stream (Mode: chat) ── */}
-        {mode === 'chat' && (
+        {/* Right Mode Toggle & Clear Button */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div
+            style={{
+              display: 'flex',
+              background: 'rgba(0, 0, 0, 0.05)',
+              borderRadius: 9999,
+              padding: 3,
+            }}
+          >
+            <button
+              onClick={() => {
+                setMode('chat')
+                setResults(null)
+              }}
+              style={{
+                padding: '6px 14px',
+                borderRadius: 9999,
+                border: 'none',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                background: mode === 'chat' ? '#fff' : 'transparent',
+                color: mode === 'chat' ? 'var(--text-color)' : 'var(--sub-color)',
+                boxShadow: mode === 'chat' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <Fa icon="fa-comments" style={{ fontSize: 11, color: mode === 'chat' ? 'var(--reyna-accent)' : 'inherit' }} />
+              <span>chat</span>
+            </button>
+            <button
+              onClick={() => {
+                setMode('search')
+                setResults(null)
+              }}
+              style={{
+                padding: '6px 14px',
+                borderRadius: 9999,
+                border: 'none',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                background: mode === 'search' ? '#fff' : 'transparent',
+                color: mode === 'search' ? 'var(--text-color)' : 'var(--sub-color)',
+                boxShadow: mode === 'search' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <Fa icon={icons.search} style={{ fontSize: 11 }} />
+              <span>files</span>
+            </button>
+          </div>
+
+          {mode === 'chat' && chatConversation.length > 0 && (
+            <button
+              onClick={clearChat}
+              title="Start a new conversation"
+              className="glass-pill"
+              style={{
+                padding: '6px 14px',
+                borderRadius: 9999,
+                fontSize: 12,
+                fontWeight: 500,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                color: 'var(--sub-color)',
+              }}
+            >
+              <Fa icon="fa-arrow-rotate-left" style={{ fontSize: 10 }} />
+              clear
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* ── CHAT MODE (Seamless Canvas + Glassy Bubbles) ── */}
+      {mode === 'chat' && (
+        <div
+          style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            minHeight: 0,
+            position: 'relative',
+          }}
+        >
+          {/* Scrollable Conversation Thread */}
           <div
             className="glass-scroll"
             style={{
               flex: 1,
               overflowY: 'auto',
-              padding: '24px 32px 12px',
+              paddingRight: 6,
               display: 'flex',
               flexDirection: 'column',
-              justifyContent: chatConversation.length === 0 ? 'center' : 'flex-start',
+              gap: 16,
+              paddingBottom: 16,
             }}
           >
-            {/* Empty Hero State (Matching screenshot with two central avatars) */}
+            {/* Minimal Zero-Cringe Empty State */}
             {chatConversation.length === 0 ? (
               <div
                 style={{
+                  margin: 'auto 0',
+                  padding: '40px 0',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
                   textAlign: 'center',
-                  maxWidth: 520,
-                  margin: '0 auto',
-                  padding: '32px 20px',
                 }}
               >
-                {/* Two Floating Avatars connected by dots */}
                 <div
                   style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 16,
-                    marginBottom: 20,
+                    fontSize: 20,
+                    fontWeight: 800,
+                    color: 'var(--text-color)',
+                    letterSpacing: -0.4,
+                    marginBottom: 6,
                   }}
                 >
-                  {/* User Avatar Circle */}
-                  <div
-                    style={{
-                      width: 58,
-                      height: 58,
-                      borderRadius: '50%',
-                      background: 'linear-gradient(135deg, #f59e0b, #d97706)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: '#fff',
-                      fontSize: 20,
-                      fontWeight: 800,
-                      border: '3px solid rgba(255,255,255,0.9)',
-                      boxShadow: '0 8px 24px rgba(217,119,6,0.25)',
-                    }}
-                  >
-                    {userInitials}
-                  </div>
-
-                  {/* Connecting Dotted Line */}
-                  <div
-                    style={{
-                      display: 'flex',
-                      gap: 4,
-                      color: 'rgba(0,0,0,0.25)',
-                      fontSize: 14,
-                    }}
-                  >
-                    <span>·</span>
-                    <span>·</span>
-                    <span>·</span>
-                  </div>
-
-                  {/* Reyna Avatar Circle */}
-                  <div
-                    style={{
-                      width: 58,
-                      height: 58,
-                      borderRadius: '50%',
-                      padding: 2,
-                      background: 'linear-gradient(135deg, #25D366, #10b981)',
-                      border: '3px solid rgba(255,255,255,0.9)',
-                      boxShadow: '0 8px 24px rgba(37,211,102,0.3)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <img
-                      src="/reyna-badge.png"
-                      alt="Reyna"
-                      style={{
-                        width: '100%',
-                        height: '100%',
-                        borderRadius: '50%',
-                        objectFit: 'cover',
-                      }}
-                    />
-                  </div>
+                  how can i help you find or understand your documents?
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--sub-color)', marginBottom: 24, maxWidth: 440 }}>
+                  ask anything about what was shared in your chats in english, hindi, or hinglish.
                 </div>
 
-                <h2 style={{ fontSize: 24, fontWeight: 800, letterSpacing: -0.5, margin: '0 0 6px', color: 'var(--text-color)' }}>
-                  Reyna
-                </h2>
-                <div style={{ fontSize: 13, color: '#25D366', fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#25D366' }} />
-                  Multilingual Document Intelligence
-                </div>
-                <p style={{ fontSize: 14, color: 'var(--sub-color)', margin: '0 auto 28px', lineHeight: 1.5, maxWidth: 420 }}>
-                  Ask questions, retrieve shared files, or follow up in English, Hindi, or Hinglish.
-                </p>
-
-                {/* Glassy Quick Prompt Capsules */}
+                {/* Minimal Frosted Glass Starter Pills */}
                 <div
                   style={{
                     display: 'flex',
-                    flexDirection: 'column',
+                    flexWrap: 'wrap',
                     gap: 8,
-                    textAlign: 'left',
+                    justifyContent: 'center',
+                    maxWidth: 580,
                   }}
                 >
                   {samplePrompts.map(p => (
@@ -747,781 +626,700 @@ export default function Search() {
                       onClick={() => sendChat(p)}
                       className="glass-pill"
                       style={{
-                        padding: '12px 18px',
-                        borderRadius: 14,
+                        padding: '9px 16px',
+                        borderRadius: 9999,
                         fontSize: 13,
                         fontWeight: 500,
                         cursor: 'pointer',
                         color: 'var(--text-color)',
                         display: 'flex',
                         alignItems: 'center',
-                        justifyContent: 'space-between',
-                      }}
-                    >
-                      <span>{p}</span>
-                      <Fa icon="fa-arrow-right" style={{ fontSize: 11, color: 'var(--reyna-accent)' }} />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              /* Message Stream */
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-                {chatConversation.map(turn => (
-                  <div key={turn.id} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                    {/* User Message Row */}
-                    <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-                      <div
-                        style={{
-                          width: 38,
-                          height: 38,
-                          borderRadius: '50%',
-                          background: 'linear-gradient(135deg, #f59e0b, #d97706)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          color: '#fff',
-                          fontSize: 14,
-                          fontWeight: 700,
-                          flexShrink: 0,
-                          marginTop: 2,
-                          boxShadow: '0 2px 6px rgba(0,0,0,0.1)',
-                        }}
-                      >
-                        {userInitials}
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
-                          <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-color)' }}>
-                            {userDisplayName}
-                          </span>
-                          <span style={{ fontSize: 11, color: 'var(--sub-color)' }}>
-                            Today at {formatClockTime(turn.ts)}
-                          </span>
-                        </div>
-                        <div
-                          style={{
-                            fontSize: 14.5,
-                            color: 'var(--text-color)',
-                            lineHeight: 1.6,
-                            whiteSpace: 'pre-wrap',
-                            wordBreak: 'break-word',
-                          }}
-                        >
-                          {turn.question}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Reyna Response Row */}
-                    <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-                      <div style={{ position: 'relative', flexShrink: 0, marginTop: 2 }}>
-                        <img
-                          src="/reyna-badge.png"
-                          alt="Reyna"
-                          style={{
-                            width: 38,
-                            height: 38,
-                            borderRadius: '50%',
-                            objectFit: 'cover',
-                            border: '1.5px solid rgba(255,255,255,0.8)',
-                            boxShadow: '0 2px 8px rgba(37,211,102,0.2)',
-                          }}
-                        />
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
-                          <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-color)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                            Reyna
-                            <span
-                              style={{
-                                fontSize: 9,
-                                fontWeight: 700,
-                                textTransform: 'uppercase',
-                                padding: '1px 5px',
-                                borderRadius: 8,
-                                background: 'rgba(37,211,102,0.15)',
-                                color: '#0e7a3d',
-                              }}
-                            >
-                              AI
-                            </span>
-                          </span>
-                          <span style={{ fontSize: 11, color: 'var(--sub-color)' }}>
-                            Today at {formatClockTime(turn.ts)}
-                          </span>
-                        </div>
-
-                        {turn.pending ? (
-                          <div
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: 8,
-                              padding: '8px 14px',
-                              borderRadius: 14,
-                              background: 'rgba(255,255,255,0.6)',
-                              border: '1px solid rgba(255,255,255,0.7)',
-                              fontSize: 13,
-                              color: 'var(--sub-color)',
-                              marginTop: 4,
-                            }}
-                          >
-                            <Fa icon={icons.loading} spin style={{ fontSize: 12, color: 'var(--reyna-accent)' }} />
-                            <span>searching documents & drafting answer…</span>
-                          </div>
-                        ) : (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                            {/* Markdown text reply */}
-                            <div
-                              style={{
-                                fontSize: 14.5,
-                                color: 'var(--text-color)',
-                                lineHeight: 1.65,
-                                wordBreak: 'break-word',
-                              }}
-                            >
-                              {renderMarkdown(turn.reply)}
-                            </div>
-
-                            {/* Disambiguation Candidate Choices */}
-                            {turn.candidates && turn.candidates.length > 0 && (
-                              <div
-                                className="glass-card"
-                                style={{
-                                  padding: '12px 16px',
-                                  borderRadius: 14,
-                                  marginTop: 4,
-                                }}
-                              >
-                                <div style={{ fontSize: 12, fontWeight: 700, color: '#b45309', marginBottom: 8 }}>
-                                  Which document did you mean?
-                                </div>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                  {turn.candidates.map(c => (
-                                    <button
-                                      key={c.file_id}
-                                      onClick={() => handleChooseCandidate(c, turn.question)}
-                                      className="glass-pill"
-                                      style={{
-                                        padding: '8px 12px',
-                                        borderRadius: 8,
-                                        fontSize: 12,
-                                        textAlign: 'left',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'space-between',
-                                        cursor: 'pointer',
-                                      }}
-                                    >
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                        <Fa icon={icons.file} style={{ color: 'var(--reyna-accent)', fontSize: 12 }} />
-                                        <span style={{ fontWeight: 600 }}>{c.file_name}</span>
-                                        {c.folder && (
-                                          <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: 'rgba(0,0,0,0.06)' }}>
-                                            {c.folder}
-                                          </span>
-                                        )}
-                                      </div>
-                                      <span style={{ fontSize: 11, color: 'var(--sub-color)' }}>
-                                        {c.sender ? `by ${c.sender}` : ''}
-                                      </span>
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Attached File Cards */}
-                            {turn.files && turn.files.length > 0 && (
-                              <div
-                                style={{
-                                  display: 'flex',
-                                  flexDirection: 'column',
-                                  gap: 6,
-                                  marginTop: 4,
-                                  maxWidth: 580,
-                                }}
-                              >
-                                {turn.files.map(f => (
-                                  <div
-                                    key={f.id}
-                                    className="glass-card"
-                                    style={{
-                                      padding: '8px 12px',
-                                      borderRadius: 12,
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      justifyContent: 'space-between',
-                                      gap: 10,
-                                    }}
-                                  >
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                                      <IconBox
-                                        icon={fileIconClass(f.mime_type, f.file_name)}
-                                        color="var(--main-color)"
-                                        bg="rgba(37,211,102,0.12)"
-                                        size={32}
-                                        iconSize={13}
-                                      />
-                                      <div style={{ minWidth: 0 }}>
-                                        <div
-                                          style={{
-                                            fontWeight: 600,
-                                            fontSize: 13,
-                                            color: 'var(--text-color)',
-                                            whiteSpace: 'nowrap',
-                                            overflow: 'hidden',
-                                            textOverflow: 'ellipsis',
-                                            maxWidth: 320,
-                                          }}
-                                          title={f.file_name}
-                                        >
-                                          {f.file_name}
-                                        </div>
-                                        <div style={{ fontSize: 11, color: 'var(--sub-color)' }}>
-                                          {f.subject && <span style={{ fontWeight: 600, color: '#333' }}>{f.subject} · </span>}
-                                          {f.shared_by_name ? `by ${f.shared_by_name}` : 'shared in chat'}
-                                          {f.posted_at || f.created_at ? ` · ${timeAgo(f.posted_at || f.created_at)}` : ''}
-                                        </div>
-                                      </div>
-                                    </div>
-
-                                    <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-                                      <button
-                                        onClick={() => openPreview(f)}
-                                        title="Preview"
-                                        style={{
-                                          width: 28,
-                                          height: 28,
-                                          borderRadius: '50%',
-                                          border: '1px solid rgba(0,0,0,0.1)',
-                                          background: 'rgba(255,255,255,0.7)',
-                                          cursor: 'pointer',
-                                          display: 'flex',
-                                          alignItems: 'center',
-                                          justifyContent: 'center',
-                                          color: 'var(--text-color)',
-                                        }}
-                                      >
-                                        <Fa icon={icons.preview} style={{ fontSize: 11 }} />
-                                      </button>
-                                      <button
-                                        onClick={() => downloadFile(f)}
-                                        title="Download"
-                                        style={{
-                                          width: 28,
-                                          height: 28,
-                                          borderRadius: '50%',
-                                          border: '1px solid rgba(0,0,0,0.1)',
-                                          background: 'rgba(255,255,255,0.7)',
-                                          cursor: 'pointer',
-                                          display: 'flex',
-                                          alignItems: 'center',
-                                          justifyContent: 'center',
-                                          color: 'var(--text-color)',
-                                        }}
-                                      >
-                                        <Fa icon={icons.download} style={{ fontSize: 11 }} />
-                                      </button>
-                                      {f.drive_file_id &&
-                                        !f.drive_file_id.startsWith('local_') &&
-                                        !f.drive_file_id.startsWith('meta_') && (
-                                          <a
-                                            href={`https://drive.google.com/file/d/${f.drive_file_id}/view`}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            title="Open in Drive"
-                                            style={{
-                                              width: 28,
-                                              height: 28,
-                                              borderRadius: '50%',
-                                              border: '1px solid rgba(0,0,0,0.1)',
-                                              background: 'rgba(255,255,255,0.7)',
-                                              display: 'flex',
-                                              alignItems: 'center',
-                                              justifyContent: 'center',
-                                              color: 'var(--text-color)',
-                                              textDecoration: 'none',
-                                            }}
-                                          >
-                                            <Fa icon={icons.link} style={{ fontSize: 10 }} />
-                                          </a>
-                                        )}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-
-                            {/* Verified Citations Accordion */}
-                            {turn.citations && turn.citations.length > 0 && (
-                              <div>
-                                <button
-                                  onClick={() => toggleSources(turn.id)}
-                                  className="glass-pill"
-                                  style={{
-                                    padding: '4px 10px',
-                                    borderRadius: 9999,
-                                    fontSize: 11,
-                                    fontWeight: 600,
-                                    color: 'var(--sub-color)',
-                                    cursor: 'pointer',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: 6,
-                                  }}
-                                >
-                                  <Fa icon={icons.file} style={{ fontSize: 9, color: 'var(--reyna-accent)' }} />
-                                  <span>
-                                    {turn.citations.length} verified passage{turn.citations.length > 1 ? 's' : ''}
-                                  </span>
-                                  <Fa icon={turn.showSources ? 'fa-chevron-up' : 'fa-chevron-down'} style={{ fontSize: 8 }} />
-                                </button>
-
-                                {turn.showSources && (
-                                  <div
-                                    className="glass-card"
-                                    style={{
-                                      marginTop: 8,
-                                      padding: 10,
-                                      borderRadius: 12,
-                                      display: 'flex',
-                                      flexDirection: 'column',
-                                      gap: 6,
-                                      maxWidth: 580,
-                                    }}
-                                  >
-                                    {turn.citations.map((c, ci) => (
-                                      <div
-                                        key={ci}
-                                        style={{
-                                          padding: '8px 10px',
-                                          background: 'rgba(255,255,255,0.7)',
-                                          borderRadius: 8,
-                                          borderLeft: '3px solid var(--reyna-accent)',
-                                          fontSize: 12,
-                                        }}
-                                      >
-                                        <div style={{ fontStyle: 'italic', marginBottom: 4, lineHeight: 1.5 }}>
-                                          "{c.quote}"
-                                        </div>
-                                        <div style={{ fontSize: 10, color: 'var(--sub-color)', display: 'flex', gap: 8 }}>
-                                          <span>
-                                            <strong>{c.file_name}</strong> (Page {c.page || 1})
-                                          </span>
-                                          {c.sender && <span>by {c.sender}</span>}
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-
-                {/* Follow-up Quick Prompts Floating Row */}
-                {chatConversation.length > 0 &&
-                  !chatConversation[chatConversation.length - 1].pending && (
-                    <div
-                      style={{
-                        display: 'flex',
-                        gap: 6,
-                        flexWrap: 'wrap',
-                        alignItems: 'center',
-                        marginLeft: 52,
-                        marginTop: 4,
-                      }}
-                    >
-                      {followUpSuggestions.map(s => (
-                        <button
-                          key={s}
-                          onClick={() => sendChat(s)}
-                          className="glass-pill"
-                          style={{
-                            padding: '4px 12px',
-                            borderRadius: 9999,
-                            fontSize: 11,
-                            fontWeight: 500,
-                            cursor: 'pointer',
-                            color: 'var(--text-color)',
-                          }}
-                        >
-                          {s}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                <div ref={chatEndRef} style={{ height: 10 }} />
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── Files Table Mode (Mode: search) ── */}
-        {mode === 'search' && (
-          <div
-            className="glass-scroll"
-            style={{
-              flex: 1,
-              overflowY: 'auto',
-              padding: '24px 32px',
-            }}
-          >
-            {/* Search Bar Input */}
-            <div style={{ position: 'relative', marginBottom: 20 }}>
-              <Fa
-                icon={icons.search}
-                style={{
-                  position: 'absolute',
-                  left: 16,
-                  top: 15,
-                  fontSize: 14,
-                  color: 'var(--sub-color)',
-                  pointerEvents: 'none',
-                }}
-              />
-              <input
-                value={query}
-                onChange={handleChange}
-                onKeyDown={handleKeyDown}
-                onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
-                onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-                placeholder="search files by name or subject tag..."
-                className="glass-card"
-                style={{
-                  width: '100%',
-                  padding: '13px 16px 13px 44px',
-                  borderRadius: 14,
-                  fontSize: 14,
-                  color: 'var(--text-color)',
-                  outline: 'none',
-                  fontFamily: 'inherit',
-                }}
-              />
-
-              {showSuggestions && suggestions.length > 0 && (
-                <div
-                  className="glass-card"
-                  style={{
-                    position: 'absolute',
-                    top: '100%',
-                    left: 0,
-                    right: 0,
-                    marginTop: 6,
-                    borderRadius: 12,
-                    zIndex: 50,
-                    overflow: 'hidden',
-                  }}
-                >
-                  {suggestions.slice(0, 6).map((name, i) => (
-                    <div
-                      key={i}
-                      onClick={() => selectSuggestion(name)}
-                      style={{
-                        padding: '8px 14px',
-                        cursor: 'pointer',
-                        fontSize: 12,
-                        background: i === selectedSuggestion ? 'rgba(0,0,0,0.06)' : 'transparent',
-                        borderBottom: i < suggestions.length - 1 ? '1px solid rgba(0,0,0,0.05)' : 'none',
-                        display: 'flex',
-                        alignItems: 'center',
                         gap: 8,
                       }}
                     >
-                      <Fa icon={icons.file} style={{ fontSize: 12, color: 'var(--sub-color)' }} />
-                      <span style={{ fontWeight: 500 }}>{name}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Results or Empty */}
-            {results === null ? (
-              <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--sub-color)' }}>
-                <Fa icon={icons.search} style={{ fontSize: 36, opacity: 0.3, marginBottom: 12 }} />
-                <p style={{ fontSize: 14, margin: '0 0 10px' }}>Instant keyword search across your documents</p>
-                <div style={{ display: 'flex', gap: 6, justifyContent: 'center', flexWrap: 'wrap' }}>
-                  {['linear queue', 'notes', 'assignment', 'bayes', 'lab'].map(q => (
-                    <button
-                      key={q}
-                      onClick={() => {
-                        setQuery(q)
-                        doLiveSearch(q)
-                      }}
-                      className="glass-pill"
-                      style={{
-                        padding: '4px 12px',
-                        borderRadius: 9999,
-                        fontSize: 11,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      {q}
+                      <span>{p}</span>
+                      <Fa icon="fa-arrow-right" style={{ fontSize: 10, color: 'var(--reyna-accent)' }} />
                     </button>
                   ))}
                 </div>
               </div>
-            ) : results.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--sub-color)' }}>
-                <Fa icon="fa-inbox" style={{ fontSize: 32, opacity: 0.3, marginBottom: 8 }} />
-                <p style={{ fontSize: 13 }}>No files found for "{query}"</p>
-              </div>
             ) : (
-              <div>
-                <p style={{ fontSize: 12, color: 'var(--sub-color)', marginBottom: 12 }}>
-                  {results.length} result{results.length !== 1 ? 's' : ''} for "{query}"
-                </p>
-                <div className="glass-card" style={{ borderRadius: 14, overflow: 'hidden' }}>
-                  {results.map((f, i) => (
+              /* Conversation Messages */
+              chatConversation.map(turn => (
+                <div
+                  key={turn.id}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 12,
+                    width: '100%',
+                  }}
+                >
+                  {/* ── USER CHAT BUBBLE (RIGHT HAND SIDE) ── */}
+                  <div
+                    style={{
+                      alignSelf: 'flex-end',
+                      maxWidth: '75%',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'flex-end',
+                    }}
+                  >
                     <div
-                      key={f.id}
+                      className="glass-bubble-user"
                       style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 12,
-                        padding: '10px 14px',
-                        borderBottom: i < results.length - 1 ? '1px solid rgba(0,0,0,0.05)' : 'none',
-                        transition: 'background 0.15s',
+                        padding: '12px 18px',
+                        fontSize: 14.5,
+                        color: 'var(--text-color)',
+                        lineHeight: 1.6,
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
                       }}
                     >
-                      <IconBox
-                        icon={fileIconClass(f.mime_type, f.file_name)}
-                        color="var(--main-color)"
-                        bg="rgba(37,211,102,0.12)"
-                        size={32}
-                        iconSize={13}
-                      />
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-color)' }}>
-                          {f.file_name}
-                        </div>
-                        <div style={{ fontSize: 11, color: 'var(--sub-color)' }}>
-                          {f.subject && <span style={{ fontWeight: 600, color: '#333' }}>{f.subject} · </span>}
-                          {formatBytes(f.file_size)} · by {f.shared_by_name || 'unknown'} · {timeAgo(f.posted_at || f.created_at)}
-                        </div>
-                      </div>
-
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <button
-                          onClick={() => openPreview(f)}
-                          title="Preview"
-                          style={{
-                            width: 28,
-                            height: 28,
-                            borderRadius: '50%',
-                            border: '1px solid rgba(0,0,0,0.1)',
-                            background: 'rgba(255,255,255,0.7)',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                          }}
-                        >
-                          <Fa icon={icons.preview} style={{ fontSize: 11 }} />
-                        </button>
-                        <button
-                          onClick={() => downloadFile(f)}
-                          title="Download"
-                          style={{
-                            width: 28,
-                            height: 28,
-                            borderRadius: '50%',
-                            border: '1px solid rgba(0,0,0,0.1)',
-                            background: 'rgba(255,255,255,0.7)',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                          }}
-                        >
-                          <Fa icon={icons.download} style={{ fontSize: 11 }} />
-                        </button>
-                        <button
-                          onClick={() => confirmDelete(f)}
-                          title="Delete"
-                          style={{
-                            width: 28,
-                            height: 28,
-                            borderRadius: '50%',
-                            border: '1px solid rgba(220,38,38,0.2)',
-                            background: 'rgba(254,242,242,0.7)',
-                            color: 'var(--error-color)',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                          }}
-                        >
-                          <Fa icon={icons.delete} style={{ fontSize: 11 }} />
-                        </button>
-                      </div>
+                      {turn.question}
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
+                    <span
+                      style={{
+                        fontSize: 10.5,
+                        color: 'var(--sub-color)',
+                        marginTop: 4,
+                        marginRight: 4,
+                        opacity: 0.7,
+                      }}
+                    >
+                      {formatClockTime(turn.ts)}
+                    </span>
+                  </div>
 
-        {/* ── Floating Frosted Capsule Composer (Matching Screenshot Bottom Bar) ── */}
-        {mode === 'chat' && (
-          <div
-            style={{
-              padding: '10px 24px 18px',
-              position: 'relative',
-              zIndex: 10,
-            }}
-          >
-            {/* Quick Prompts Popover when `+` is tapped */}
-            {showPromptsMenu && (
+                  {/* ── REYNA REPLY BUBBLE (LEFT HAND SIDE) ── */}
+                  <div
+                    style={{
+                      alignSelf: 'flex-start',
+                      maxWidth: '82%',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'flex-start',
+                    }}
+                  >
+                    <div
+                      className="glass-bubble-reyna"
+                      style={{
+                        padding: '16px 20px',
+                        fontSize: 14.5,
+                        color: 'var(--text-color)',
+                        lineHeight: 1.65,
+                        wordBreak: 'break-word',
+                        width: '100%',
+                        boxSizing: 'border-box',
+                      }}
+                    >
+                      {/* Sub-header */}
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          marginBottom: 8,
+                          fontSize: 11.5,
+                          fontWeight: 700,
+                          color: 'var(--reyna-accent)',
+                          textTransform: 'lowercase',
+                        }}
+                      >
+                        <span>reyna</span>
+                        <span style={{ color: 'var(--sub-color)', fontWeight: 400, opacity: 0.7 }}>
+                          · {formatClockTime(turn.ts)}
+                        </span>
+                      </div>
+
+                      {/* Thinking State */}
+                      {turn.pending ? (
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            padding: '6px 0',
+                            fontSize: 13,
+                            color: 'var(--sub-color)',
+                          }}
+                        >
+                          <Fa icon={icons.loading} spin style={{ fontSize: 12, color: 'var(--reyna-accent)' }} />
+                          <span>reading documents…</span>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                          {/* Notice banner if allowance reached */}
+                          {turn.notice && (
+                            <div
+                              style={{
+                                background: 'rgba(245, 158, 11, 0.1)',
+                                border: '1px solid rgba(245, 158, 11, 0.25)',
+                                borderRadius: 10,
+                                padding: '8px 12px',
+                                fontSize: 12.5,
+                                color: '#b45309',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 8,
+                              }}
+                            >
+                              <Fa icon={icons.warning} style={{ fontSize: 12 }} />
+                              <span>{turn.reply}</span>
+                            </div>
+                          )}
+
+                          {/* Markdown formatted response */}
+                          {!turn.notice && <div>{renderMarkdown(turn.reply)}</div>}
+
+                          {/* Disambiguation: Which document did you mean? */}
+                          {turn.candidates && turn.candidates.length > 0 && (
+                            <div
+                              style={{
+                                marginTop: 6,
+                                paddingTop: 10,
+                                borderTop: '1px solid rgba(0,0,0,0.06)',
+                              }}
+                            >
+                              <div style={{ fontSize: 12, fontWeight: 700, color: '#b45309', marginBottom: 8 }}>
+                                which document did you mean?
+                              </div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                {turn.candidates.map(c => (
+                                  <button
+                                    key={c.file_id}
+                                    onClick={() => handleChooseCandidate(c, turn.question)}
+                                    className="glass-pill"
+                                    style={{
+                                      padding: '8px 12px',
+                                      borderRadius: 10,
+                                      fontSize: 12,
+                                      textAlign: 'left',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'space-between',
+                                      cursor: 'pointer',
+                                    }}
+                                  >
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                      <Fa icon={icons.file} style={{ color: 'var(--reyna-accent)', fontSize: 11 }} />
+                                      <span style={{ fontWeight: 600 }}>{c.file_name}</span>
+                                      {c.folder && (
+                                        <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: 'rgba(0,0,0,0.06)' }}>
+                                          {c.folder}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <span style={{ fontSize: 11, color: 'var(--sub-color)' }}>
+                                      {c.sender ? `by ${c.sender}` : ''}
+                                    </span>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Attached Document Capsules */}
+                          {turn.files && turn.files.length > 0 && (
+                            <div
+                              style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 6,
+                                marginTop: 6,
+                              }}
+                            >
+                              {turn.files.map(f => (
+                                <div
+                                  key={f.id}
+                                  className="glass-card"
+                                  style={{
+                                    padding: '8px 12px',
+                                    borderRadius: 12,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    gap: 10,
+                                  }}
+                                >
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                                    <IconBox
+                                      icon={fileIconClass(f.mime_type, f.file_name)}
+                                      color="var(--main-color)"
+                                      bg="rgba(37,211,102,0.12)"
+                                      size={30}
+                                      iconSize={12}
+                                    />
+                                    <div style={{ minWidth: 0 }}>
+                                      <div
+                                        style={{
+                                          fontWeight: 600,
+                                          fontSize: 13,
+                                          color: 'var(--text-color)',
+                                          whiteSpace: 'nowrap',
+                                          overflow: 'hidden',
+                                          textOverflow: 'ellipsis',
+                                          maxWidth: 340,
+                                        }}
+                                        title={f.file_name}
+                                      >
+                                        {f.file_name}
+                                      </div>
+                                      <div style={{ fontSize: 11, color: 'var(--sub-color)' }}>
+                                        {f.subject && <span style={{ fontWeight: 600, color: 'var(--text-color)' }}>{f.subject} · </span>}
+                                        {f.shared_by_name ? `by ${f.shared_by_name}` : 'shared in chat'}
+                                        {f.posted_at || f.created_at ? ` · ${timeAgo(f.posted_at || f.created_at)}` : ''}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                                    <button
+                                      onClick={() => openPreview(f)}
+                                      title="Preview"
+                                      className="glass-pill"
+                                      style={{
+                                        width: 28,
+                                        height: 28,
+                                        borderRadius: '50%',
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        padding: 0,
+                                      }}
+                                    >
+                                      <Fa icon={icons.preview} style={{ fontSize: 11 }} />
+                                    </button>
+                                    <button
+                                      onClick={() => downloadFile(f)}
+                                      title="Download"
+                                      className="glass-pill"
+                                      style={{
+                                        width: 28,
+                                        height: 28,
+                                        borderRadius: '50%',
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        padding: 0,
+                                      }}
+                                    >
+                                      <Fa icon={icons.download} style={{ fontSize: 11 }} />
+                                    </button>
+                                    {f.drive_file_id &&
+                                      !f.drive_file_id.startsWith('local_') &&
+                                      !f.drive_file_id.startsWith('meta_') && (
+                                        <a
+                                          href={`https://drive.google.com/file/d/${f.drive_file_id}/view`}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          title="Open in Drive"
+                                          className="glass-pill"
+                                          style={{
+                                            width: 28,
+                                            height: 28,
+                                            borderRadius: '50%',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            color: 'inherit',
+                                            textDecoration: 'none',
+                                            padding: 0,
+                                          }}
+                                        >
+                                          <Fa icon={icons.link} style={{ fontSize: 10 }} />
+                                        </a>
+                                      )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Verified Citations Accordion */}
+                          {turn.citations && turn.citations.length > 0 && (
+                            <div>
+                              <button
+                                onClick={() => toggleSources(turn.id)}
+                                className="glass-pill"
+                                style={{
+                                  padding: '4px 10px',
+                                  borderRadius: 9999,
+                                  fontSize: 11,
+                                  fontWeight: 600,
+                                  color: 'var(--sub-color)',
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 6,
+                                }}
+                              >
+                                <Fa icon={icons.file} style={{ fontSize: 9, color: 'var(--reyna-accent)' }} />
+                                <span>
+                                  {turn.citations.length} verified passage{turn.citations.length > 1 ? 's' : ''}
+                                </span>
+                                <Fa icon={turn.showSources ? 'fa-chevron-up' : 'fa-chevron-down'} style={{ fontSize: 8 }} />
+                              </button>
+
+                              {turn.showSources && (
+                                <div
+                                  className="glass-card"
+                                  style={{
+                                    marginTop: 8,
+                                    padding: 10,
+                                    borderRadius: 12,
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: 6,
+                                  }}
+                                >
+                                  {turn.citations.map((c, ci) => (
+                                    <div
+                                      key={ci}
+                                      style={{
+                                        padding: '8px 10px',
+                                        background: 'rgba(255,255,255,0.7)',
+                                        borderRadius: 8,
+                                        borderLeft: '3px solid var(--reyna-accent)',
+                                        fontSize: 12,
+                                      }}
+                                    >
+                                      <div style={{ fontStyle: 'italic', marginBottom: 4, lineHeight: 1.5 }}>
+                                        "{c.quote}"
+                                      </div>
+                                      <div style={{ fontSize: 10, color: 'var(--sub-color)', display: 'flex', gap: 8 }}>
+                                        <span>
+                                          <strong>{c.file_name}</strong> (Page {c.page || 1})
+                                        </span>
+                                        {c.sender && <span>by {c.sender}</span>}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+            <div ref={chatEndRef} style={{ height: 8 }} />
+          </div>
+
+          {/* ── Follow-Up Suggestion Pills (Floats above composer) ── */}
+          {chatConversation.length > 0 &&
+            !chatConversation[chatConversation.length - 1].pending && (
               <div
-                className="glass-card"
                 style={{
-                  position: 'absolute',
-                  bottom: '100%',
-                  left: 32,
-                  marginBottom: 10,
-                  width: 300,
-                  padding: 10,
-                  borderRadius: 16,
                   display: 'flex',
-                  flexDirection: 'column',
                   gap: 6,
-                  zIndex: 20,
-                  boxShadow: '0 12px 30px rgba(0,0,0,0.12)',
+                  flexWrap: 'wrap',
+                  marginBottom: 10,
+                  paddingLeft: 4,
                 }}
               >
-                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--sub-color)', padding: '2px 8px', textTransform: 'uppercase' }}>
-                  Quick Ideas
-                </div>
-                {samplePrompts.map(p => (
+                {followUpSuggestions.map(s => (
                   <button
-                    key={p}
-                    onClick={() => sendChat(p)}
+                    key={s}
+                    onClick={() => sendChat(s)}
+                    className="glass-pill"
                     style={{
-                      background: 'none',
-                      border: 'none',
-                      padding: '8px 10px',
-                      borderRadius: 8,
-                      textAlign: 'left',
-                      fontSize: 12,
-                      color: 'var(--text-color)',
+                      padding: '5px 13px',
+                      borderRadius: 9999,
+                      fontSize: 11.5,
+                      fontWeight: 500,
                       cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      transition: 'background 0.15s',
+                      color: 'var(--text-color)',
                     }}
-                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(0,0,0,0.06)'}
-                    onMouseLeave={e => e.currentTarget.style.background = 'none'}
                   >
-                    <Fa icon="fa-comment-dots" style={{ fontSize: 11, color: 'var(--reyna-accent)' }} />
-                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p}</span>
+                    {s}
                   </button>
                 ))}
               </div>
             )}
 
-            {/* Pill Capsule Container */}
-            <div
-              className="glass-composer"
+          {/* ── Floating Glass Capsule Composer ── */}
+          <div
+            className="glass-composer"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              borderRadius: 9999,
+              padding: '8px 10px 8px 20px',
+              flexShrink: 0,
+              boxShadow: '0 8px 28px rgba(0,0,0,0.06)',
+            }}
+          >
+            <textarea
+              ref={inputRef}
+              value={query}
+              onChange={handleChange}
+              onKeyDown={handleKeyDown}
+              onInput={e => {
+                e.target.style.height = 'auto'
+                e.target.style.height = Math.min(e.target.scrollHeight, 130) + 'px'
+              }}
+              rows={1}
+              placeholder="ask reyna in english, hindi, or hinglish..."
               style={{
+                flex: 1,
+                minWidth: 0,
+                padding: '6px 0',
+                fontSize: 14.5,
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-color)',
+                outline: 'none',
+                resize: 'none',
+                overflowY: 'hidden',
+                minHeight: 22,
+                maxHeight: 130,
+                fontFamily: 'inherit',
+                lineHeight: 1.5,
+              }}
+            />
+
+            <button
+              onClick={() => sendChat(query)}
+              disabled={!query.trim() || loading}
+              title="Send"
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: '50%',
+                border: 'none',
+                background: query.trim() ? 'var(--reyna-accent)' : 'rgba(0,0,0,0.06)',
+                color: query.trim() ? '#fff' : 'rgba(0,0,0,0.25)',
+                cursor: query.trim() && !loading ? 'pointer' : 'default',
                 display: 'flex',
                 alignItems: 'center',
-                gap: 10,
-                borderRadius: 9999,
-                padding: '6px 8px 6px 14px',
+                justifyContent: 'center',
+                flexShrink: 0,
+                boxShadow: query.trim() ? '0 3px 12px rgba(37,211,102,0.35)' : 'none',
                 transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
               }}
             >
-              {/* Left `+` button */}
-              <button
-                onClick={() => setShowPromptsMenu(p => !p)}
-                title="Ideas & prompts"
-                style={{
-                  width: 32,
-                  height: 32,
-                  borderRadius: '50%',
-                  border: 'none',
-                  background: showPromptsMenu ? 'var(--reyna-accent)' : 'rgba(0,0,0,0.06)',
-                  color: showPromptsMenu ? '#fff' : 'var(--text-color)',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
-                  transition: 'all 0.15s ease',
-                }}
-              >
-                <Fa icon={showPromptsMenu ? icons.close : icons.add} style={{ fontSize: 12 }} />
-              </button>
-
-              {/* Main Textarea */}
-              <textarea
-                ref={inputRef}
-                value={query}
-                onChange={handleChange}
-                onKeyDown={handleKeyDown}
-                onInput={e => {
-                  e.target.style.height = 'auto'
-                  e.target.style.height = Math.min(e.target.scrollHeight, 140) + 'px'
-                }}
-                rows={1}
-                placeholder="Message @reyna in English, Hindi, or Hinglish..."
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  padding: '6px 0',
-                  fontSize: 14.5,
-                  background: 'transparent',
-                  border: 'none',
-                  color: 'var(--text-color)',
-                  outline: 'none',
-                  resize: 'none',
-                  overflowY: 'hidden',
-                  minHeight: 22,
-                  maxHeight: 140,
-                  fontFamily: 'inherit',
-                  lineHeight: 1.5,
-                }}
-              />
-
-              {/* Right Send Button */}
-              <button
-                onClick={() => sendChat(query)}
-                disabled={!query.trim() || loading}
-                title="Send"
-                style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: '50%',
-                  border: 'none',
-                  background: query.trim() ? '#25D366' : 'rgba(0,0,0,0.08)',
-                  color: query.trim() ? '#fff' : 'rgba(0,0,0,0.3)',
-                  cursor: query.trim() && !loading ? 'pointer' : 'default',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
-                  boxShadow: query.trim() ? '0 4px 12px rgba(37,211,102,0.4)' : 'none',
-                  transform: query.trim() ? 'scale(1.05)' : 'scale(1)',
-                  transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
-                }}
-              >
-                <Fa icon="fa-paper-plane" style={{ fontSize: 13 }} />
-              </button>
-            </div>
+              <Fa icon="fa-paper-plane" style={{ fontSize: 13 }} />
+            </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      {/* ── FILES SEARCH MODE (Instant File Keyword Table) ── */}
+      {mode === 'search' && (
+        <div
+          className="glass-scroll"
+          style={{
+            flex: 1,
+            overflowY: 'auto',
+            paddingRight: 6,
+          }}
+        >
+          {/* Search Bar Input */}
+          <div style={{ position: 'relative', marginBottom: 20 }}>
+            <Fa
+              icon={icons.search}
+              style={{
+                position: 'absolute',
+                left: 16,
+                top: 15,
+                fontSize: 14,
+                color: 'var(--sub-color)',
+                pointerEvents: 'none',
+              }}
+            />
+            <input
+              value={query}
+              onChange={handleChange}
+              onKeyDown={handleKeyDown}
+              onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
+              onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+              placeholder="search files by name or subject tag..."
+              className="glass-card"
+              style={{
+                width: '100%',
+                padding: '13px 16px 13px 44px',
+                borderRadius: 14,
+                fontSize: 14,
+                color: 'var(--text-color)',
+                outline: 'none',
+                fontFamily: 'inherit',
+                boxSizing: 'border-box',
+              }}
+            />
+
+            {showSuggestions && suggestions.length > 0 && (
+              <div
+                className="glass-card"
+                style={{
+                  position: 'absolute',
+                  top: '100%',
+                  left: 0,
+                  right: 0,
+                  marginTop: 6,
+                  borderRadius: 12,
+                  zIndex: 50,
+                  overflow: 'hidden',
+                }}
+              >
+                {suggestions.slice(0, 6).map((name, i) => (
+                  <div
+                    key={i}
+                    onClick={() => selectSuggestion(name)}
+                    style={{
+                      padding: '8px 14px',
+                      cursor: 'pointer',
+                      fontSize: 12,
+                      background: i === selectedSuggestion ? 'rgba(0,0,0,0.06)' : 'transparent',
+                      borderBottom: i < suggestions.length - 1 ? '1px solid rgba(0,0,0,0.05)' : 'none',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                    }}
+                  >
+                    <Fa icon={icons.file} style={{ fontSize: 12, color: 'var(--sub-color)' }} />
+                    <span style={{ fontWeight: 500 }}>{name}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Results or Empty */}
+          {results === null ? (
+            <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--sub-color)' }}>
+              <Fa icon={icons.search} style={{ fontSize: 36, opacity: 0.3, marginBottom: 12 }} />
+              <p style={{ fontSize: 14, margin: '0 0 10px' }}>Instant keyword search across your documents</p>
+              <div style={{ display: 'flex', gap: 6, justifyContent: 'center', flexWrap: 'wrap' }}>
+                {['linear queue', 'notes', 'assignment', 'bayes', 'lab'].map(q => (
+                  <button
+                    key={q}
+                    onClick={() => {
+                      setQuery(q)
+                      doLiveSearch(q)
+                    }}
+                    className="glass-pill"
+                    style={{
+                      padding: '4px 12px',
+                      borderRadius: 9999,
+                      fontSize: 11,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : results.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--sub-color)' }}>
+              <Fa icon="fa-inbox" style={{ fontSize: 32, opacity: 0.3, marginBottom: 8 }} />
+              <p style={{ fontSize: 13 }}>No files found for "{query}"</p>
+            </div>
+          ) : (
+            <div>
+              <p style={{ fontSize: 12, color: 'var(--sub-color)', marginBottom: 12 }}>
+                {results.length} result{results.length !== 1 ? 's' : ''} for "{query}"
+              </p>
+              <div className="glass-card" style={{ borderRadius: 14, overflow: 'hidden' }}>
+                {results.map((f, i) => (
+                  <div
+                    key={f.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 12,
+                      padding: '10px 14px',
+                      borderBottom: i < results.length - 1 ? '1px solid rgba(0,0,0,0.05)' : 'none',
+                      transition: 'background 0.15s',
+                    }}
+                  >
+                    <IconBox
+                      icon={fileIconClass(f.mime_type, f.file_name)}
+                      color="var(--main-color)"
+                      bg="rgba(37,211,102,0.12)"
+                      size={32}
+                      iconSize={13}
+                    />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-color)' }}>
+                        {f.file_name}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--sub-color)' }}>
+                        {f.subject && <span style={{ fontWeight: 600, color: 'var(--text-color)' }}>{f.subject} · </span>}
+                        {formatBytes(f.file_size)} · by {f.shared_by_name || 'unknown'} · {timeAgo(f.posted_at || f.created_at)}
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button
+                        onClick={() => openPreview(f)}
+                        title="Preview"
+                        className="glass-pill"
+                        style={{
+                          width: 28,
+                          height: 28,
+                          borderRadius: '50%',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: 0,
+                        }}
+                      >
+                        <Fa icon={icons.preview} style={{ fontSize: 11 }} />
+                      </button>
+                      <button
+                        onClick={() => downloadFile(f)}
+                        title="Download"
+                        className="glass-pill"
+                        style={{
+                          width: 28,
+                          height: 28,
+                          borderRadius: '50%',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: 0,
+                        }}
+                      >
+                        <Fa icon={icons.download} style={{ fontSize: 11 }} />
+                      </button>
+                      <button
+                        onClick={() => confirmDelete(f)}
+                        title="Delete"
+                        className="glass-pill"
+                        style={{
+                          width: 28,
+                          height: 28,
+                          borderRadius: '50%',
+                          border: '1px solid rgba(220,38,38,0.2)',
+                          background: 'rgba(254,242,242,0.7)',
+                          color: 'var(--error-color)',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: 0,
+                        }}
+                      >
+                        <Fa icon={icons.delete} style={{ fontSize: 11 }} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Document Preview Modal ── */}
       {previewFile &&
