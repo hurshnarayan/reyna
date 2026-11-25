@@ -4,6 +4,7 @@
   "scripts": {
     "start": "node bot.js",
     "dev": "node --watch bot.js",
+    "test": "node --test",
     "clean": "rm -rf auth_state downloaded_files && echo 'Cleaned!'"
   },
   "dependencies": {

@@ -165,7 +165,12 @@ Add the bot's WhatsApp account to any group and issue commands in the group chat
 - `/reyna mode auto`: Switches to automatic mode, capturing every document shared in the group.
 - `/reyna mode reaction`: Switches to reaction mode, staging only documents that receive the trigger reaction.
 - `/reyna emoji [emoji]`: Sets the trigger emoji for reaction staging (default: 📌).
+- `reyna retry`: Retries uploads that could not be staged in this group.
 - `/reyna stop`: Pauses tracking for the current group.
+
+Uploads get an initial attempt plus up to three automatic retries with backoff for temporary backend/network failures. Downloaded files that still need staging are kept in the bot's private, gitignored `whatsapp-bot/pending_uploads/` queue and retried after bot restart. If automatic retries are exhausted, use `reyna retry` in that group. Queue capacity is limited to 50 files / 256 MiB; the bot will report when it cannot queue another upload and will not silently discard existing pending files. If Reyna cannot download the media from WhatsApp after retries, the file was not staged and must be resent.
+
+The pending queue contains file contents until the backend confirms staging. It does not expire pending files automatically. It is local application data and should be protected and backed up according to the host's normal data-retention policy; only remove pending entries after confirming they can be discarded.
 
 ### WhatsApp Bot Direct Messages
 

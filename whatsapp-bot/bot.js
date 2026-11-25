@@ -7,6 +7,14 @@ const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
+const {
+  MAX_UPLOAD_BYTES,
+  MAX_AUTOMATIC_RETRIES,
+  PendingUploadQueue,
+  isAcceptedUpload,
+  isRetryableStatus,
+  withRetries,
+} = require('./upload-recovery');
 
 // Auto-load .env from parent dir or local dir if not already in process.env
 for (const envPath of [path.resolve(__dirname, '../.env'), path.resolve(__dirname, '.env')]) {
@@ -20,6 +28,8 @@ const AUTH_DIR = process.env.AUTH_DIR || './auth_state';
 const DEVICE_TOKEN = process.env.DEVICE_TOKEN || '';
 const PID_FILE = path.join(__dirname, '.bot.pid');
 const logger = pino({ level: 'silent' });
+const pendingUploadQueue = new PendingUploadQueue();
+const processingUploads = new Map();
 
 // Ensure single running instance to prevent WhatsApp DisconnectReason 440 (connectionReplaced) conflicts
 function acquireProcessLock() {
@@ -239,12 +249,22 @@ async function sendCommand(groupJid, command, userPhone, userName, extra) {
   }
 }
 
-async function uploadFile(groupJid, userPhone, userName, fileInfo, fileBuffer) {
+function retryableUploadResult(status, data) {
+  return {
+    ok: false,
+    retryable: isRetryableStatus(status),
+    httpStatus: status,
+    error: data?.error || `Backend returned HTTP ${status}`,
+  };
+}
+
+async function uploadAttempt(entry, fileBuffer) {
   try {
     const form = new FormData();
-    form.append('group_wa_id', groupJid);
-    form.append('user_phone', userPhone);
-    form.append('user_name', userName || '');
+    const { fileInfo } = entry;
+    form.append('group_wa_id', entry.groupJid);
+    form.append('user_phone', entry.userPhone);
+    form.append('user_name', entry.userName || '');
     form.append('file_name', fileInfo.fileName);
     form.append('file_size', String(fileInfo.fileSize));
     form.append('mime_type', fileInfo.mimeType);
@@ -257,16 +277,180 @@ async function uploadFile(groupJid, userPhone, userName, fileInfo, fileBuffer) {
 
     console.log(`  Upload: ${fileInfo.fileName} (${(fileBuffer.length / 1024).toFixed(0)}KB)`);
 
-    const res = await backendFetch(`${BACKEND_URL}/api/bot/upload`, { method: 'POST', body: form });
-    const data = await res.json();
-    if (!res.ok) {
-      console.error(`Upload HTTP ${res.status}:`, data);
-      return { reply: `Upload failed: ${data.error || 'unknown'}` };
+    const res = await backendFetch(`${BACKEND_URL}/api/bot/upload`, {
+      method: 'POST',
+      body: form,
+      signal: AbortSignal.timeout(60_000),
+    });
+    let data;
+    try {
+      data = await res.json();
+    } catch {
+      if (res.ok) {
+        return { ok: false, retryable: true, error: 'Backend returned an unreadable success response' };
+      }
+      data = {};
     }
-    return data;
+    if (!res.ok) {
+      return retryableUploadResult(res.status, data);
+    }
+    if (!isAcceptedUpload(data)) {
+      return { ok: false, retryable: true, error: data?.error || 'Backend did not confirm staging' };
+    }
+    return { ok: true, data };
   } catch (err) {
-    console.error('Upload error:', err.message);
-    return { reply: 'File upload failed.' };
+    return { ok: false, retryable: true, error: err.message || 'Network request failed' };
+  }
+}
+
+async function processPendingUpload(entry, options = {}) {
+  const active = processingUploads.get(entry.id);
+  if (active) {
+    const result = await active;
+    if (!options.manual || isAcceptedUpload(result)) return result;
+    if (processingUploads.get(entry.id) === active) processingUploads.delete(entry.id);
+    return processPendingUpload(entry, options);
+  }
+
+  const task = processPendingUploadOnce(entry, options);
+  processingUploads.set(entry.id, task);
+  try {
+    return await task;
+  } finally {
+    if (processingUploads.get(entry.id) === task) processingUploads.delete(entry.id);
+  }
+}
+
+async function processPendingUploadOnce(entry, { manual = false } = {}) {
+  if (entry.retryable === false && !manual) {
+    return {
+      status: 'failed', error: entry.lastError || 'This upload needs a manual retry',
+      retryable: false, httpStatus: entry.lastStatus, queued: true, queueId: entry.id,
+    };
+  }
+
+  try {
+    const fileBuffer = await pendingUploadQueue.readBuffer(entry.id);
+    let attempts = entry.attemptCount || 0;
+    const remainingAutomaticAttempts = MAX_AUTOMATIC_RETRIES + 1 - attempts;
+    if (!manual && remainingAutomaticAttempts <= 0) {
+      return {
+        status: 'failed',
+        retryable: true,
+        error: entry.lastError || 'Automatic retries are exhausted',
+        reply: 'Automatic retries are exhausted',
+        queued: true,
+        queueId: entry.id,
+      };
+    }
+    const result = await withRetries(async () => {
+      const attemptResult = await uploadAttempt(entry, fileBuffer);
+      attempts++;
+      await pendingUploadQueue.update(entry.id, {
+        attemptCount: attempts,
+        retryable: attemptResult.retryable,
+        lastStatus: attemptResult.httpStatus || null,
+        lastError: attemptResult.ok ? '' : attemptResult.error,
+      });
+      return attemptResult;
+    }, { maxRetries: manual ? MAX_AUTOMATIC_RETRIES : remainingAutomaticAttempts - 1 });
+
+    if (result.ok) {
+      try {
+        await pendingUploadQueue.remove(entry.id);
+      } catch (err) {
+        // The backend has accepted this upload. A later replay is safe because
+        // the backend deduplicates identical content within the group.
+        console.error(`[UPLOAD-QUEUE] Could not remove accepted upload ${entry.id}: ${err.message}`);
+      }
+      return result.data;
+    }
+
+    console.error(`[UPLOAD-QUEUE] Staging ${entry.fileInfo.fileName} remains unconfirmed: ${result.error || 'unknown upload failure'}`);
+    return {
+      status: 'failed',
+      retryable: result.retryable,
+      httpStatus: result.httpStatus || entry.lastStatus,
+      error: result.error || 'Backend did not confirm the upload',
+      reply: `Upload failed: ${result.error || 'backend did not confirm the upload'}`,
+      queued: true,
+      queueId: entry.id,
+    };
+  } catch (err) {
+    console.error(`[UPLOAD-QUEUE] Could not process ${entry.id}: ${err.message}`);
+    return {
+      status: 'failed',
+      retryable: false,
+      error: err.message,
+      reply: `Pending upload could not be read: ${err.message}`,
+      queued: true,
+      queueId: entry.id,
+    };
+  }
+}
+
+async function uploadFile(groupJid, userPhone, userName, fileInfo, fileBuffer) {
+  if (fileBuffer.length > MAX_UPLOAD_BYTES) {
+    const error = `File exceeds the ${Math.floor(MAX_UPLOAD_BYTES / (1024 * 1024))} MiB upload limit`;
+    return { status: 'failed', retryable: false, error, reply: error };
+  }
+  let entry;
+  try {
+    entry = await pendingUploadQueue.enqueue({
+      groupJid,
+      userPhone,
+      userName: userName || '',
+      fileInfo: {
+        fileName: fileInfo.fileName,
+        fileSize: fileInfo.fileSize,
+        mimeType: fileInfo.mimeType,
+        subject: fileInfo.subject || '',
+        postedAt: fileInfo.postedAt || 0,
+      },
+      sourceMessageId: fileInfo.sourceMessageId || '',
+      messageKey: fileInfo.messageKey?.id ? {
+        remoteJid: fileInfo.messageKey.remoteJid || groupJid,
+        id: fileInfo.messageKey.id,
+        fromMe: fileInfo.messageKey.fromMe === true,
+        ...(fileInfo.messageKey.participant ? { participant: fileInfo.messageKey.participant } : {}),
+      } : null,
+      trigger: fileInfo.trigger || 'manual',
+    }, fileBuffer);
+  } catch (err) {
+    console.error(`[UPLOAD-QUEUE] Could not preserve ${fileInfo.fileName}: ${err.message}`);
+    return {
+      status: 'failed',
+      retryable: false,
+      error: err.message,
+      reply: `Upload could not be queued: ${err.message}`,
+      queued: false,
+    };
+  }
+  return processPendingUpload(entry);
+}
+
+function uploadFailureMessage(response) {
+  const reason = response?.error || 'The upload was not confirmed.';
+  if (reason.includes('exceeds the') && reason.includes('upload limit')) {
+    return `${reason}. Reduce the file size and resend it.`;
+  }
+  if (reason.includes('queue is full')) {
+    return `${reason}. Existing queued files were preserved; free queue space, then say "reyna save" while this file is still in memory, or resend it.`;
+  }
+  if (response?.httpStatus === 413 || /too large|request entity/i.test(reason)) {
+    return 'The backend rejected this file as too large. Resend a smaller file; the queued copy will remain until it is resolved or explicitly removed.';
+  }
+  return response?.queued
+    ? `${reason} The file is safely queued; say "reyna retry" to try again.`
+    : `${reason} Reyna could not save it for retry, so please resend the file.`;
+}
+
+async function markUploadFailureNotified(response) {
+  if (!response?.queueId) return;
+  try {
+    await pendingUploadQueue.update(response.queueId, { failureNotified: true });
+  } catch (err) {
+    console.error(`[UPLOAD-QUEUE] Could not update notification state: ${err.message}`);
   }
 }
 
@@ -327,8 +511,64 @@ async function sendReaction(groupJid, userPhone, userName, fileInfo) {
   }
 }
 
-function uploadWasAccepted(response) {
-  return response?.status === 'staged' || response?.status === 'duplicate';
+async function sendStagingReaction(sock, entry) {
+  if (!entry.messageKey?.id) return;
+  try {
+    await sock.sendMessage(entry.groupJid, {
+      react: { text: '✅', key: entry.messageKey },
+    });
+  } catch (err) {
+    console.error(`[REACT] Failed to confirm ${entry.fileInfo.fileName}: ${err.message}`);
+  }
+}
+
+async function replayPendingUploads(sock) {
+  const entries = await pendingUploadQueue.list();
+  if (entries.length === 0) return;
+  console.log(`[UPLOAD-QUEUE] Recovering ${entries.length} pending upload(s)`);
+
+  for (const entry of entries) {
+    const result = entry.retryable === false
+      ? { status: 'failed', error: entry.lastError || 'Upload needs a manual retry', httpStatus: entry.lastStatus, queued: true }
+      : await processPendingUpload(entry);
+    if (isAcceptedUpload(result)) {
+      markStaged(entry.groupJid, entry.sourceMessageId);
+      await sendStagingReaction(sock, entry);
+      try {
+        await sock.sendMessage(entry.groupJid, {
+          text: `*Reyna:* Recovered and staged \`${entry.fileInfo.fileName}\` after a retry.`,
+        });
+      } catch (err) {
+        console.error(`[UPLOAD-QUEUE] Could not notify ${entry.groupJid}: ${err.message}`);
+      }
+    } else if (!entry.failureNotified) {
+      try {
+        await sock.sendMessage(entry.groupJid, {
+          text: `*Reyna:* Could not stage \`${entry.fileInfo.fileName}\` yet. ${uploadFailureMessage(result)}`,
+        });
+        await pendingUploadQueue.update(entry.id, { failureNotified: true });
+      } catch (err) {
+        console.error(`[UPLOAD-QUEUE] Could not report pending upload ${entry.id}: ${err.message}`);
+      }
+    }
+  }
+}
+
+async function retryGroupPendingUploads(sock, groupJid) {
+  const entries = await pendingUploadQueue.list(groupJid);
+  let staged = 0;
+  let failed = 0;
+  for (const entry of entries) {
+    const result = await processPendingUpload(entry, { manual: true });
+    if (isAcceptedUpload(result)) {
+      staged++;
+      markStaged(groupJid, entry.sourceMessageId);
+      await sendStagingReaction(sock, entry);
+    } else {
+      failed++;
+    }
+  }
+  return { staged, failed, total: entries.length };
 }
 
 // ─── Group Allowlist ───
@@ -496,6 +736,22 @@ function postedAtOf(msg) {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
 }
 
+async function downloadMediaWithRetries(sock, msg) {
+  const result = await withRetries(async () => {
+    try {
+      const buffer = await downloadMediaMessage(msg, 'buffer', {}, {
+        logger, reuploadRequest: sock.updateMediaMessage,
+      });
+      if (!buffer?.length) return { ok: false, retryable: false, error: 'WhatsApp returned an empty file' };
+      return { ok: true, buffer };
+    } catch (err) {
+      return { ok: false, retryable: true, error: err.message || 'WhatsApp media download failed' };
+    }
+  });
+  if (!result.ok) throw new Error(result.error || 'WhatsApp media download failed');
+  return result.buffer;
+}
+
 function trackFile(groupJid, msgId, info) {
   const tracker = getGroupTracker(groupJid);
   tracker.set(msgId, { ...info, staged: false, ts: Date.now() });
@@ -563,6 +819,10 @@ function detectIntent(message) {
       stripped = stripped.slice(prefix.length).trim();
       break;
     }
+  }
+
+  if (stripped === 'retry' || stripped === 'retry uploads' || stripped === 'retry pending uploads') {
+    return { intent: 'retry_uploads', query: '' };
   }
 
   // SAVE
@@ -1094,7 +1354,7 @@ async function handleMessage(sock, msg) {
     // before sendMessage gets a chance to run.
     try {
       await sock.sendMessage(chat, {
-        text: '*Reyna:* Initialized! This group is now being monitored.\n\nHow to use:\n• Share a file and it gets auto-saved (or react 📌 in reaction mode)\n• DM me for search and Q&A\n• "reyna save" / "reyna push" / "reyna status"\n• "/reyna stop" to disable tracking\n\nManage settings on your dashboard.',
+        text: '*Reyna:* Initialized! This group is now being monitored.\n\nHow to use:\n• Share a file and it gets auto-saved (or react 📌 in reaction mode)\n• DM me for search and Q&A\n• "reyna save" / "reyna retry" / "reyna push" / "reyna status"\n• "/reyna stop" to disable tracking\n\nManage settings on your dashboard.',
       });
       console.log(`  [INIT] sent init message to ${chat}`);
     } catch (sendErr) {
@@ -1182,13 +1442,14 @@ async function handleMessage(sock, msg) {
       msg.message?.documentWithCaptionMessage?.message?.documentMessage;
     const img = msg.message.imageMessage;
     if (doc || img) {
+      const fallbackName = doc?.fileName || (img ? `image_${msg.key.id.slice(0, 8)}.jpg` : 'file');
+      let mediaDownloaded = false;
       try {
-        const buffer = await downloadMediaMessage(msg, 'buffer', {}, {
-          logger, reuploadRequest: sock.updateMediaMessage,
-        });
+        const buffer = await downloadMediaWithRetries(sock, msg);
+        mediaDownloaded = true;
         let fileName, mimeType, fileSize;
         if (doc) {
-          fileName = doc.fileName || 'file';
+          fileName = fallbackName;
           mimeType = doc.mimetype || 'application/octet-stream';
           fileSize = Number(doc.fileLength || buffer.length);
         } else {
@@ -1225,9 +1486,16 @@ async function handleMessage(sock, msg) {
             mimeType,
             subject: 'classifying...',
             postedAt: postedAtOf(msg),
+            sourceMessageId: msgId,
+            messageKey: msg.key,
+            trigger: 'auto',
           }, buffer);
-          if (!uploadWasAccepted(resp)) {
+          if (!isAcceptedUpload(resp)) {
             console.error(`  [UPLOAD] Backend did not confirm staging ${fileName}: ${resp?.error || resp?.reply || 'no success status'}`);
+            await sock.sendMessage(chat, {
+              text: `*Reyna:* Could not stage \`${fileName}\` yet. ${uploadFailureMessage(resp)}`,
+            });
+            await markUploadFailureNotified(resp);
             return;
           }
           markStaged(chat, msgId);
@@ -1241,11 +1509,16 @@ async function handleMessage(sock, msg) {
               const ufResp = await uploadFile(chat, ufPhone, uf.senderName || pushName, {
                 fileName: uf.fileName, fileSize: uf.fileSize,
                 mimeType: uf.mimeType, subject: 'classifying...', postedAt: uf.postedAt,
+                sourceMessageId: uf.msgId, messageKey: uf.key, trigger: 'auto',
               }, uf.buffer);
-              if (uploadWasAccepted(ufResp)) {
+              if (isAcceptedUpload(ufResp)) {
                 markStaged(chat, uf.msgId);
               } else {
                 console.error(`  [UPLOAD] Backend did not confirm staging ${uf.fileName}: ${ufResp?.error || ufResp?.reply || 'no success status'}`);
+                await sock.sendMessage(chat, {
+                  text: `*Reyna:* Could not stage \`${uf.fileName}\` yet. ${uploadFailureMessage(ufResp)}`,
+                });
+                await markUploadFailureNotified(ufResp);
               }
             }
           }
@@ -1277,7 +1550,18 @@ async function handleMessage(sock, msg) {
 
         // REACTION MODE: do nothing, wait for 📌 reaction
       } catch (err) {
+        if (mediaDownloaded) {
+          console.error(`[FILE] Processing failed after download for ${fallbackName}: ${err.message}`);
+          return;
+        }
         console.error('Download failed:', err.message);
+        try {
+          await sock.sendMessage(chat, {
+            text: `*Reyna:* I couldn't download \`${fallbackName}\` from WhatsApp, so it was not staged. Please resend the file; I can only retry while WhatsApp still has the media.`,
+          });
+        } catch (notifyErr) {
+          console.error(`[DOWNLOAD] Could not notify group ${chat}: ${notifyErr.message}`);
+        }
       }
     }
     return;
@@ -1312,9 +1596,13 @@ async function handleMessage(sock, msg) {
         const resp = await uploadFile(chat, senderPhone, pushName, {
           fileName: last.fileName, fileSize: last.fileSize, mimeType: last.mimeType,
           postedAt: last.postedAt,
+          sourceMessageId: last.msgId, messageKey: last.key, trigger: 'manual',
         }, last.buffer);
-        if (!uploadWasAccepted(resp)) {
-          await sock.sendMessage(chat, { text: `*Reyna:* Could not stage \`${last.fileName}\`: ${resp?.error || resp?.reply || 'backend did not confirm the upload'}` });
+        if (!isAcceptedUpload(resp)) {
+          await sock.sendMessage(chat, {
+            text: `*Reyna:* Could not stage \`${last.fileName}\` yet. ${uploadFailureMessage(resp)}`,
+          });
+          await markUploadFailureNotified(resp);
           return;
         }
         markStaged(chat, last.msgId);
@@ -1323,27 +1611,58 @@ async function handleMessage(sock, msg) {
       }
       // Stage all untracked
       let staged = 0;
-      let failed = 0;
+      let queuedFailed = 0;
+      let notQueuedFailed = 0;
       const names = [];
+      const failedQueueIds = [];
       for (const f of untracked) {
         const resp = await uploadFile(chat, senderPhone, pushName, {
           fileName: f.fileName, fileSize: f.fileSize, mimeType: f.mimeType,
           postedAt: f.postedAt,
+          sourceMessageId: f.msgId, messageKey: f.key, trigger: 'manual',
         }, f.buffer);
-        if (uploadWasAccepted(resp)) {
+        if (isAcceptedUpload(resp)) {
           markStaged(chat, f.msgId);
           staged++;
           names.push(f.fileName);
         } else {
-          failed++;
+          if (resp?.queued) {
+            queuedFailed++;
+            if (resp.queueId) failedQueueIds.push(resp.queueId);
+          } else {
+            notQueuedFailed++;
+          }
           console.error(`  [UPLOAD] Backend did not confirm staging ${f.fileName}: ${resp?.error || resp?.reply || 'no success status'}`);
         }
       }
       let reply = `*Reyna:* ${staged} file(s) staged.`;
       if (staged <= 3) reply += ' ' + names.join(', ');
-      if (failed > 0) reply += ` ${failed} upload(s) failed and remain unstaged; please retry.`;
+      if (queuedFailed > 0) reply += ` ${queuedFailed} upload(s) failed but are safely queued; say "reyna retry" to try again.`;
+      if (notQueuedFailed > 0) reply += ` ${notQueuedFailed} upload(s) could not be saved for retry; please resend those files.`;
       reply += '\nSay "reyna push" to commit, or manage on your dashboard.';
       await sock.sendMessage(chat, { text: reply });
+      for (const queueId of failedQueueIds) {
+        await markUploadFailureNotified({ queueId });
+      }
+      return;
+    }
+
+    case 'retry_uploads': {
+      try {
+        const { staged, failed, total } = await retryGroupPendingUploads(sock, chat);
+        if (total === 0) {
+          await sock.sendMessage(chat, { text: '*Reyna:* There are no pending uploads to retry in this group.' });
+        } else {
+          let reply = `*Reyna:* Retried ${total} pending upload(s): ${staged} staged.`;
+          if (failed > 0) reply += ` ${failed} still failed and remain safely queued.`;
+          await sock.sendMessage(chat, { text: reply });
+        }
+      } catch (err) {
+        console.error(`[UPLOAD-QUEUE] Could not retry group queue: ${err.message}`);
+        await sock.sendMessage(chat, {
+          text: '*Reyna:* I could not read the pending upload queue. No pending files were intentionally removed; please check the bot logs.',
+        });
+      }
       return;
     }
 
@@ -1372,7 +1691,7 @@ async function handleMessage(sock, msg) {
 
     case 'help': {
       await sock.sendMessage(chat, {
-        text: '*Reyna:* In groups I handle file capture only — share files (or react 📌), and say "reyna save / push / status".\n\n💬 For search, retrieval, and Q&A, DM me directly. No wake word needed there.',
+        text: '*Reyna:* In groups I handle file capture only — share files (or react 📌), and say "reyna save / retry / push / status".\n\n💬 For search, retrieval, and Q&A, DM me directly. No wake word needed there.',
       });
       return;
     }
@@ -1396,7 +1715,7 @@ async function handleMessage(sock, msg) {
 
     default: {
       await sock.sendMessage(chat, {
-        text: '*Reyna:* I only handle file capture in groups (share files, react 📌, "reyna save / push / status"). For search and Q&A, DM me directly. 💬',
+        text: '*Reyna:* I only handle file capture in groups (share files, react 📌, "reyna save / retry / push / status"). For search and Q&A, DM me directly. 💬',
       });
       return;
     }
@@ -1453,10 +1772,21 @@ async function handleReaction(sock, reaction) {
     fileSize: fileInfo.fileSize,
     mimeType: fileInfo.mimeType,
     postedAt: fileInfo.postedAt,
+    sourceMessageId: reactedMsgId,
+    messageKey: fileInfo.key,
+    trigger: 'reaction',
   }, fileInfo.buffer);
 
-  if (!uploadWasAccepted(resp)) {
+  if (!isAcceptedUpload(resp)) {
     console.error(`  [UPLOAD] Backend did not confirm staging ${fileInfo.fileName}: ${resp?.error || resp?.reply || 'no success status'}`);
+    try {
+      await sock.sendMessage(chat, {
+        text: `*Reyna:* Could not stage \`${fileInfo.fileName}\` yet. ${uploadFailureMessage(resp)}`,
+      });
+      await markUploadFailureNotified(resp);
+    } catch (err) {
+      console.error(`[UPLOAD] Could not notify group ${chat}: ${err.message}`);
+    }
     return;
   }
 
@@ -1550,7 +1880,10 @@ async function startBot() {
 
       // Fetch enabled groups and pre-load synced groups
       refreshEnabledGroups();
-      preloadSyncedGroups().then(() => refreshGroupNames(sock));
+      replayPendingUploads(sock).catch(err => console.error(`[UPLOAD-QUEUE] Startup recovery failed: ${err.message}`));
+      preloadSyncedGroups()
+        .then(() => refreshGroupNames(sock))
+        .catch(err => console.error(`[GROUP-SYNC] Startup refresh failed: ${err.message}`));
       // Watch for dashboard toggle changes every 10 seconds
       startGroupStateWatcher(sock);
     }
@@ -1608,4 +1941,12 @@ if (fs.existsSync(path.join(AUTH_DIR, 'creds.json'))) {
   catch { console.log('  Cleaning stale auth...'); fs.rmSync(AUTH_DIR, { recursive: true, force: true }); }
 }
 
-startBot().catch(err => { console.error('Fatal:', err); process.exit(1); });
+pendingUploadQueue.initialize()
+  .then(entries => {
+    if (entries.length > 0) console.log(`[UPLOAD-QUEUE] Found ${entries.length} pending upload(s)`);
+    return startBot();
+  })
+  .catch(err => {
+    console.error(`[UPLOAD-QUEUE] Initialization failed: ${err.message}`);
+    process.exit(1);
+  });
