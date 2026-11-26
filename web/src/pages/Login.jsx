@@ -104,40 +104,6 @@ export default function Login() {
       </div>
 
       <div style={{ width: '100%', maxWidth: 520 }}>
-        {/* Top Toggle Pill Button */}
-        <div style={{ marginBottom: 16 }}>
-          <button
-            type="button"
-            onClick={() => toggleMode(!isRegister)}
-            style={{
-              background: '#ffffff',
-              border: '1.5px solid #a7f3d0',
-              borderRadius: 9999,
-              padding: '7px 18px',
-              fontSize: 13,
-              fontWeight: 600,
-              color: '#064e3b',
-              cursor: 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              transition: 'all 0.15s ease',
-              fontFamily: 'inherit',
-              boxShadow: '0 1px 2px rgba(0,0,0,0.03)',
-            }}
-            onMouseEnter={e => {
-              e.currentTarget.style.background = '#f0fdf4'
-              e.currentTarget.style.borderColor = '#34d399'
-            }}
-            onMouseLeave={e => {
-              e.currentTarget.style.background = '#ffffff'
-              e.currentTarget.style.borderColor = '#a7f3d0'
-            }}
-          >
-            {isRegister ? 'log in to an existing account' : 'create a new account'}
-          </button>
-        </div>
-
         {/* Main Card */}
         <div style={{
           background: 'var(--card-bg, #ffffff)',
