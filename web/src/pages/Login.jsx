@@ -297,8 +297,8 @@ export default function Login() {
               left: -35,
               width: 360,
               height: 190,
-              background: 'radial-gradient(ellipse at 40% 45%, rgba(254, 225, 95, 0.42) 0%, rgba(253, 216, 53, 0.20) 45%, rgba(254, 243, 199, 0.05) 70%, transparent 90%)',
-              filter: 'blur(32px)',
+              background: 'radial-gradient(ellipse at 40% 45%, rgba(254, 225, 95, 0.20) 0%, rgba(253, 216, 53, 0.09) 45%, rgba(254, 243, 199, 0.02) 70%, transparent 90%)',
+              filter: 'blur(35px)',
               pointerEvents: 'none',
               zIndex: -1,
             }}
