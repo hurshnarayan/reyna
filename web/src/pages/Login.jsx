@@ -173,41 +173,41 @@ export default function Login() {
           pointerEvents: 'none',
           zIndex: 0,
           userSelect: 'none',
-          WebkitMaskImage: 'radial-gradient(ellipse 65% 70% at 50% 50%, rgba(0,0,0,1) 15%, rgba(0,0,0,0.55) 45%, transparent 75%)',
-          maskImage: 'radial-gradient(ellipse 65% 70% at 50% 50%, rgba(0,0,0,1) 15%, rgba(0,0,0,0.55) 45%, transparent 75%)',
+          WebkitMaskImage: 'radial-gradient(ellipse 68% 72% at 50% 50%, rgba(0,0,0,1) 25%, rgba(0,0,0,0.65) 52%, transparent 80%)',
+          maskImage: 'radial-gradient(ellipse 68% 72% at 50% 50%, rgba(0,0,0,1) 25%, rgba(0,0,0,0.65) 52%, transparent 80%)',
         }}
       >
         {/* Closely-Packed Vertical Guidelines (~70px intervals) */}
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50%)', borderLeft: '1px dashed rgba(26, 26, 26, 0.035)' }} />
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 70px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.04)' }} />
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 70px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.04)' }} />
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 140px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.045)' }} />
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 140px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.045)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50%)', borderLeft: '1px dashed rgba(26, 26, 26, 0.06)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 70px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.065)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 70px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.065)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 140px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.07)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 140px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.07)' }} />
         {/* Form boundary lines */}
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 210px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.06)' }} />
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 210px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.06)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 210px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.085)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 210px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.085)' }} />
         {/* Flanking tracks */}
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 280px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.045)' }} />
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 280px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.045)' }} />
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 350px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.04)' }} />
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 350px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.04)' }} />
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 420px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.035)' }} />
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 420px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.035)' }} />
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 490px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.03)' }} />
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 490px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.03)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 280px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.065)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 280px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.065)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 350px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.055)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 350px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.055)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 420px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.045)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 420px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.045)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 490px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.035)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 490px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.035)' }} />
 
         {/* Closely-Packed Horizontal Guidelines (~65px intervals) */}
-        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% - 315px)', borderTop: '1px dashed rgba(26, 26, 26, 0.03)' }} />
-        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% - 250px)', borderTop: '1px dashed rgba(26, 26, 26, 0.045)' }} />
-        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% - 185px)', borderTop: '1px dashed rgba(26, 26, 26, 0.045)' }} />
-        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% - 120px)', borderTop: '1px dashed rgba(26, 26, 26, 0.05)' }} />
-        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% - 55px)', borderTop: '1px dashed rgba(26, 26, 26, 0.05)' }} />
-        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% + 10px)', borderTop: '1px dashed rgba(26, 26, 26, 0.05)' }} />
-        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% + 75px)', borderTop: '1px dashed rgba(26, 26, 26, 0.05)' }} />
-        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% + 140px)', borderTop: '1px dashed rgba(26, 26, 26, 0.045)' }} />
-        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% + 205px)', borderTop: '1px dashed rgba(26, 26, 26, 0.045)' }} />
-        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% + 270px)', borderTop: '1px dashed rgba(26, 26, 26, 0.035)' }} />
-        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% + 335px)', borderTop: '1px dashed rgba(26, 26, 26, 0.03)' }} />
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% - 315px)', borderTop: '1px dashed rgba(26, 26, 26, 0.04)' }} />
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% - 250px)', borderTop: '1px dashed rgba(26, 26, 26, 0.065)' }} />
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% - 185px)', borderTop: '1px dashed rgba(26, 26, 26, 0.065)' }} />
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% - 120px)', borderTop: '1px dashed rgba(26, 26, 26, 0.075)' }} />
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% - 55px)', borderTop: '1px dashed rgba(26, 26, 26, 0.075)' }} />
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% + 10px)', borderTop: '1px dashed rgba(26, 26, 26, 0.075)' }} />
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% + 75px)', borderTop: '1px dashed rgba(26, 26, 26, 0.075)' }} />
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% + 140px)', borderTop: '1px dashed rgba(26, 26, 26, 0.065)' }} />
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% + 205px)', borderTop: '1px dashed rgba(26, 26, 26, 0.065)' }} />
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% + 270px)', borderTop: '1px dashed rgba(26, 26, 26, 0.05)' }} />
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% + 335px)', borderTop: '1px dashed rgba(26, 26, 26, 0.04)' }} />
       </div>
 
       {/* Main Integrated Form Area */}
