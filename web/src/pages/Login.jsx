@@ -24,10 +24,9 @@ export default function Login() {
     setError('')
     const trimmed = phone.trim()
     if (!trimmed) {
-      setError('Please enter your username or WhatsApp number.')
+      setError('please enter your username or whatsapp number.')
       return
     }
-    // Smoothly slide in Step 2 (Password / Details)
     setStep(2)
   }
 
@@ -38,27 +37,26 @@ export default function Login() {
 
     try {
       const data = isRegister
-        ? await api.register(phone.trim(), name.trim() || 'Reyna User')
+        ? await api.register(phone.trim(), name.trim() || 'reyna user')
         : await api.login(phone.trim())
 
       if (data?.error) {
         if (data.error.includes('not found')) {
           setIsRegister(true)
           setStep(2)
-          setError('No account found with this number. Enter your details to create one.')
+          setError('no account found with this number. enter your details to create one.')
         } else {
-          setError(data.error)
+          setError(data.error.toLowerCase())
         }
         setLoading(false)
       } else {
         saveAuth(data)
-        // Hold the playful XOXO revolving state briefly for fluid feel
         setTimeout(() => {
           navigate('/dashboard')
         }, 700)
       }
     } catch {
-      setError('Connection failed. Is the backend server running?')
+      setError('connection failed. is the backend server running?')
       setLoading(false)
     }
   }
@@ -80,16 +78,16 @@ export default function Login() {
       background: 'var(--bg-color, #e8e6e1)',
       padding: '40px 16px',
       fontFamily: 'var(--font, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif)',
-      color: '#111827',
+      color: '#1a1a1a',
     }}>
       {/* Brand Header */}
-      <div style={{ textAlign: 'center', marginBottom: 28 }}>
+      <div style={{ textAlign: 'center', marginBottom: 24 }}>
         <h1
           onClick={() => navigate('/')}
           style={{
-            fontSize: 24,
+            fontSize: 25,
             fontWeight: 800,
-            letterSpacing: -0.5,
+            letterSpacing: -0.6,
             margin: '0 0 6px 0',
             color: '#111827',
             display: 'inline-flex',
@@ -100,23 +98,23 @@ export default function Login() {
         >
           <Fa icon="fa-crown" style={{ fontSize: 22, color: 'var(--reyna-accent, #25D366)', marginRight: 8 }} />
           reyna
-          <span style={{ fontSize: 11, color: '#6b7280', fontWeight: 500, marginLeft: 4 }}>v2</span>
+          <span style={{ fontSize: 11, color: '#6b7280', fontWeight: 500, marginLeft: 5 }}>v2</span>
         </h1>
-        <p style={{ fontSize: 13, color: '#4b5563', margin: 0 }}>your group chat's knowledge base</p>
+        <p style={{ fontSize: 13, color: '#6b7280', margin: 0, fontWeight: 400 }}>your group chat's knowledge base</p>
       </div>
 
       <div style={{ width: '100%', maxWidth: 520 }}>
-        {/* Top Toggle Button (Porkbun style) */}
+        {/* Top Toggle Pill Button */}
         <div style={{ marginBottom: 16 }}>
           <button
             type="button"
             onClick={() => toggleMode(!isRegister)}
             style={{
               background: '#ffffff',
-              border: '1px solid #10b981',
-              borderRadius: 6,
-              padding: '8px 18px',
-              fontSize: 14,
+              border: '1.5px solid #a7f3d0',
+              borderRadius: 9999,
+              padding: '7px 18px',
+              fontSize: 13,
               fontWeight: 600,
               color: '#064e3b',
               cursor: 'pointer',
@@ -125,53 +123,53 @@ export default function Login() {
               gap: 6,
               transition: 'all 0.15s ease',
               fontFamily: 'inherit',
-              boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.03)',
             }}
             onMouseEnter={e => {
               e.currentTarget.style.background = '#f0fdf4'
-              e.currentTarget.style.borderColor = '#059669'
+              e.currentTarget.style.borderColor = '#34d399'
             }}
             onMouseLeave={e => {
               e.currentTarget.style.background = '#ffffff'
-              e.currentTarget.style.borderColor = '#10b981'
+              e.currentTarget.style.borderColor = '#a7f3d0'
             }}
           >
-            {isRegister ? 'Log in to an Existing Account' : 'Create a New Account'}
+            {isRegister ? 'log in to an existing account' : 'create a new account'}
           </button>
         </div>
 
-        {/* Main Porkbun-style Card */}
+        {/* Main Card */}
         <div style={{
-          background: '#ffffff',
-          border: '1px solid #d1d5db',
-          borderRadius: 8,
-          padding: '36px 40px',
-          boxShadow: '0 4px 20px rgba(0, 0, 0, 0.05)',
+          background: 'var(--card-bg, #ffffff)',
+          border: '1px solid #e5e7eb',
+          borderRadius: 20,
+          padding: '36px 36px',
+          boxShadow: '0 4px 24px rgba(0, 0, 0, 0.04)',
         }}>
+          {/* Header */}
           <h2 style={{
             fontSize: 26,
-            fontWeight: 700,
+            fontWeight: 800,
             color: '#111827',
             margin: '0 0 24px 0',
-            letterSpacing: '-0.02em',
-            lineHeight: 1.2,
+            letterSpacing: '-0.025em',
+            lineHeight: 1.25,
           }}>
-            {isRegister ? 'Create a New Account' : 'Log in to an Existing Account'}
+            {isRegister ? 'create a new account' : 'log in to an existing account'}
           </h2>
 
           <form onSubmit={step === 1 ? handleContinue : handleSubmit}>
             {/* Field 1: Username / WhatsApp Number */}
-            <div style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 18 }}>
               <label style={{
-                fontSize: 11,
-                fontWeight: 700,
-                color: '#111827',
+                fontSize: 13,
+                fontWeight: 600,
+                color: '#374151',
                 display: 'block',
-                textTransform: 'uppercase',
-                letterSpacing: '0.04em',
-                marginBottom: 6,
+                letterSpacing: '-0.01em',
+                marginBottom: 8,
               }}>
-                USERNAME OR WHATSAPP NUMBER
+                whatsapp number or username
               </label>
 
               <input
@@ -179,38 +177,44 @@ export default function Login() {
                 value={phone}
                 readOnly={step === 2}
                 onChange={e => setPhone(e.target.value)}
-                placeholder="+91 9876543210"
+                placeholder="+91 9876543210 or harsh"
                 style={{
                   width: '100%',
-                  padding: '10px 14px',
-                  border: '1px solid #d1d5db',
-                  borderRadius: 6,
-                  fontSize: 15,
+                  padding: '11px 16px',
+                  border: '1.5px solid #e5e7eb',
+                  borderRadius: 12,
+                  fontSize: 14,
                   outline: 'none',
                   boxSizing: 'border-box',
-                  fontFamily: 'var(--font-mono, monospace)',
-                  background: step === 2 ? '#f3f4f6' : '#ffffff',
-                  color: step === 2 ? '#4b5563' : '#111827',
+                  fontFamily: 'inherit',
+                  background: step === 2 ? '#f9fafb' : '#ffffff',
+                  color: step === 2 ? '#6b7280' : '#111827',
                   cursor: step === 2 ? 'default' : 'text',
-                  transition: 'border-color 0.15s, background 0.15s',
+                  transition: 'all 0.15s ease',
                 }}
                 onFocus={e => {
-                  if (step === 1) e.currentTarget.style.borderColor = '#0d3824'
+                  if (step === 1) {
+                    e.currentTarget.style.borderColor = '#0d3824'
+                    e.currentTarget.style.boxShadow = '0 0 0 3px rgba(13, 56, 36, 0.06)'
+                  }
                 }}
                 onBlur={e => {
-                  if (step === 1) e.currentTarget.style.borderColor = '#d1d5db'
+                  if (step === 1) {
+                    e.currentTarget.style.borderColor = '#e5e7eb'
+                    e.currentTarget.style.boxShadow = 'none'
+                  }
                 }}
               />
 
               {step === 2 && (
-                <div style={{ marginTop: 6 }}>
+                <div style={{ marginTop: 8 }}>
                   <button
                     type="button"
                     onClick={() => { setStep(1); setError(''); }}
                     style={{
                       background: 'none',
                       border: 'none',
-                      color: '#064e3b',
+                      color: '#059669',
                       fontSize: 13,
                       cursor: 'pointer',
                       padding: 0,
@@ -219,7 +223,7 @@ export default function Login() {
                       fontFamily: 'inherit',
                     }}
                   >
-                    Use a different account
+                    use a different account
                   </button>
                 </div>
               )}
@@ -227,7 +231,7 @@ export default function Login() {
 
             {/* Step 2: Smooth Slide-In Password / Details (Porkbun animation) */}
             {step === 2 && (
-              <div className="porkbun-slide-in" style={{ marginBottom: 18 }}>
+              <div className="porkbun-slide-in" style={{ marginBottom: 20 }}>
                 <div style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -238,62 +242,68 @@ export default function Login() {
                   marginBottom: 4,
                   marginTop: 18,
                 }}>
-                  <Fa icon={icons.lock} style={{ fontSize: 13, color: '#111827' }} />
-                  {isRegister ? 'Next, enter your details.' : 'Next, confirm your sign in.'}
+                  <Fa icon={icons.lock} style={{ fontSize: 12, color: '#059669' }} />
+                  {isRegister ? 'next, enter your details.' : 'next, confirm your sign in.'}
                 </div>
-                <p style={{ fontSize: 12, color: '#6b7280', margin: '0 0 16px 0', lineHeight: 1.45 }}>
+                <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 16px 0', lineHeight: 1.45 }}>
                   {isRegister
-                    ? 'Choose your display name to finish setting up your workspace.'
-                    : 'Reyna uses passwordless WhatsApp auth. Leave blank or enter custom PIN, then press Log in.'}
+                    ? 'choose your display name to finish setting up your workspace.'
+                    : 'reyna uses passwordless whatsapp auth. leave blank or enter custom pin, then press log in.'}
                 </p>
 
                 {isRegister && (
-                  <div style={{ marginBottom: 14 }}>
+                  <div style={{ marginBottom: 16 }}>
                     <label style={{
-                      fontSize: 11,
-                      fontWeight: 700,
-                      color: '#111827',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: '#374151',
                       display: 'block',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.04em',
-                      marginBottom: 6,
+                      marginBottom: 8,
+                      letterSpacing: '-0.01em',
                     }}>
-                      FULL NAME
+                      full name
                     </label>
                     <input
                       type="text"
                       value={name}
                       onChange={e => setName(e.target.value)}
-                      placeholder="e.g. Harsh Narayan"
+                      placeholder="e.g. harsh narayan"
                       autoFocus
                       style={{
                         width: '100%',
-                        padding: '10px 14px',
-                        border: '1px solid #d1d5db',
-                        borderRadius: 6,
+                        padding: '11px 16px',
+                        border: '1.5px solid #e5e7eb',
+                        borderRadius: 12,
                         fontSize: 14,
                         outline: 'none',
                         boxSizing: 'border-box',
                         background: '#ffffff',
                         color: '#111827',
+                        fontFamily: 'inherit',
+                        transition: 'all 0.15s ease',
                       }}
-                      onFocus={e => e.currentTarget.style.borderColor = '#0d3824'}
-                      onBlur={e => e.currentTarget.style.borderColor = '#d1d5db'}
+                      onFocus={e => {
+                        e.currentTarget.style.borderColor = '#0d3824'
+                        e.currentTarget.style.boxShadow = '0 0 0 3px rgba(13, 56, 36, 0.06)'
+                      }}
+                      onBlur={e => {
+                        e.currentTarget.style.borderColor = '#e5e7eb'
+                        e.currentTarget.style.boxShadow = 'none'
+                      }}
                     />
                   </div>
                 )}
 
-                <div style={{ marginBottom: 14 }}>
+                <div style={{ marginBottom: 16 }}>
                   <label style={{
-                    fontSize: 11,
-                    fontWeight: 700,
-                    color: '#111827',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: '#374151',
                     display: 'block',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.04em',
-                    marginBottom: 6,
+                    marginBottom: 8,
+                    letterSpacing: '-0.01em',
                   }}>
-                    PASSWORD OR PIN (OPTIONAL)
+                    password or pin (optional)
                   </label>
                   <div style={{ display: 'flex', position: 'relative' }}>
                     <input
@@ -304,26 +314,30 @@ export default function Login() {
                       autoFocus={!isRegister}
                       style={{
                         flex: 1,
-                        padding: '10px 14px',
-                        border: '1px solid #d1d5db',
+                        padding: '11px 16px',
+                        border: '1.5px solid #e5e7eb',
                         borderRight: 'none',
-                        borderRadius: '6px 0 0 6px',
+                        borderRadius: '12px 0 0 12px',
                         fontSize: 14,
                         outline: 'none',
                         boxSizing: 'border-box',
                         background: '#ffffff',
                         color: '#111827',
+                        fontFamily: 'inherit',
+                        transition: 'all 0.15s ease',
                       }}
                       onFocus={e => {
                         e.currentTarget.style.borderColor = '#0d3824'
+                        e.currentTarget.style.boxShadow = '0 0 0 3px rgba(13, 56, 36, 0.06)'
                         if (e.currentTarget.nextElementSibling) {
                           e.currentTarget.nextElementSibling.style.borderColor = '#0d3824'
                         }
                       }}
                       onBlur={e => {
-                        e.currentTarget.style.borderColor = '#d1d5db'
+                        e.currentTarget.style.borderColor = '#e5e7eb'
+                        e.currentTarget.style.boxShadow = 'none'
                         if (e.currentTarget.nextElementSibling) {
-                          e.currentTarget.nextElementSibling.style.borderColor = '#d1d5db'
+                          e.currentTarget.nextElementSibling.style.borderColor = '#e5e7eb'
                         }
                       }}
                     />
@@ -331,18 +345,18 @@ export default function Login() {
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
                       style={{
-                        padding: '0 14px',
+                        padding: '0 16px',
                         background: '#f9fafb',
-                        border: '1px solid #d1d5db',
-                        borderRadius: '0 6px 6px 0',
+                        border: '1.5px solid #e5e7eb',
+                        borderRadius: '0 12px 12px 0',
                         cursor: 'pointer',
-                        color: '#4b5563',
+                        color: '#6b7280',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        transition: 'border-color 0.15s, background 0.15s',
+                        transition: 'all 0.15s ease',
                       }}
-                      title={showPassword ? 'Hide password' : 'Show password'}
+                      title={showPassword ? 'hide password' : 'show password'}
                     >
                       <Fa icon={showPassword ? 'fa-eye-slash' : 'fa-eye'} style={{ fontSize: 13 }} />
                     </button>
@@ -352,35 +366,35 @@ export default function Login() {
             )}
 
             {/* Checkbox: Remember me */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '14px 0 20px 0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '14px 0 22px 0' }}>
               <input
                 type="checkbox"
                 id="rememberMe"
                 checked={rememberMe}
                 onChange={e => setRememberMe(e.target.checked)}
                 style={{
-                  width: 15,
-                  height: 15,
+                  width: 16,
+                  height: 16,
                   accentColor: '#0d3824',
                   cursor: 'pointer',
-                  borderRadius: 3,
+                  borderRadius: 4,
                 }}
               />
-              <label htmlFor="rememberMe" style={{ fontSize: 13, color: '#374151', cursor: 'pointer', userSelect: 'none' }}>
-                Remember me for 30 days <span style={{ color: '#6b7280' }}>(not on a shared or public device)</span>
+              <label htmlFor="rememberMe" style={{ fontSize: 13, color: '#4b5563', cursor: 'pointer', userSelect: 'none' }}>
+                remember me for 30 days <span style={{ color: '#9ca3af' }}>(not on a shared or public device)</span>
               </label>
             </div>
 
             {/* Error Message */}
             {error && (
               <div style={{
-                fontSize: 12,
+                fontSize: 13,
                 color: '#dc2626',
                 background: '#fef2f2',
                 border: '1px solid #fecaca',
-                borderRadius: 6,
+                borderRadius: 10,
                 padding: '10px 14px',
-                marginBottom: 16,
+                marginBottom: 18,
                 display: 'flex',
                 alignItems: 'center',
                 gap: 8,
@@ -390,7 +404,7 @@ export default function Login() {
               </div>
             )}
 
-            {/* Buttons Row (Porkbun style) */}
+            {/* Action Buttons Row */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
               {step === 1 ? (
                 <>
@@ -398,56 +412,68 @@ export default function Login() {
                     type="submit"
                     style={{
                       background: '#0d3824',
-                      border: 'none',
-                      borderRadius: 6,
+                      border: '1.5px solid #0d3824',
+                      borderRadius: 9999,
                       color: '#ffffff',
-                      padding: '10px 24px',
+                      padding: '10px 26px',
                       fontSize: 14,
                       fontWeight: 600,
                       cursor: 'pointer',
-                      transition: 'all 0.15s',
+                      transition: 'all 0.15s ease',
                       fontFamily: 'inherit',
-                      boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
                     }}
-                    onMouseEnter={e => e.currentTarget.style.background = '#15803d'}
-                    onMouseLeave={e => e.currentTarget.style.background = '#0d3824'}
+                    onMouseEnter={e => {
+                      e.currentTarget.style.background = '#14532d'
+                      e.currentTarget.style.borderColor = '#14532d'
+                    }}
+                    onMouseLeave={e => {
+                      e.currentTarget.style.background = '#0d3824'
+                      e.currentTarget.style.borderColor = '#0d3824'
+                    }}
                   >
-                    Continue
+                    continue
                   </button>
-                  <span style={{ fontSize: 13, color: '#6b7280' }}>or</span>
+                  <span style={{ fontSize: 13, color: '#9ca3af' }}>or</span>
                   <button
                     type="button"
                     onClick={() => toggleMode(!isRegister)}
                     style={{
                       background: '#ffffff',
-                      border: '1px solid #d1d5db',
-                      borderRadius: 6,
-                      color: '#111827',
-                      padding: '10px 18px',
+                      border: '1.5px solid #e5e7eb',
+                      borderRadius: 9999,
+                      color: '#374151',
+                      padding: '10px 20px',
                       fontSize: 14,
-                      fontWeight: 500,
+                      fontWeight: 600,
                       cursor: 'pointer',
-                      transition: 'all 0.15s',
+                      transition: 'all 0.15s ease',
                       fontFamily: 'inherit',
                     }}
-                    onMouseEnter={e => e.currentTarget.style.borderColor = '#9ca3af'}
-                    onMouseLeave={e => e.currentTarget.style.borderColor = '#d1d5db'}
+                    onMouseEnter={e => {
+                      e.currentTarget.style.borderColor = '#9ca3af'
+                      e.currentTarget.style.background = '#f9fafb'
+                    }}
+                    onMouseLeave={e => {
+                      e.currentTarget.style.borderColor = '#e5e7eb'
+                      e.currentTarget.style.background = '#ffffff'
+                    }}
                   >
-                    {isRegister ? 'Log in' : 'Create a New Account'}
+                    {isRegister ? 'log in' : 'create a new account'}
                   </button>
                 </>
               ) : (
                 <>
-                  {/* Step 2 button with XOXO & circular revolving animation! */}
+                  {/* Step 2 button with revolving XOXO micro-interaction */}
                   <button
                     type="submit"
                     disabled={loading}
                     style={{
-                      background: loading ? '#e0f2fe' : '#0d3824',
-                      border: loading ? '1px solid #7dd3fc' : 'none',
-                      borderRadius: 6,
-                      color: loading ? '#0369a1' : '#ffffff',
-                      padding: '10px 26px',
+                      background: loading ? '#f0fdf4' : '#0d3824',
+                      border: loading ? '1.5px solid #86efac' : '1.5px solid #0d3824',
+                      borderRadius: 9999,
+                      color: loading ? '#15803d' : '#ffffff',
+                      padding: '10px 28px',
                       fontSize: 14,
                       fontWeight: 700,
                       cursor: loading ? 'not-allowed' : 'pointer',
@@ -456,98 +482,113 @@ export default function Login() {
                       gap: 8,
                       transition: 'all 0.18s ease',
                       fontFamily: 'inherit',
-                      boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
                     }}
                     onMouseEnter={e => {
-                      if (!loading) e.currentTarget.style.background = '#15803d'
+                      if (!loading) {
+                        e.currentTarget.style.background = '#14532d'
+                        e.currentTarget.style.borderColor = '#14532d'
+                      }
                     }}
                     onMouseLeave={e => {
-                      if (!loading) e.currentTarget.style.background = '#0d3824'
+                      if (!loading) {
+                        e.currentTarget.style.background = '#0d3824'
+                        e.currentTarget.style.borderColor = '#0d3824'
+                      }
                     }}
                   >
                     {loading ? (
                       <>
-                        <span className="porkbun-spinner" style={{ borderTopColor: '#0369a1' }} />
-                        <span>XOXO</span>
+                        <span className="porkbun-spinner" style={{ borderTopColor: '#15803d' }} />
+                        <span>xoxo</span>
                       </>
                     ) : (
-                      isRegister ? 'Create Account' : 'Log in'
+                      isRegister ? 'create account' : 'log in'
                     )}
                   </button>
-                  <span style={{ fontSize: 13, color: '#6b7280' }}>or</span>
+                  <span style={{ fontSize: 13, color: '#9ca3af' }}>or</span>
                   <button
                     type="button"
                     onClick={() => toggleMode(!isRegister)}
                     style={{
                       background: '#ffffff',
-                      border: '1px solid #d1d5db',
-                      borderRadius: 6,
-                      color: '#111827',
-                      padding: '10px 18px',
+                      border: '1.5px solid #e5e7eb',
+                      borderRadius: 9999,
+                      color: '#374151',
+                      padding: '10px 20px',
                       fontSize: 14,
-                      fontWeight: 500,
+                      fontWeight: 600,
                       cursor: 'pointer',
-                      transition: 'all 0.15s',
+                      transition: 'all 0.15s ease',
                       fontFamily: 'inherit',
                     }}
-                    onMouseEnter={e => e.currentTarget.style.borderColor = '#9ca3af'}
-                    onMouseLeave={e => e.currentTarget.style.borderColor = '#d1d5db'}
+                    onMouseEnter={e => {
+                      e.currentTarget.style.borderColor = '#9ca3af'
+                      e.currentTarget.style.background = '#f9fafb'
+                    }}
+                    onMouseLeave={e => {
+                      e.currentTarget.style.borderColor = '#e5e7eb'
+                      e.currentTarget.style.background = '#ffffff'
+                    }}
                   >
-                    {isRegister ? 'Log in to an Existing Account' : 'Create a New Account'}
+                    {isRegister ? 'log in to an existing account' : 'create a new account'}
                   </button>
                 </>
               )}
             </div>
 
             {/* Sub-links */}
-            <div style={{ marginTop: 18 }}>
+            <div style={{ marginTop: 20 }}>
               <span
-                onClick={() => alert('To reset or recover credentials, authenticate with your linked WhatsApp number.')}
+                onClick={() => alert('to reset or recover credentials, authenticate with your linked whatsapp number.')}
                 style={{
                   fontSize: 12,
-                  color: '#4b5563',
+                  color: '#6b7280',
                   textDecoration: 'underline',
                   cursor: 'pointer',
                 }}
               >
-                Forgotten password, 2FA, or security key.
+                forgotten password, 2fa, or security key.
               </span>
             </div>
           </form>
 
-          {/* Legal / Policy Box (Porkbun style) */}
+          {/* Legal / Policy Box */}
           <div style={{
             background: '#fafaf9',
-            border: '1px solid #e5e7eb',
-            borderRadius: 6,
-            padding: '16px 18px',
+            border: '1px solid #f0eee9',
+            borderRadius: 14,
+            padding: '16px 20px',
             marginTop: 26,
             fontSize: 12,
-            color: '#4b5563',
+            color: '#6b7280',
             lineHeight: 1.5,
           }}>
-            <div style={{ fontWeight: 700, color: '#111827', marginBottom: 8 }}>
-              By continuing you agree to the following:
+            <div style={{ fontWeight: 600, color: '#374151', marginBottom: 6 }}>
+              by continuing you agree to the following:
             </div>
-            <p style={{ margin: '0 0 8px 0' }}>
-              I acknowledge that Reyna only captures, stages, and indexes files shared in authorized WhatsApp groups, in accordance with the Product Terms of Service and Privacy Policy.
+            <p style={{ margin: '0 0 8px 0', lineHeight: 1.5 }}>
+              i acknowledge that reyna only captures, stages, and indexes files shared in authorized whatsapp groups, in accordance with the product terms of service and privacy policy.
             </p>
-            <p style={{ margin: 0, color: '#6b7280' }}>
-              The lawyers made us say all of that ☝️
+            <p style={{ margin: 0, color: '#9ca3af' }}>
+              the lawyers made us say all of that ☝️
             </p>
           </div>
         </div>
 
-        {/* Anti-phishing advisory banner with left accent bar (Porkbun style) */}
+        {/* Anti-phishing advisory banner */}
         <div style={{
-          borderLeft: '3px solid #10b981',
-          paddingLeft: 14,
-          marginTop: 24,
+          background: 'rgba(255, 255, 255, 0.7)',
+          border: '1px solid #e5e7eb',
+          borderLeft: '4px solid #10b981',
+          borderRadius: 14,
+          padding: '14px 18px',
+          marginTop: 20,
           fontSize: 12,
-          color: '#374151',
-          lineHeight: 1.5,
+          color: '#4b5563',
+          lineHeight: 1.55,
         }}>
-          Make sure you're signing in on <strong>reyna.local</strong> or <strong>localhost</strong>. We only authenticate through your registered WhatsApp session and will never ask for third-party passwords.
+          make sure you're signing in on <strong>reyna.local</strong> or <strong>localhost</strong>. we only authenticate through your registered whatsapp session and will never ask for third-party passwords.
         </div>
       </div>
     </div>
