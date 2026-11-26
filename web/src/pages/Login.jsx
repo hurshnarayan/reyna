@@ -102,22 +102,6 @@ export default function Login() {
         <rect width="100%" height="100%" filter="url(#reyna-grain)" />
       </svg>
 
-      {/* Center Ambient Spotlight (soft ambient halo behind form) */}
-      <div
-        style={{
-          position: 'fixed',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          width: 600,
-          height: 660,
-          background: 'radial-gradient(ellipse at center, rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0.14) 55%, transparent 80%)',
-          filter: 'blur(35px)',
-          pointerEvents: 'none',
-          zIndex: 0,
-        }}
-      />
-
       {/* Canvas Edge Vignette (gentle framing, dialed down for subtle depth) */}
       <div
         style={{
@@ -189,6 +173,22 @@ export default function Login() {
           pointerEvents: 'none',
           zIndex: 0,
           userSelect: 'none',
+        }}
+      />
+
+      {/* Subtle Center Spotlight (behind the grid lines, warm incandescent stage illumination fading outward) */}
+      <div
+        style={{
+          position: 'fixed',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          width: 600,
+          height: 660,
+          background: 'radial-gradient(ellipse at center, rgba(255, 250, 238, 0.48) 0%, rgba(255, 248, 232, 0.22) 48%, rgba(254, 244, 224, 0.06) 72%, transparent 88%)',
+          filter: 'blur(30px)',
+          pointerEvents: 'none',
+          zIndex: 0,
         }}
       />
 
