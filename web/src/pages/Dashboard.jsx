@@ -180,7 +180,7 @@ export default function Dashboard() {
   const [showStagingModal, setShowStagingModal] = useState(false)
   const [committing, setCommitting] = useState(false)
   const [llmStatus, setLlmStatus] = useState(null)
-  const user = getUser()
+  const [user, setUser] = useState(() => getUser())
   const navigate = useNavigate()
 
   const refreshStatus = () => api.googleStatus().then(setDriveStatus).catch(() => {})
@@ -189,6 +189,12 @@ export default function Dashboard() {
   const refreshStaged = () => api.files('', 200).then(files => setStagedFiles((files || []).filter(f => f.status === 'staged'))).catch(() => {})
 
   useEffect(() => {
+    api.me().then(me => {
+      if (me && !me.error) {
+        localStorage.setItem('reyna_user', JSON.stringify(me))
+        setUser(me)
+      }
+    }).catch(() => {})
     notify.showLoader()
     const fetchData = () => {
       api.dashboard().then(d => { setData(d); setLoading(false); notify.hideLoader() }).catch(() => { setLoading(false); notify.hideLoader() })
@@ -865,7 +871,7 @@ export default function Dashboard() {
                         zIndex: 1,
                       }}>
                         {mode === 'auto'
-                          ? 'choose how reyna handles files shared in this group'
+                          ? 'every file shared in this group is staged automatically.'
                           : 'only files that get a pin reaction are staged. everything else is ignored.'}
                       </div>
                     )}

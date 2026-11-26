@@ -20,7 +20,7 @@ function save(k, v) { try { localStorage.setItem('reyna_' + k, JSON.stringify(v)
 export default function Layout() {
   const navigate = useNavigate()
   const location = useLocation()
-  const user = getUser()
+  const [user, setUser] = useState(() => getUser())
 
   const [showSettings, setShowSettings] = useState(false)
   const [musicOn, setMusicOn] = useState(false)
@@ -49,7 +49,18 @@ export default function Layout() {
     return () => { window.removeEventListener('offline', goOffline); window.removeEventListener('online', goOnline) }
   }, [])
 
-  useEffect(() => { if (!isLoggedIn()) navigate('/login') }, [])
+  useEffect(() => {
+    if (!isLoggedIn()) {
+      navigate('/login')
+    } else {
+      api.me().then(me => {
+        if (me && !me.error) {
+          save('user', me)
+          setUser(me)
+        }
+      }).catch(() => {})
+    }
+  }, [])
   useEffect(() => { document.body.classList.toggle('reyna-dark', darkMode); save('darkMode', darkMode) }, [darkMode])
   useEffect(() => { document.querySelectorAll('.reyna-blob').forEach(el => { el.style.opacity = blobsOn ? '0.1' : '0' }); save('blobsOn', blobsOn) }, [blobsOn])
   useEffect(() => { document.body.classList.toggle('reyna-no-btn-anim', !btnAnimOn); save('btnAnimOn', btnAnimOn) }, [btnAnimOn])
