@@ -232,6 +232,21 @@ export default function Login() {
         zIndex: 2,
         padding: '36px 32px',
       }}>
+        {/* Large Subtle Warm Spotlight Blob behind heading & username label */}
+        <div
+          style={{
+            position: 'absolute',
+            top: 10,
+            left: 10,
+            width: 420,
+            height: 250,
+            background: 'radial-gradient(ellipse 65% 65% at 42% 40%, rgba(254, 225, 95, 0.18) 0%, rgba(253, 216, 53, 0.08) 45%, rgba(254, 243, 199, 0.02) 70%, transparent 92%)',
+            filter: 'blur(40px)',
+            pointerEvents: 'none',
+            zIndex: -1,
+          }}
+        />
+
         {/* Heading (wrapped across 2 lines with balanced size and leading) */}
         <h2 style={{
           fontSize: 32,
@@ -247,24 +262,7 @@ export default function Login() {
             </>
           ) : (
             <>
-              <span style={{ position: 'relative', display: 'inline-block' }}>
-                {/* Subtle targeted spotlight blob positioned exactly behind "log in" words */}
-                <span
-                  style={{
-                    position: 'absolute',
-                    top: '50%',
-                    left: '50%',
-                    transform: 'translate(-50%, -50%)',
-                    width: 135,
-                    height: 80,
-                    background: 'radial-gradient(ellipse at center, rgba(254, 225, 95, 0.22) 0%, rgba(253, 216, 53, 0.10) 48%, transparent 85%)',
-                    filter: 'blur(18px)',
-                    pointerEvents: 'none',
-                    zIndex: -1,
-                  }}
-                />
-                log in
-              </span> to an existing<br />account
+              log in to an existing<br />account
             </>
           )}
         </h2>
