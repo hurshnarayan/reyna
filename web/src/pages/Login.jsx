@@ -314,18 +314,18 @@ export default function Login() {
                 color: step === 2 ? '#6b7280' : '#111827',
                 cursor: step === 2 ? 'default' : 'text',
                 transition: 'all 0.15s ease',
-                boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.03), 0 1px 2px rgba(0,0,0,0.02)',
+                boxShadow: '0 2px 8px -1px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.03)',
               }}
               onFocus={e => {
                 if (step === 1) {
                   e.currentTarget.style.borderColor = '#0d3824'
-                  e.currentTarget.style.boxShadow = '0 0 0 3px rgba(13, 56, 36, 0.08)'
+                  e.currentTarget.style.boxShadow = '0 3px 12px -2px rgba(13, 56, 36, 0.12), 0 0 0 3px rgba(13, 56, 36, 0.08)'
                 }
               }}
               onBlur={e => {
                 if (step === 1) {
                   e.currentTarget.style.borderColor = '#d1d5db'
-                  e.currentTarget.style.boxShadow = 'inset 0 1px 2px rgba(0,0,0,0.03), 0 1px 2px rgba(0,0,0,0.02)'
+                  e.currentTarget.style.boxShadow = '0 2px 8px -1px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.03)'
                 }
               }}
             />
@@ -406,15 +406,15 @@ export default function Login() {
                       color: '#111827',
                       fontFamily: 'inherit',
                       transition: 'all 0.15s ease',
-                      boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.03), 0 1px 2px rgba(0,0,0,0.02)',
+                      boxShadow: '0 2px 8px -1px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.03)',
                     }}
                     onFocus={e => {
                       e.currentTarget.style.borderColor = '#0d3824'
-                      e.currentTarget.style.boxShadow = '0 0 0 3px rgba(13, 56, 36, 0.08)'
+                      e.currentTarget.style.boxShadow = '0 3px 12px -2px rgba(13, 56, 36, 0.12), 0 0 0 3px rgba(13, 56, 36, 0.08)'
                     }}
                     onBlur={e => {
                       e.currentTarget.style.borderColor = '#d1d5db'
-                      e.currentTarget.style.boxShadow = 'inset 0 1px 2px rgba(0,0,0,0.03), 0 1px 2px rgba(0,0,0,0.02)'
+                      e.currentTarget.style.boxShadow = '0 2px 8px -1px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.03)'
                     }}
                   />
                 </div>
@@ -432,7 +432,13 @@ export default function Login() {
                 }}>
                   password or pin (optional)
                 </label>
-                <div style={{ display: 'flex', position: 'relative' }}>
+                <div style={{
+                  display: 'flex',
+                  position: 'relative',
+                  borderRadius: 9999,
+                  boxShadow: '0 2px 8px -1px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.03)',
+                  transition: 'box-shadow 0.15s ease',
+                }}>
                   <input
                     type={showPassword ? 'text' : 'password'}
                     value={password}
@@ -452,18 +458,21 @@ export default function Login() {
                       color: '#111827',
                       fontFamily: 'inherit',
                       transition: 'all 0.15s ease',
-                      boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.03)',
                     }}
                     onFocus={e => {
                       e.currentTarget.style.borderColor = '#0d3824'
-                      e.currentTarget.style.boxShadow = '0 0 0 3px rgba(13, 56, 36, 0.08)'
+                      if (e.currentTarget.parentElement) {
+                        e.currentTarget.parentElement.style.boxShadow = '0 3px 12px -2px rgba(13, 56, 36, 0.12), 0 0 0 3px rgba(13, 56, 36, 0.08)'
+                      }
                       if (e.currentTarget.nextElementSibling) {
                         e.currentTarget.nextElementSibling.style.borderColor = '#0d3824'
                       }
                     }}
                     onBlur={e => {
                       e.currentTarget.style.borderColor = '#d1d5db'
-                      e.currentTarget.style.boxShadow = 'inset 0 1px 2px rgba(0,0,0,0.03)'
+                      if (e.currentTarget.parentElement) {
+                        e.currentTarget.parentElement.style.boxShadow = '0 2px 8px -1px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.03)'
+                      }
                       if (e.currentTarget.nextElementSibling) {
                         e.currentTarget.nextElementSibling.style.borderColor = '#d1d5db'
                       }
@@ -506,6 +515,7 @@ export default function Login() {
                 accentColor: '#0d3824',
                 cursor: 'pointer',
                 borderRadius: 4,
+                boxShadow: '0 1px 3px rgba(0, 0, 0, 0.08)',
               }}
             />
             <label htmlFor="rememberMe" style={{ fontSize: 13, color: '#374151', cursor: 'pointer', userSelect: 'none' }}>
@@ -526,6 +536,7 @@ export default function Login() {
               display: 'flex',
               alignItems: 'center',
               gap: 8,
+              boxShadow: '0 2px 6px rgba(220, 38, 38, 0.08)',
             }}>
               <Fa icon={icons.warning} style={{ fontSize: 12 }} />
               <span>{error}</span>
@@ -549,15 +560,17 @@ export default function Login() {
                     cursor: 'pointer',
                     transition: 'all 0.15s ease',
                     fontFamily: 'inherit',
-                    boxShadow: '0 2px 6px rgba(13, 56, 36, 0.2)',
+                    boxShadow: '0 3px 10px -1px rgba(13, 56, 36, 0.25), 0 1px 3px rgba(13, 56, 36, 0.12)',
                   }}
                   onMouseEnter={e => {
                     e.currentTarget.style.background = '#14532d'
                     e.currentTarget.style.borderColor = '#14532d'
+                    e.currentTarget.style.boxShadow = '0 5px 14px -2px rgba(13, 56, 36, 0.32), 0 2px 4px rgba(13, 56, 36, 0.15)'
                   }}
                   onMouseLeave={e => {
                     e.currentTarget.style.background = '#0d3824'
                     e.currentTarget.style.borderColor = '#0d3824'
+                    e.currentTarget.style.boxShadow = '0 3px 10px -1px rgba(13, 56, 36, 0.25), 0 1px 3px rgba(13, 56, 36, 0.12)'
                   }}
                 >
                   continue
@@ -577,15 +590,17 @@ export default function Login() {
                     cursor: 'pointer',
                     transition: 'all 0.15s ease',
                     fontFamily: 'inherit',
-                    boxShadow: '0 1px 2px rgba(0,0,0,0.02)',
+                    boxShadow: '0 2px 6px -1px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.03)',
                   }}
                   onMouseEnter={e => {
                     e.currentTarget.style.borderColor = '#9ca3af'
                     e.currentTarget.style.background = '#f9fafb'
+                    e.currentTarget.style.boxShadow = '0 4px 10px -2px rgba(0, 0, 0, 0.08), 0 1px 4px rgba(0, 0, 0, 0.04)'
                   }}
                   onMouseLeave={e => {
                     e.currentTarget.style.borderColor = '#d1d5db'
                     e.currentTarget.style.background = '#ffffff'
+                    e.currentTarget.style.boxShadow = '0 2px 6px -1px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.03)'
                   }}
                 >
                   {isRegister ? 'log in' : 'create a new account'}
@@ -611,18 +626,20 @@ export default function Login() {
                     gap: 8,
                     transition: 'all 0.18s ease',
                     fontFamily: 'inherit',
-                    boxShadow: '0 2px 6px rgba(13, 56, 36, 0.2)',
+                    boxShadow: '0 3px 10px -1px rgba(13, 56, 36, 0.25), 0 1px 3px rgba(13, 56, 36, 0.12)',
                   }}
                   onMouseEnter={e => {
                     if (!loading) {
                       e.currentTarget.style.background = '#14532d'
                       e.currentTarget.style.borderColor = '#14532d'
+                      e.currentTarget.style.boxShadow = '0 5px 14px -2px rgba(13, 56, 36, 0.32), 0 2px 4px rgba(13, 56, 36, 0.15)'
                     }
                   }}
                   onMouseLeave={e => {
                     if (!loading) {
                       e.currentTarget.style.background = '#0d3824'
                       e.currentTarget.style.borderColor = '#0d3824'
+                      e.currentTarget.style.boxShadow = '0 3px 10px -1px rgba(13, 56, 36, 0.25), 0 1px 3px rgba(13, 56, 36, 0.12)'
                     }
                   }}
                 >
@@ -641,7 +658,7 @@ export default function Login() {
                   onClick={() => toggleMode(!isRegister)}
                   style={{
                     background: '#ffffff',
-                    border: '1.5px solid #e5e7eb',
+                    border: '1.5px solid #d1d5db',
                     borderRadius: 9999,
                     color: '#111827',
                     padding: '11px 24px',
@@ -650,18 +667,20 @@ export default function Login() {
                     cursor: 'pointer',
                     transition: 'all 0.15s ease',
                     fontFamily: 'inherit',
-                    boxShadow: '0 1px 2px rgba(0,0,0,0.02)',
+                    boxShadow: '0 2px 6px -1px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.03)',
                   }}
                   onMouseEnter={e => {
                     e.currentTarget.style.borderColor = '#9ca3af'
                     e.currentTarget.style.background = '#f9fafb'
+                    e.currentTarget.style.boxShadow = '0 4px 10px -2px rgba(0, 0, 0, 0.08), 0 1px 4px rgba(0, 0, 0, 0.04)'
                   }}
                   onMouseLeave={e => {
-                    e.currentTarget.style.borderColor = '#e5e7eb'
+                    e.currentTarget.style.borderColor = '#d1d5db'
                     e.currentTarget.style.background = '#ffffff'
+                    e.currentTarget.style.boxShadow = '0 2px 6px -1px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.03)'
                   }}
                 >
-                  {isRegister ? 'log in to an existing account' : 'create a new account'}
+                  {isRegister ? 'log in' : 'create a new account'}
                 </button>
               </>
             )}
