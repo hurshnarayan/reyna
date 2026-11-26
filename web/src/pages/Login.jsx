@@ -239,12 +239,12 @@ export default function Login() {
                   marginTop: 18,
                 }}>
                   <Fa icon={icons.lock} style={{ fontSize: 13, color: '#111827' }} />
-                  {isRegister ? 'Next, enter your details.' : 'Next, enter your password.'}
+                  {isRegister ? 'Next, enter your details.' : 'Next, confirm your sign in.'}
                 </div>
                 <p style={{ fontSize: 12, color: '#6b7280', margin: '0 0 16px 0', lineHeight: 1.45 }}>
                   {isRegister
-                    ? 'Choose your display name and credentials to finish setting up your workspace.'
-                    : 'If this account also uses two-factor or a security key, we\'ll ask for that after.'}
+                    ? 'Choose your display name to finish setting up your workspace.'
+                    : 'Reyna uses passwordless WhatsApp auth. Leave blank or enter custom PIN, then press Log in.'}
                 </p>
 
                 {isRegister && (
@@ -293,14 +293,14 @@ export default function Login() {
                     letterSpacing: '0.04em',
                     marginBottom: 6,
                   }}>
-                    PASSWORD
+                    PASSWORD OR PIN (OPTIONAL)
                   </label>
                   <div style={{ display: 'flex', position: 'relative' }}>
                     <input
                       type={showPassword ? 'text' : 'password'}
                       value={password}
                       onChange={e => setPassword(e.target.value)}
-                      placeholder="••••••••••••"
+                      placeholder="leave blank or enter password"
                       autoFocus={!isRegister}
                       style={{
                         flex: 1,
