@@ -621,24 +621,24 @@ export default function Login() {
           </div>
         </form>
 
-        {/* Legal / Policy Disclaimer */}
+        {/* Legal / Policy Disclaimer (seamless text, no box div) */}
         <div style={{
-          background: 'rgba(255, 255, 255, 0.45)',
-          border: '1px solid rgba(0, 0, 0, 0.06)',
-          borderRadius: 14,
-          padding: '16px 20px',
-          marginTop: 28,
+          borderTop: '1px solid #d1d5db',
+          paddingTop: 22,
+          marginTop: 26,
           fontSize: 12,
           color: '#6b7280',
-          lineHeight: 1.5,
+          lineHeight: 1.55,
         }}>
-          <div style={{ fontWeight: 600, color: '#374151', marginBottom: 6 }}>
+          <div style={{ fontWeight: 600, color: '#111827', marginBottom: 6 }}>
             by continuing you agree to the following:
           </div>
-          <p style={{ margin: '0 0 8px 0', lineHeight: 1.5 }}>
-            i acknowledge that reyna only captures, stages, and indexes files shared in authorized whatsapp groups, in accordance with the product terms of service and privacy policy.
+          <p style={{ margin: '0 0 8px 0', lineHeight: 1.55 }}>
+            i acknowledge that reyna only captures, stages, and indexes files shared in authorized whatsapp groups, in accordance with the{' '}
+            <span style={{ textDecoration: 'underline', color: '#374151', cursor: 'pointer' }}>product terms of service</span> and{' '}
+            <span style={{ textDecoration: 'underline', color: '#374151', cursor: 'pointer' }}>privacy policy</span>.
           </p>
-          <p style={{ margin: 0, color: '#9ca3af' }}>
+          <p style={{ margin: 0, color: '#6b7280' }}>
             the lawyers made us say all of that ☝️
           </p>
         </div>
