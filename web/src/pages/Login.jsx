@@ -102,6 +102,29 @@ export default function Login() {
         <rect width="100%" height="100%" filter="url(#reyna-grain)" />
       </svg>
 
+      {/* Stripe-style Faint Dotted/Dashed Vertical Guidelines */}
+      <div
+        style={{
+          position: 'fixed',
+          top: 0,
+          bottom: 0,
+          left: 0,
+          right: 0,
+          pointerEvents: 'none',
+          zIndex: 0,
+          userSelect: 'none',
+        }}
+      >
+        {/* Form boundary guidelines (framing the login column path) */}
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 205px)', borderLeft: '1px dashed rgba(0, 0, 0, 0.06)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 205px)', borderLeft: '1px dashed rgba(0, 0, 0, 0.06)' }} />
+        {/* Flanking proportional column guidelines */}
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 365px)', borderLeft: '1px dashed rgba(0, 0, 0, 0.04)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 365px)', borderLeft: '1px dashed rgba(0, 0, 0, 0.04)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 525px)', borderLeft: '1px dashed rgba(0, 0, 0, 0.025)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 525px)', borderLeft: '1px dashed rgba(0, 0, 0, 0.025)' }} />
+      </div>
+
       {/* Ambient Green Glowing Orbs */}
       <div style={{
         position: 'fixed',
