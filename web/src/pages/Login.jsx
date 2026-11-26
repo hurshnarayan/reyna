@@ -232,16 +232,16 @@ export default function Login() {
         zIndex: 2,
         padding: '36px 32px',
       }}>
-        {/* Large Subtle Warm Spotlight Blob behind heading & username label */}
+        {/* Large Subtle Warm Spotlight Blob with origin centered behind "log in" */}
         <div
           style={{
             position: 'absolute',
             top: 10,
             left: 10,
             width: 420,
-            height: 250,
-            background: 'radial-gradient(ellipse 65% 65% at 42% 40%, rgba(254, 225, 95, 0.18) 0%, rgba(253, 216, 53, 0.08) 45%, rgba(254, 243, 199, 0.02) 70%, transparent 92%)',
-            filter: 'blur(40px)',
+            height: 270,
+            background: 'radial-gradient(ellipse 340px 220px at 72px 52px, rgba(254, 225, 95, 0.20) 0%, rgba(253, 216, 53, 0.09) 42%, rgba(254, 243, 199, 0.02) 70%, transparent 92%)',
+            filter: 'blur(35px)',
             pointerEvents: 'none',
             zIndex: -1,
           }}
