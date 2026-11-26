@@ -176,17 +176,17 @@ export default function Login() {
         }}
       />
 
-      {/* Subtle Center Spotlight (behind the grid lines, warm incandescent stage illumination fading outward) */}
+      {/* Warm Yellowish Spotlight (behind grid lines in center of form, fading outwards) */}
       <div
         style={{
           position: 'fixed',
           top: '50%',
           left: '50%',
           transform: 'translate(-50%, -50%)',
-          width: 600,
-          height: 660,
-          background: 'radial-gradient(ellipse at center, rgba(255, 250, 238, 0.48) 0%, rgba(255, 248, 232, 0.22) 48%, rgba(254, 244, 224, 0.06) 72%, transparent 88%)',
-          filter: 'blur(30px)',
+          width: 620,
+          height: 680,
+          background: 'radial-gradient(ellipse 65% 68% at center, rgba(254, 225, 95, 0.35) 0%, rgba(253, 216, 53, 0.18) 45%, rgba(254, 243, 199, 0.06) 72%, transparent 90%)',
+          filter: 'blur(45px)',
           pointerEvents: 'none',
           zIndex: 0,
         }}
