@@ -102,6 +102,36 @@ export default function Login() {
         <rect width="100%" height="100%" filter="url(#reyna-grain)" />
       </svg>
 
+      {/* Canvas Edge Vignette (focuses attention inward to center) */}
+      <div
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '100vw',
+          height: '100vh',
+          pointerEvents: 'none',
+          zIndex: 0,
+          background: 'radial-gradient(ellipse 72% 72% at 50% 50%, transparent 42%, rgba(0, 0, 0, 0.035) 72%, rgba(0, 0, 0, 0.085) 100%)',
+        }}
+      />
+
+      {/* Center Ambient Spotlight (pops form off the canvas) */}
+      <div
+        style={{
+          position: 'fixed',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          width: 640,
+          height: 680,
+          background: 'radial-gradient(ellipse at center, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0.18) 45%, transparent 75%)',
+          filter: 'blur(35px)',
+          pointerEvents: 'none',
+          zIndex: 0,
+        }}
+      />
+
       {/* Ambient Green Glowing Orbs */}
       <div style={{
         position: 'fixed',
