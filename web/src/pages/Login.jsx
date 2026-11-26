@@ -75,79 +75,96 @@ export default function Login() {
       flexDirection: 'column',
       alignItems: 'center',
       justifyContent: 'center',
-      background: 'var(--bg-color, #fbfaf8)',
+      background: 'var(--bg-color, #e8e6e1)',
       padding: '48px 20px',
       fontFamily: 'var(--font, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif)',
       color: '#1a1a1a',
       position: 'relative',
       overflow: 'hidden',
     }}>
-      {/* Green Ambient Blob Background */}
+      {/* Subtle Aging Paper Grain Filter Overlay */}
+      <svg
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '100%',
+          pointerEvents: 'none',
+          opacity: 0.04,
+          zIndex: 1,
+        }}
+      >
+        <filter id="reyna-grain">
+          <feTurbulence type="fractalNoise" baseFrequency="0.75" numOctaves="3" stitchTiles="stitch" />
+          <feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" />
+        </filter>
+        <rect width="100%" height="100%" filter="url(#reyna-grain)" />
+      </svg>
+
+      {/* Ambient Green Glowing Orbs */}
       <div style={{
         position: 'fixed',
-        top: '-80px',
+        top: '6%',
         right: '12%',
-        width: 500,
-        height: 500,
-        background: '#25D366',
-        borderRadius: '50%',
-        filter: 'blur(140px)',
-        opacity: 0.18,
+        width: 520,
+        height: 520,
+        background: 'radial-gradient(circle, rgba(37, 211, 102, 0.24) 0%, rgba(37, 211, 102, 0) 68%)',
+        filter: 'blur(35px)',
         pointerEvents: 'none',
         zIndex: 0,
       }} />
       <div style={{
         position: 'fixed',
-        bottom: '-100px',
-        left: '8%',
+        bottom: '8%',
+        left: '6%',
         width: 440,
         height: 440,
-        background: 'rgba(37, 211, 102, 0.08)',
-        borderRadius: '50%',
-        filter: 'blur(130px)',
+        background: 'radial-gradient(circle, rgba(37, 211, 102, 0.12) 0%, rgba(37, 211, 102, 0) 68%)',
+        filter: 'blur(45px)',
         pointerEvents: 'none',
         zIndex: 0,
       }} />
 
-      {/* Two Scratches: Bottom Left and Top Right */}
-      {/* 1. Bottom Left Scratch */}
+      {/* Paper Ripped Cat Scratches (matching mockup with torn edge depth) */}
+      {/* 1. Bottom Left Paper Ripped Scratch */}
       <img
-        src="/cat-scratches.png"
+        src="/scratch-bl.png"
         alt=""
         style={{
           position: 'fixed',
           bottom: '12%',
-          left: '3%',
-          width: 340,
-          opacity: 0.22,
-          transform: 'rotate(52deg)',
+          left: '2%',
+          width: 380,
+          opacity: 0.82,
           pointerEvents: 'none',
           zIndex: 0,
           userSelect: 'none',
+          filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.06))',
         }}
       />
 
-      {/* 2. Top Right Scratch */}
+      {/* 2. Top Right Paper Ripped Scratch */}
       <img
-        src="/cat-scratches.png"
+        src="/scratch-tr.png"
         alt=""
         style={{
           position: 'fixed',
           top: '12%',
-          right: '5%',
-          width: 340,
-          opacity: 0.22,
-          transform: 'rotate(52deg)',
+          right: '3%',
+          width: 390,
+          opacity: 0.85,
           pointerEvents: 'none',
           zIndex: 0,
           userSelect: 'none',
+          filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.06))',
         }}
       />
 
-      {/* Main Form Area */}
-      <div style={{ width: '100%', maxWidth: 440, position: 'relative', zIndex: 2 }}>
+      {/* Main Integrated Form Area (aligned and visually balanced) */}
+      <div style={{ width: '100%', maxWidth: 410, position: 'relative', zIndex: 2 }}>
         {/* Brand Header */}
-        <div style={{ marginBottom: 28 }}>
+        <div style={{ marginBottom: 24 }}>
           <div
             onClick={() => navigate('/')}
             style={{
@@ -161,7 +178,7 @@ export default function Login() {
             <Fa
               icon="fa-crown"
               style={{
-                fontSize: 18,
+                fontSize: 17,
                 color: 'var(--reyna-accent, #25D366)',
                 marginRight: 2,
               }}
@@ -173,7 +190,7 @@ export default function Login() {
               fontSize: 10,
               fontWeight: 700,
               color: '#059669',
-              background: '#ecfdf5',
+              background: '#dcfce7',
               padding: '2px 7px',
               borderRadius: 9999,
               marginLeft: 2,
@@ -186,13 +203,13 @@ export default function Login() {
           </p>
         </div>
 
-        {/* Heading (wrapped across 2 lines like reference image) */}
+        {/* Heading (wrapped across 2 lines with balanced size and leading) */}
         <h2 style={{
-          fontSize: 34,
+          fontSize: 32,
           fontWeight: 800,
           color: '#111827',
-          margin: '0 0 24px 0',
-          letterSpacing: '-0.035em',
+          margin: '0 0 20px 0',
+          letterSpacing: '-0.03em',
           lineHeight: 1.15,
         }}>
           {isRegister ? (
@@ -206,10 +223,10 @@ export default function Login() {
           )}
         </h2>
 
-        {/* Form */}
+        {/* Form Fields */}
         <form onSubmit={step === 1 ? handleContinue : handleSubmit}>
           {/* Field 1: username or whatsapp number */}
-          <div style={{ marginBottom: 18 }}>
+          <div style={{ marginBottom: 16 }}>
             <label style={{
               fontSize: 13,
               fontWeight: 600,
@@ -217,6 +234,7 @@ export default function Login() {
               display: 'block',
               marginBottom: 8,
               letterSpacing: '-0.01em',
+              paddingLeft: 2,
             }}>
               username or whatsapp number
             </label>
@@ -229,18 +247,18 @@ export default function Login() {
               placeholder="harsh or +91 9876543210"
               style={{
                 width: '100%',
-                padding: '13px 24px',
-                border: '1.5px solid #e5e7eb',
+                padding: '13px 22px',
+                border: '1.5px solid #d1d5db',
                 borderRadius: 9999,
                 fontSize: 14,
                 outline: 'none',
                 boxSizing: 'border-box',
                 fontFamily: 'inherit',
-                background: step === 2 ? '#f3f4f6' : '#ffffff',
+                background: step === 2 ? '#f3f4f6' : 'rgba(255, 255, 255, 0.94)',
                 color: step === 2 ? '#6b7280' : '#111827',
                 cursor: step === 2 ? 'default' : 'text',
                 transition: 'all 0.15s ease',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+                boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.03), 0 1px 2px rgba(0,0,0,0.02)',
               }}
               onFocus={e => {
                 if (step === 1) {
@@ -250,14 +268,14 @@ export default function Login() {
               }}
               onBlur={e => {
                 if (step === 1) {
-                  e.currentTarget.style.borderColor = '#e5e7eb'
-                  e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.02)'
+                  e.currentTarget.style.borderColor = '#d1d5db'
+                  e.currentTarget.style.boxShadow = 'inset 0 1px 2px rgba(0,0,0,0.03), 0 1px 2px rgba(0,0,0,0.02)'
                 }
               }}
             />
 
             {step === 2 && (
-              <div style={{ marginTop: 8, paddingLeft: 8 }}>
+              <div style={{ marginTop: 8, paddingLeft: 6 }}>
                 <button
                   type="button"
                   onClick={() => { setStep(1); setError(''); }}
@@ -281,7 +299,7 @@ export default function Login() {
 
           {/* Step 2: Smooth Slide-In Password / Details (Porkbun animation) */}
           {step === 2 && (
-            <div className="porkbun-slide-in" style={{ marginBottom: 20 }}>
+            <div className="porkbun-slide-in" style={{ marginBottom: 18 }}>
               <div style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -289,20 +307,20 @@ export default function Login() {
                 fontSize: 14,
                 fontWeight: 700,
                 color: '#111827',
-                marginBottom: isRegister ? 4 : 16,
-                marginTop: 18,
+                marginBottom: isRegister ? 4 : 14,
+                marginTop: 16,
               }}>
                 <Fa icon={icons.lock} style={{ fontSize: 12, color: '#059669' }} />
                 {isRegister ? 'next, enter your details.' : 'next, confirm your sign in.'}
               </div>
               {isRegister && (
-                <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 16px 0', lineHeight: 1.45 }}>
+                <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 14px 0', lineHeight: 1.45 }}>
                   choose your display name to finish setting up your workspace.
                 </p>
               )}
 
               {isRegister && (
-                <div style={{ marginBottom: 16 }}>
+                <div style={{ marginBottom: 14 }}>
                   <label style={{
                     fontSize: 13,
                     fontWeight: 600,
@@ -310,6 +328,7 @@ export default function Login() {
                     display: 'block',
                     marginBottom: 8,
                     letterSpacing: '-0.01em',
+                    paddingLeft: 2,
                   }}>
                     full name
                   </label>
@@ -321,31 +340,31 @@ export default function Login() {
                     autoFocus
                     style={{
                       width: '100%',
-                      padding: '13px 24px',
-                      border: '1.5px solid #e5e7eb',
+                      padding: '13px 22px',
+                      border: '1.5px solid #d1d5db',
                       borderRadius: 9999,
                       fontSize: 14,
                       outline: 'none',
                       boxSizing: 'border-box',
-                      background: '#ffffff',
+                      background: 'rgba(255, 255, 255, 0.94)',
                       color: '#111827',
                       fontFamily: 'inherit',
                       transition: 'all 0.15s ease',
-                      boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+                      boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.03), 0 1px 2px rgba(0,0,0,0.02)',
                     }}
                     onFocus={e => {
                       e.currentTarget.style.borderColor = '#0d3824'
                       e.currentTarget.style.boxShadow = '0 0 0 3px rgba(13, 56, 36, 0.08)'
                     }}
                     onBlur={e => {
-                      e.currentTarget.style.borderColor = '#e5e7eb'
-                      e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.02)'
+                      e.currentTarget.style.borderColor = '#d1d5db'
+                      e.currentTarget.style.boxShadow = 'inset 0 1px 2px rgba(0,0,0,0.03), 0 1px 2px rgba(0,0,0,0.02)'
                     }}
                   />
                 </div>
               )}
 
-              <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 14 }}>
                 <label style={{
                   fontSize: 13,
                   fontWeight: 600,
@@ -353,6 +372,7 @@ export default function Login() {
                   display: 'block',
                   marginBottom: 8,
                   letterSpacing: '-0.01em',
+                  paddingLeft: 2,
                 }}>
                   password or pin (optional)
                 </label>
@@ -365,18 +385,18 @@ export default function Login() {
                     autoFocus={!isRegister}
                     style={{
                       flex: 1,
-                      padding: '13px 24px',
-                      border: '1.5px solid #e5e7eb',
+                      padding: '13px 22px',
+                      border: '1.5px solid #d1d5db',
                       borderRight: 'none',
                       borderRadius: '9999px 0 0 9999px',
                       fontSize: 14,
                       outline: 'none',
                       boxSizing: 'border-box',
-                      background: '#ffffff',
+                      background: 'rgba(255, 255, 255, 0.94)',
                       color: '#111827',
                       fontFamily: 'inherit',
                       transition: 'all 0.15s ease',
-                      boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+                      boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.03)',
                     }}
                     onFocus={e => {
                       e.currentTarget.style.borderColor = '#0d3824'
@@ -386,10 +406,10 @@ export default function Login() {
                       }
                     }}
                     onBlur={e => {
-                      e.currentTarget.style.borderColor = '#e5e7eb'
-                      e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.02)'
+                      e.currentTarget.style.borderColor = '#d1d5db'
+                      e.currentTarget.style.boxShadow = 'inset 0 1px 2px rgba(0,0,0,0.03)'
                       if (e.currentTarget.nextElementSibling) {
-                        e.currentTarget.nextElementSibling.style.borderColor = '#e5e7eb'
+                        e.currentTarget.nextElementSibling.style.borderColor = '#d1d5db'
                       }
                     }}
                   />
@@ -399,7 +419,7 @@ export default function Login() {
                     style={{
                       padding: '0 20px',
                       background: '#f9fafb',
-                      border: '1.5px solid #e5e7eb',
+                      border: '1.5px solid #d1d5db',
                       borderRadius: '0 9999px 9999px 0',
                       cursor: 'pointer',
                       color: '#6b7280',
@@ -418,7 +438,7 @@ export default function Login() {
           )}
 
           {/* Checkbox: remember me */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '14px 0 22px 0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '14px 0 20px 0', paddingLeft: 2 }}>
             <input
               type="checkbox"
               id="rememberMe"
@@ -446,7 +466,7 @@ export default function Login() {
               border: '1px solid #fecaca',
               borderRadius: 12,
               padding: '10px 14px',
-              marginBottom: 18,
+              marginBottom: 16,
               display: 'flex',
               alignItems: 'center',
               gap: 8,
@@ -467,13 +487,13 @@ export default function Login() {
                     border: '1.5px solid #0d3824',
                     borderRadius: 9999,
                     color: '#ffffff',
-                    padding: '11px 30px',
+                    padding: '10px 28px',
                     fontSize: 14,
                     fontWeight: 600,
                     cursor: 'pointer',
                     transition: 'all 0.15s ease',
                     fontFamily: 'inherit',
-                    boxShadow: '0 2px 8px rgba(13, 56, 36, 0.2)',
+                    boxShadow: '0 2px 6px rgba(13, 56, 36, 0.2)',
                   }}
                   onMouseEnter={e => {
                     e.currentTarget.style.background = '#14532d'
@@ -492,10 +512,10 @@ export default function Login() {
                   onClick={() => toggleMode(!isRegister)}
                   style={{
                     background: '#ffffff',
-                    border: '1.5px solid #e5e7eb',
+                    border: '1.5px solid #d1d5db',
                     borderRadius: 9999,
                     color: '#111827',
-                    padding: '11px 24px',
+                    padding: '10px 22px',
                     fontSize: 14,
                     fontWeight: 600,
                     cursor: 'pointer',
@@ -508,7 +528,7 @@ export default function Login() {
                     e.currentTarget.style.background = '#f9fafb'
                   }}
                   onMouseLeave={e => {
-                    e.currentTarget.style.borderColor = '#e5e7eb'
+                    e.currentTarget.style.borderColor = '#d1d5db'
                     e.currentTarget.style.background = '#ffffff'
                   }}
                 >
@@ -526,7 +546,7 @@ export default function Login() {
                     border: loading ? '1.5px solid #86efac' : '1.5px solid #0d3824',
                     borderRadius: 9999,
                     color: loading ? '#15803d' : '#ffffff',
-                    padding: '11px 32px',
+                    padding: '10px 30px',
                     fontSize: 14,
                     fontWeight: 700,
                     cursor: loading ? 'not-allowed' : 'pointer',
@@ -535,7 +555,7 @@ export default function Login() {
                     gap: 8,
                     transition: 'all 0.18s ease',
                     fontFamily: 'inherit',
-                    boxShadow: '0 2px 8px rgba(13, 56, 36, 0.2)',
+                    boxShadow: '0 2px 6px rgba(13, 56, 36, 0.2)',
                   }}
                   onMouseEnter={e => {
                     if (!loading) {
@@ -568,7 +588,7 @@ export default function Login() {
                     border: '1.5px solid #e5e7eb',
                     borderRadius: 9999,
                     color: '#111827',
-                    padding: '11px 24px',
+                    padding: '10px 22px',
                     fontSize: 14,
                     fontWeight: 600,
                     cursor: 'pointer',
@@ -592,7 +612,7 @@ export default function Login() {
           </div>
 
           {/* Sub-links */}
-          <div style={{ marginTop: 20 }}>
+          <div style={{ marginTop: 18, paddingLeft: 2 }}>
             <span
               onClick={() => alert('to reset or recover credentials, authenticate with your linked whatsapp number.')}
               style={{
@@ -607,11 +627,11 @@ export default function Login() {
           </div>
         </form>
 
-        {/* Legal / Policy Disclaimer (matching reference image) */}
+        {/* Legal / Policy Disclaimer (perfectly proportioned to reference mockup) */}
         <div style={{
-          borderTop: '1px solid #f0f0f0',
-          paddingTop: 24,
-          marginTop: 28,
+          borderTop: '1px solid #e5e7eb',
+          paddingTop: 20,
+          marginTop: 24,
           fontSize: 11,
           color: '#6b7280',
           lineHeight: 1.55,
