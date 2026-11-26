@@ -76,7 +76,7 @@ export default function Login() {
       alignItems: 'center',
       justifyContent: 'center',
       background: 'var(--bg-color, #e8e6e1)',
-      padding: '48px 20px',
+      padding: '56px 20px',
       fontFamily: 'var(--font, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif)',
       color: '#1a1a1a',
       position: 'relative',
@@ -102,29 +102,6 @@ export default function Login() {
         <rect width="100%" height="100%" filter="url(#reyna-grain)" />
       </svg>
 
-      {/* Stripe-style Faint Dotted/Dashed Vertical Guidelines */}
-      <div
-        style={{
-          position: 'fixed',
-          top: 0,
-          bottom: 0,
-          left: 0,
-          right: 0,
-          pointerEvents: 'none',
-          zIndex: 0,
-          userSelect: 'none',
-        }}
-      >
-        {/* Form boundary guidelines (framing the login column path) */}
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 205px)', borderLeft: '1px dashed rgba(0, 0, 0, 0.06)' }} />
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 205px)', borderLeft: '1px dashed rgba(0, 0, 0, 0.06)' }} />
-        {/* Flanking proportional column guidelines */}
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 365px)', borderLeft: '1px dashed rgba(0, 0, 0, 0.04)' }} />
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 365px)', borderLeft: '1px dashed rgba(0, 0, 0, 0.04)' }} />
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 525px)', borderLeft: '1px dashed rgba(0, 0, 0, 0.025)' }} />
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 525px)', borderLeft: '1px dashed rgba(0, 0, 0, 0.025)' }} />
-      </div>
-
       {/* Ambient Green Glowing Orbs */}
       <div style={{
         position: 'fixed',
@@ -132,7 +109,7 @@ export default function Login() {
         right: '12%',
         width: 520,
         height: 520,
-        background: 'radial-gradient(circle, rgba(37, 211, 102, 0.24) 0%, rgba(37, 211, 102, 0) 68%)',
+        background: 'radial-gradient(circle, rgba(37, 211, 102, 0.22) 0%, rgba(37, 211, 102, 0) 68%)',
         filter: 'blur(35px)',
         pointerEvents: 'none',
         zIndex: 0,
@@ -185,10 +162,38 @@ export default function Login() {
         }}
       />
 
-      {/* Main Integrated Form Area (aligned and visually balanced) */}
-      <div style={{ width: '100%', maxWidth: 410, position: 'relative', zIndex: 2 }}>
+      {/* Main Integrated Form Area (framed with localized vertical & horizontal guidelines) */}
+      <div style={{
+        width: '100%',
+        maxWidth: 440,
+        position: 'relative',
+        zIndex: 2,
+        padding: '36px 32px',
+      }}>
+        {/* Stripe-style Guidelines Framing the Middle Form Path */}
+        <div
+          style={{
+            position: 'absolute',
+            top: 0,
+            bottom: 0,
+            left: 0,
+            right: 0,
+            pointerEvents: 'none',
+            zIndex: -1,
+            userSelect: 'none',
+          }}
+        >
+          {/* Vertical Boundary Guidelines (with 24px top & bottom overshoot) */}
+          <div style={{ position: 'absolute', top: -28, bottom: -28, left: 0, borderLeft: '1px dashed rgba(0, 0, 0, 0.08)' }} />
+          <div style={{ position: 'absolute', top: -28, bottom: -28, right: 0, borderRight: '1px dashed rgba(0, 0, 0, 0.08)' }} />
+
+          {/* Horizontal Boundary Guidelines (with 28px left & right overshoot forming corner crosshairs) */}
+          <div style={{ position: 'absolute', top: 0, left: -28, right: -28, borderTop: '1px dashed rgba(0, 0, 0, 0.08)' }} />
+          <div style={{ position: 'absolute', bottom: 0, left: -28, right: -28, borderBottom: '1px dashed rgba(0, 0, 0, 0.08)' }} />
+        </div>
+
         {/* Brand Header */}
-        <div style={{ marginBottom: 24 }}>
+        <div style={{ marginBottom: 28 }}>
           <div
             onClick={() => navigate('/')}
             style={{
@@ -196,13 +201,13 @@ export default function Login() {
               alignItems: 'center',
               gap: 6,
               cursor: 'pointer',
-              marginBottom: 4,
+              marginBottom: 6,
             }}
           >
             <Fa
               icon="fa-crown"
               style={{
-                fontSize: 17,
+                fontSize: 18,
                 color: 'var(--reyna-accent, #25D366)',
                 marginRight: 2,
               }}
@@ -232,7 +237,7 @@ export default function Login() {
           fontSize: 32,
           fontWeight: 800,
           color: '#111827',
-          margin: '0 0 20px 0',
+          margin: '0 0 24px 0',
           letterSpacing: '-0.03em',
           lineHeight: 1.15,
         }}>
@@ -250,7 +255,7 @@ export default function Login() {
         {/* Form Fields */}
         <form onSubmit={step === 1 ? handleContinue : handleSubmit}>
           {/* Field 1: username or whatsapp number */}
-          <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 18 }}>
             <label style={{
               fontSize: 13,
               fontWeight: 600,
@@ -323,7 +328,7 @@ export default function Login() {
 
           {/* Step 2: Smooth Slide-In Password / Details (Porkbun animation) */}
           {step === 2 && (
-            <div className="porkbun-slide-in" style={{ marginBottom: 18 }}>
+            <div className="porkbun-slide-in" style={{ marginBottom: 20 }}>
               <div style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -331,8 +336,8 @@ export default function Login() {
                 fontSize: 14,
                 fontWeight: 700,
                 color: '#111827',
-                marginBottom: isRegister ? 4 : 14,
-                marginTop: 16,
+                marginBottom: isRegister ? 6 : 14,
+                marginTop: 18,
               }}>
                 <Fa icon={icons.lock} style={{ fontSize: 12, color: '#059669' }} />
                 {isRegister ? 'next, enter your details.' : 'next, confirm your sign in.'}
@@ -344,7 +349,7 @@ export default function Login() {
               )}
 
               {isRegister && (
-                <div style={{ marginBottom: 14 }}>
+                <div style={{ marginBottom: 16 }}>
                   <label style={{
                     fontSize: 13,
                     fontWeight: 600,
@@ -388,7 +393,7 @@ export default function Login() {
                 </div>
               )}
 
-              <div style={{ marginBottom: 14 }}>
+              <div style={{ marginBottom: 16 }}>
                 <label style={{
                   fontSize: 13,
                   fontWeight: 600,
@@ -462,7 +467,7 @@ export default function Login() {
           )}
 
           {/* Checkbox: remember me */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '14px 0 20px 0', paddingLeft: 2 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '16px 0 22px 0', paddingLeft: 2 }}>
             <input
               type="checkbox"
               id="rememberMe"
@@ -490,7 +495,7 @@ export default function Login() {
               border: '1px solid #fecaca',
               borderRadius: 12,
               padding: '10px 14px',
-              marginBottom: 16,
+              marginBottom: 18,
               display: 'flex',
               alignItems: 'center',
               gap: 8,
@@ -501,7 +506,7 @@ export default function Login() {
           )}
 
           {/* Action Buttons Row */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 20 }}>
             {step === 1 ? (
               <>
                 <button
@@ -511,7 +516,7 @@ export default function Login() {
                     border: '1.5px solid #0d3824',
                     borderRadius: 9999,
                     color: '#ffffff',
-                    padding: '10px 28px',
+                    padding: '11px 30px',
                     fontSize: 14,
                     fontWeight: 600,
                     cursor: 'pointer',
@@ -539,7 +544,7 @@ export default function Login() {
                     border: '1.5px solid #d1d5db',
                     borderRadius: 9999,
                     color: '#111827',
-                    padding: '10px 22px',
+                    padding: '11px 24px',
                     fontSize: 14,
                     fontWeight: 600,
                     cursor: 'pointer',
@@ -570,7 +575,7 @@ export default function Login() {
                     border: loading ? '1.5px solid #86efac' : '1.5px solid #0d3824',
                     borderRadius: 9999,
                     color: loading ? '#15803d' : '#ffffff',
-                    padding: '10px 30px',
+                    padding: '11px 32px',
                     fontSize: 14,
                     fontWeight: 700,
                     cursor: loading ? 'not-allowed' : 'pointer',
@@ -612,7 +617,7 @@ export default function Login() {
                     border: '1.5px solid #e5e7eb',
                     borderRadius: 9999,
                     color: '#111827',
-                    padding: '10px 22px',
+                    padding: '11px 24px',
                     fontSize: 14,
                     fontWeight: 600,
                     cursor: 'pointer',
@@ -636,7 +641,7 @@ export default function Login() {
           </div>
 
           {/* Sub-links */}
-          <div style={{ marginTop: 18, paddingLeft: 2 }}>
+          <div style={{ marginTop: 16, marginBottom: 24, paddingLeft: 2 }}>
             <span
               onClick={() => alert('to reset or recover credentials, authenticate with your linked whatsapp number.')}
               style={{
@@ -651,14 +656,14 @@ export default function Login() {
           </div>
         </form>
 
-        {/* Legal / Policy Disclaimer (perfectly proportioned to reference mockup) */}
+        {/* Legal / Policy Disclaimer (with generous top divider & padding) */}
         <div style={{
           borderTop: '1px solid #e5e7eb',
-          paddingTop: 20,
+          paddingTop: 22,
           marginTop: 24,
           fontSize: 11,
           color: '#6b7280',
-          lineHeight: 1.55,
+          lineHeight: 1.6,
         }}>
           <div style={{
             fontSize: 11,
@@ -670,7 +675,7 @@ export default function Login() {
           }}>
             by continuing you agree to the following:
           </div>
-          <p style={{ margin: '0 0 6px 0', lineHeight: 1.55 }}>
+          <p style={{ margin: '0 0 6px 0', lineHeight: 1.6 }}>
             i acknowledge that reyna only captures, stages, and indexes files shared in authorized whatsapp groups, in accordance with the product terms of service and privacy policy.
           </p>
           <p style={{ margin: 0, color: '#6b7280' }}>
