@@ -162,7 +162,52 @@ export default function Login() {
         }}
       />
 
-      {/* Main Integrated Form Area (framed with localized vertical & horizontal guidelines) */}
+      {/* Dimensional Depth Guidelines (fading off into distance with radial mask, touching form elements) */}
+      <div
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '100vw',
+          height: '100vh',
+          pointerEvents: 'none',
+          zIndex: 0,
+          userSelect: 'none',
+          WebkitMaskImage: 'radial-gradient(ellipse 70% 75% at 50% 50%, rgba(0,0,0,1) 20%, rgba(0,0,0,0.6) 45%, transparent 75%)',
+          maskImage: 'radial-gradient(ellipse 70% 75% at 50% 50%, rgba(0,0,0,1) 20%, rgba(0,0,0,0.6) 45%, transparent 75%)',
+        }}
+      >
+        {/* Vertical Guidelines touching and framing form elements */}
+        {/* Form left boundary track */}
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 220px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.07)' }} />
+        {/* Form right boundary track */}
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 220px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.07)' }} />
+        {/* Inner vertical guideline */}
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 90px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.035)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 90px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.035)' }} />
+        {/* Flanking perspective tracks fading outward */}
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 370px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.05)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 370px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.05)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% - 530px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.035)' }} />
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 'calc(50% + 530px)', borderLeft: '1px dashed rgba(26, 26, 26, 0.035)' }} />
+
+        {/* Horizontal Guidelines touching key form anchors */}
+        {/* Above header */}
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% - 250px)', borderTop: '1px dashed rgba(26, 26, 26, 0.055)' }} />
+        {/* Under main heading */}
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% - 130px)', borderTop: '1px dashed rgba(26, 26, 26, 0.055)' }} />
+        {/* Under input box */}
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% - 35px)', borderTop: '1px dashed rgba(26, 26, 26, 0.055)' }} />
+        {/* Under continue buttons */}
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% + 75px)', borderTop: '1px dashed rgba(26, 26, 26, 0.055)' }} />
+        {/* Across legal disclaimer divider */}
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% + 175px)', borderTop: '1px dashed rgba(26, 26, 26, 0.055)' }} />
+        {/* Flanking horizontal perspective tracks */}
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% - 380px)', borderTop: '1px dashed rgba(26, 26, 26, 0.035)' }} />
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(50% + 300px)', borderTop: '1px dashed rgba(26, 26, 26, 0.035)' }} />
+      </div>
+
+      {/* Main Integrated Form Area */}
       <div style={{
         width: '100%',
         maxWidth: 440,
@@ -170,27 +215,6 @@ export default function Login() {
         zIndex: 2,
         padding: '36px 32px',
       }}>
-        {/* Stripe-style Guidelines Framing the Middle Form Path */}
-        <div
-          style={{
-            position: 'absolute',
-            top: 0,
-            bottom: 0,
-            left: 0,
-            right: 0,
-            pointerEvents: 'none',
-            zIndex: -1,
-            userSelect: 'none',
-          }}
-        >
-          {/* Vertical Boundary Guidelines (with 24px top & bottom overshoot) */}
-          <div style={{ position: 'absolute', top: -28, bottom: -28, left: 0, borderLeft: '1px dashed rgba(0, 0, 0, 0.08)' }} />
-          <div style={{ position: 'absolute', top: -28, bottom: -28, right: 0, borderRight: '1px dashed rgba(0, 0, 0, 0.08)' }} />
-
-          {/* Horizontal Boundary Guidelines (with 28px left & right overshoot forming corner crosshairs) */}
-          <div style={{ position: 'absolute', top: 0, left: -28, right: -28, borderTop: '1px dashed rgba(0, 0, 0, 0.08)' }} />
-          <div style={{ position: 'absolute', bottom: 0, left: -28, right: -28, borderBottom: '1px dashed rgba(0, 0, 0, 0.08)' }} />
-        </div>
 
         {/* Brand Header */}
         <div style={{ marginBottom: 28 }}>
