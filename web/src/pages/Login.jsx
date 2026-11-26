@@ -239,17 +239,17 @@ export default function Login() {
                   fontSize: 14,
                   fontWeight: 700,
                   color: '#111827',
-                  marginBottom: 4,
+                  marginBottom: isRegister ? 4 : 16,
                   marginTop: 18,
                 }}>
                   <Fa icon={icons.lock} style={{ fontSize: 12, color: '#059669' }} />
                   {isRegister ? 'next, enter your details.' : 'next, confirm your sign in.'}
                 </div>
-                <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 16px 0', lineHeight: 1.45 }}>
-                  {isRegister
-                    ? 'choose your display name to finish setting up your workspace.'
-                    : 'reyna uses passwordless whatsapp auth. leave blank or enter custom pin, then press log in.'}
-                </p>
+                {isRegister && (
+                  <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 16px 0', lineHeight: 1.45 }}>
+                    choose your display name to finish setting up your workspace.
+                  </p>
+                )}
 
                 {isRegister && (
                   <div style={{ marginBottom: 16 }}>
@@ -574,21 +574,6 @@ export default function Login() {
               the lawyers made us say all of that ☝️
             </p>
           </div>
-        </div>
-
-        {/* Anti-phishing advisory banner */}
-        <div style={{
-          background: 'rgba(255, 255, 255, 0.7)',
-          border: '1px solid #e5e7eb',
-          borderLeft: '4px solid #10b981',
-          borderRadius: 14,
-          padding: '14px 18px',
-          marginTop: 20,
-          fontSize: 12,
-          color: '#4b5563',
-          lineHeight: 1.55,
-        }}>
-          make sure you're signing in on <strong>reyna.local</strong> or <strong>localhost</strong>. we only authenticate through your registered whatsapp session and will never ask for third-party passwords.
         </div>
       </div>
     </div>
