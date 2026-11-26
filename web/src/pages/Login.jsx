@@ -126,7 +126,26 @@ export default function Login() {
         zIndex: 0,
       }} />
 
-      {/* Hand-drawn Cat Paw in Bottom-Right Corner (subtle & ambient) */}
+      {/* Hand-drawn Cat Paws (Top-Left upside-down & Bottom-Right) */}
+      {/* 1. Top-Left Upside-Down Paw */}
+      <img
+        src="/cat-paw.png"
+        alt=""
+        style={{
+          position: 'fixed',
+          top: -20,
+          left: -20,
+          width: 380,
+          opacity: 0.16,
+          transform: 'rotate(180deg)',
+          mixBlendMode: 'multiply',
+          pointerEvents: 'none',
+          zIndex: 0,
+          userSelect: 'none',
+        }}
+      />
+
+      {/* 2. Bottom-Right Paw */}
       <img
         src="/cat-paw.png"
         alt=""
