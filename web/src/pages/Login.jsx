@@ -232,6 +232,20 @@ export default function Login() {
         zIndex: 2,
         padding: '36px 32px',
       }}>
+        {/* Warm Spotlight Blob behind heading and username label */}
+        <div
+          style={{
+            position: 'absolute',
+            top: 10,
+            left: 10,
+            width: 420,
+            height: 250,
+            background: 'radial-gradient(ellipse 65% 65% at 42% 40%, rgba(254, 225, 95, 0.32) 0%, rgba(253, 216, 53, 0.15) 45%, rgba(254, 243, 199, 0.04) 70%, transparent 92%)',
+            filter: 'blur(35px)',
+            pointerEvents: 'none',
+            zIndex: -1,
+          }}
+        />
 
         {/* Heading (wrapped across 2 lines with balanced size and leading) */}
         <h2 style={{
