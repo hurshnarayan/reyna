@@ -3,76 +3,6 @@ import { useNavigate } from 'react-router-dom'
 import { api, saveAuth, isLoggedIn } from '../lib/api'
 import { Fa, icons } from '../components/icons'
 
-/* ── Minimalist Diagonal Claw Scratch Cluster (matching reference) ── */
-function ClawSlashGroup({
-  style = {},
-  length = 260,
-  gap = 26,
-  strokeWidth = 2,
-  opacity = 0.08,
-  angle = -52,
-  id = 'claw-grad',
-}) {
-  const width = gap * 4 + 40
-  const height = length + 80
-
-  return (
-    <svg
-      style={{
-        position: 'fixed',
-        pointerEvents: 'none',
-        zIndex: 0,
-        transform: `rotate(${angle}deg)`,
-        opacity,
-        ...style,
-      }}
-      width={width}
-      height={height}
-      viewBox={`0 0 ${width} ${height}`}
-      fill="none"
-    >
-      <defs>
-        <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#1a1a1a" stopOpacity="0" />
-          <stop offset="20%" stopColor="#1a1a1a" stopOpacity="0.85" />
-          <stop offset="80%" stopColor="#1a1a1a" stopOpacity="0.85" />
-          <stop offset="100%" stopColor="#1a1a1a" stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      {/* Claw stroke 1 */}
-      <line
-        x1={gap}
-        y1={40}
-        x2={gap}
-        y2={length + 10}
-        stroke={`url(#${id})`}
-        strokeWidth={strokeWidth}
-        strokeLinecap="round"
-      />
-      {/* Claw stroke 2 (longer middle) */}
-      <line
-        x1={gap * 2}
-        y1={15}
-        x2={gap * 2}
-        y2={length + 55}
-        stroke={`url(#${id})`}
-        strokeWidth={strokeWidth + 0.6}
-        strokeLinecap="round"
-      />
-      {/* Claw stroke 3 */}
-      <line
-        x1={gap * 3}
-        y1={35}
-        x2={gap * 3}
-        y2={length + 25}
-        stroke={`url(#${id})`}
-        strokeWidth={strokeWidth}
-        strokeLinecap="round"
-      />
-    </svg>
-  )
-}
-
 export default function Login() {
   const [phone, setPhone] = useState('')
   const [name, setName] = useState('')
@@ -152,42 +82,66 @@ export default function Login() {
       position: 'relative',
       overflow: 'hidden',
     }}>
-      {/* Diagonal Claw Scratches etched across canvas (matching reference image) */}
-      <ClawSlashGroup
-        id="claw-left-mid"
-        style={{ top: '22%', left: '5%' }}
-        length={340}
-        gap={32}
-        strokeWidth={2.2}
-        opacity={0.09}
-        angle={-50}
+      {/* Green Ambient Blob Background */}
+      <div style={{
+        position: 'fixed',
+        top: '-80px',
+        right: '12%',
+        width: 500,
+        height: 500,
+        background: '#25D366',
+        borderRadius: '50%',
+        filter: 'blur(140px)',
+        opacity: 0.18,
+        pointerEvents: 'none',
+        zIndex: 0,
+      }} />
+      <div style={{
+        position: 'fixed',
+        bottom: '-100px',
+        left: '8%',
+        width: 440,
+        height: 440,
+        background: 'rgba(37, 211, 102, 0.08)',
+        borderRadius: '50%',
+        filter: 'blur(130px)',
+        pointerEvents: 'none',
+        zIndex: 0,
+      }} />
+
+      {/* Two Scratches: Bottom Left and Top Right */}
+      {/* 1. Bottom Left Scratch */}
+      <img
+        src="/cat-scratches.png"
+        alt=""
+        style={{
+          position: 'fixed',
+          bottom: '12%',
+          left: '3%',
+          width: 340,
+          opacity: 0.22,
+          transform: 'rotate(52deg)',
+          pointerEvents: 'none',
+          zIndex: 0,
+          userSelect: 'none',
+        }}
       />
-      <ClawSlashGroup
-        id="claw-left-btm"
-        style={{ bottom: '-4%', left: '-2%' }}
-        length={280}
-        gap={28}
-        strokeWidth={2}
-        opacity={0.07}
-        angle={-48}
-      />
-      <ClawSlashGroup
-        id="claw-right-top"
-        style={{ top: '10%', right: '7%' }}
-        length={320}
-        gap={30}
-        strokeWidth={2.2}
-        opacity={0.08}
-        angle={-52}
-      />
-      <ClawSlashGroup
-        id="claw-right-mid"
-        style={{ bottom: '18%', right: '2%' }}
-        length={280}
-        gap={28}
-        strokeWidth={2}
-        opacity={0.07}
-        angle={-50}
+
+      {/* 2. Top Right Scratch */}
+      <img
+        src="/cat-scratches.png"
+        alt=""
+        style={{
+          position: 'fixed',
+          top: '12%',
+          right: '5%',
+          width: 340,
+          opacity: 0.22,
+          transform: 'rotate(52deg)',
+          pointerEvents: 'none',
+          zIndex: 0,
+          userSelect: 'none',
+        }}
       />
 
       {/* Main Form Area */}
