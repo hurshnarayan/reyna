@@ -102,7 +102,23 @@ export default function Login() {
         <rect width="100%" height="100%" filter="url(#reyna-grain)" />
       </svg>
 
-      {/* Canvas Edge Vignette (focuses attention inward to center) */}
+      {/* Center Ambient Spotlight (brightens paper directly behind form) */}
+      <div
+        style={{
+          position: 'fixed',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          width: 580,
+          height: 640,
+          background: 'radial-gradient(ellipse at center, rgba(255, 255, 255, 0.75) 0%, rgba(255, 255, 255, 0.32) 55%, transparent 80%)',
+          filter: 'blur(25px)',
+          pointerEvents: 'none',
+          zIndex: 0,
+        }}
+      />
+
+      {/* Canvas Edge Vignette (distinct darkening at edges and corners to pop center) */}
       <div
         style={{
           position: 'fixed',
@@ -111,24 +127,8 @@ export default function Login() {
           width: '100vw',
           height: '100vh',
           pointerEvents: 'none',
-          zIndex: 0,
-          background: 'radial-gradient(ellipse 72% 72% at 50% 50%, transparent 42%, rgba(0, 0, 0, 0.035) 72%, rgba(0, 0, 0, 0.085) 100%)',
-        }}
-      />
-
-      {/* Center Ambient Spotlight (pops form off the canvas) */}
-      <div
-        style={{
-          position: 'fixed',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          width: 640,
-          height: 680,
-          background: 'radial-gradient(ellipse at center, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0.18) 45%, transparent 75%)',
-          filter: 'blur(35px)',
-          pointerEvents: 'none',
-          zIndex: 0,
+          zIndex: 1,
+          background: 'radial-gradient(ellipse 65% 65% at 50% 50%, transparent 32%, rgba(18, 26, 20, 0.12) 68%, rgba(12, 18, 14, 0.28) 100%)',
         }}
       />
 
