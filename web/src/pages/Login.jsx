@@ -111,7 +111,7 @@ export default function Login() {
           transform: 'translate(-50%, -50%)',
           width: 600,
           height: 660,
-          background: 'radial-gradient(ellipse at center, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0.18) 55%, transparent 80%)',
+          background: 'radial-gradient(ellipse at center, rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0.14) 55%, transparent 80%)',
           filter: 'blur(35px)',
           pointerEvents: 'none',
           zIndex: 0,
@@ -128,7 +128,7 @@ export default function Login() {
           height: '100vh',
           pointerEvents: 'none',
           zIndex: 1,
-          background: 'radial-gradient(ellipse 70% 70% at 50% 50%, transparent 45%, rgba(15, 22, 17, 0.06) 72%, rgba(12, 18, 14, 0.14) 100%)',
+          background: 'radial-gradient(ellipse 72% 72% at 50% 50%, transparent 48%, rgba(15, 22, 17, 0.04) 75%, rgba(12, 18, 14, 0.09) 100%)',
         }}
       />
 
