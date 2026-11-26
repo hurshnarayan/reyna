@@ -126,7 +126,7 @@ export default function Login() {
         zIndex: 0,
       }} />
 
-      {/* Paper Ripped Cat Scratches (matching mockup with torn edge depth) */}
+      {/* Paper Ripped Cat Scratches (soft ambient blend, non-distracting) */}
       {/* 1. Bottom Left Paper Ripped Scratch */}
       <img
         src="/scratch-bl.png"
@@ -135,12 +135,12 @@ export default function Login() {
           position: 'fixed',
           bottom: '12%',
           left: '2%',
-          width: 380,
-          opacity: 0.82,
+          width: 360,
+          opacity: 0.28,
+          mixBlendMode: 'multiply',
           pointerEvents: 'none',
           zIndex: 0,
           userSelect: 'none',
-          filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.06))',
         }}
       />
 
@@ -152,12 +152,12 @@ export default function Login() {
           position: 'fixed',
           top: '12%',
           right: '3%',
-          width: 390,
-          opacity: 0.85,
+          width: 370,
+          opacity: 0.3,
+          mixBlendMode: 'multiply',
           pointerEvents: 'none',
           zIndex: 0,
           userSelect: 'none',
-          filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.06))',
         }}
       />
 
