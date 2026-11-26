@@ -126,34 +126,16 @@ export default function Login() {
         zIndex: 0,
       }} />
 
-      {/* Paper Ripped Cat Scratches (soft ambient blend, non-distracting) */}
-      {/* 1. Bottom Left Paper Ripped Scratch */}
+      {/* Hand-drawn Cat Paw in Bottom-Right Corner (subtle & ambient) */}
       <img
-        src="/scratch-bl.png"
+        src="/cat-paw.png"
         alt=""
         style={{
           position: 'fixed',
-          bottom: '12%',
-          left: '2%',
-          width: 360,
-          opacity: 0.28,
-          mixBlendMode: 'multiply',
-          pointerEvents: 'none',
-          zIndex: 0,
-          userSelect: 'none',
-        }}
-      />
-
-      {/* 2. Top Right Paper Ripped Scratch */}
-      <img
-        src="/scratch-tr.png"
-        alt=""
-        style={{
-          position: 'fixed',
-          top: '12%',
-          right: '3%',
-          width: 370,
-          opacity: 0.3,
+          bottom: -15,
+          right: -15,
+          width: 390,
+          opacity: 0.18,
           mixBlendMode: 'multiply',
           pointerEvents: 'none',
           zIndex: 0,
