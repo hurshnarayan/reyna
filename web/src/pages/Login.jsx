@@ -287,25 +287,43 @@ export default function Login() {
           </p>
         </div>
 
-        {/* Heading (wrapped across 2 lines with balanced size and leading) */}
-        <h2 style={{
-          fontSize: 32,
-          fontWeight: 800,
-          color: '#111827',
-          margin: '0 0 24px 0',
-          letterSpacing: '-0.03em',
-          lineHeight: 1.15,
-        }}>
-          {isRegister ? (
-            <>
-              create a new<br />account
-            </>
-          ) : (
-            <>
-              log in to an existing<br />account
-            </>
-          )}
-        </h2>
+        {/* Heading with Warm Spotlight Glow behind it */}
+        <div style={{ position: 'relative' }}>
+          {/* Spotlight Blob directly behind "log in to an existing account" */}
+          <div
+            style={{
+              position: 'absolute',
+              top: -35,
+              left: -35,
+              width: 360,
+              height: 190,
+              background: 'radial-gradient(ellipse at 40% 45%, rgba(254, 225, 95, 0.42) 0%, rgba(253, 216, 53, 0.20) 45%, rgba(254, 243, 199, 0.05) 70%, transparent 90%)',
+              filter: 'blur(32px)',
+              pointerEvents: 'none',
+              zIndex: -1,
+            }}
+          />
+
+          <h2 style={{
+            fontSize: 32,
+            fontWeight: 800,
+            color: '#111827',
+            margin: '0 0 24px 0',
+            letterSpacing: '-0.03em',
+            lineHeight: 1.15,
+            position: 'relative',
+          }}>
+            {isRegister ? (
+              <>
+                create a new<br />account
+              </>
+            ) : (
+              <>
+                log in to an existing<br />account
+              </>
+            )}
+          </h2>
+        </div>
 
         {/* Form Fields */}
         <form onSubmit={step === 1 ? handleContinue : handleSubmit}>
@@ -732,7 +750,6 @@ export default function Login() {
 
         {/* Legal / Policy Disclaimer (with generous top divider & padding) */}
         <div style={{
-          position: 'relative',
           borderTop: '1px solid #e5e7eb',
           paddingTop: 22,
           marginTop: 24,
@@ -741,21 +758,6 @@ export default function Login() {
           lineHeight: 1.6,
           textShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
         }}>
-          {/* Smaller Warm Spotlight Blob on top-left of "by continuing you agree to the following" */}
-          <div
-            style={{
-              position: 'absolute',
-              top: -45,
-              left: -35,
-              width: 260,
-              height: 220,
-              background: 'radial-gradient(ellipse at center, rgba(254, 225, 95, 0.40) 0%, rgba(253, 216, 53, 0.18) 45%, rgba(254, 243, 199, 0.05) 70%, transparent 90%)',
-              filter: 'blur(30px)',
-              pointerEvents: 'none',
-              zIndex: -1,
-            }}
-          />
-
           <div style={{
             fontSize: 11,
             fontWeight: 700,
