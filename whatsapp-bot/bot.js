@@ -28,6 +28,20 @@ const AUTH_DIR = process.env.AUTH_DIR || './auth_state';
 const DEVICE_TOKEN = process.env.DEVICE_TOKEN || '';
 const PID_FILE = path.join(__dirname, '.bot.pid');
 const logger = pino({ level: 'silent' });
+
+// Baileys sometimes bypasses pino and dumps raw Signal Protocol crypto objects
+// (session ratchet state, key buffers) directly via console.log. Intercept and
+// drop any line that looks like internal crypto noise so it doesn't clutter output.
+const _origConsoleLog = console.log.bind(console);
+console.log = (...args) => {
+  // Drop if first arg contains Signal/crypto internals (Buffer dumps, ratchet state)
+  const first = typeof args[0] === 'string' ? args[0] : '';
+  if (
+    args.some(a => a && typeof a === 'object' && (a.registrationId !== undefined || a.currentRatchet !== undefined || a.indexInfo !== undefined)) ||
+    (first.includes('ephemeralKeyPair') || first.includes('currentRatchet') || first.includes('registrationId'))
+  ) return;
+  _origConsoleLog(...args);
+};
 const pendingUploadQueue = new PendingUploadQueue();
 const processingUploads = new Map();
 

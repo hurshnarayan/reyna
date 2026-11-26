@@ -689,27 +689,29 @@ export default function Dashboard() {
               </span>
               active groups
             </h2>
-            <button
-              onClick={() => navigate('/groups')}
-              style={{
-                background: '#fff',
-                border: '1px solid #e5e7eb',
-                borderRadius: 9999,
-                padding: '4px 14px',
-                fontSize: 12,
-                fontWeight: 500,
-                color: '#111827',
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
-                transition: 'all 0.15s',
-              }}
-              onMouseEnter={e => e.currentTarget.style.borderColor = '#9ca3af'}
-              onMouseLeave={e => e.currentTarget.style.borderColor = '#e5e7eb'}
-            >
-              view all groups <span style={{ fontSize: 12, lineHeight: 1 }}>&rarr;</span>
-            </button>
+            {groupSettings.length > 2 && (
+              <button
+                onClick={() => navigate('/groups')}
+                style={{
+                  background: '#fff',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 9999,
+                  padding: '4px 14px',
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: '#111827',
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  transition: 'all 0.15s',
+                }}
+                onMouseEnter={e => e.currentTarget.style.borderColor = '#9ca3af'}
+                onMouseLeave={e => e.currentTarget.style.borderColor = '#e5e7eb'}
+              >
+                view all groups <span style={{ fontSize: 12, lineHeight: 1 }}>&rarr;</span>
+              </button>
+            )}
           </div>
           <p style={{ fontSize: 12, color: '#6b7280', margin: '2px 0 14px 0', lineHeight: 1.45, maxWidth: 290 }}>
             choose which groups reyna monitors and how files are tracked.
@@ -722,7 +724,7 @@ export default function Dashboard() {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {groupSettings.map((gs, i) => {
+              {groupSettings.slice(0, 2).map((gs, i) => {
                 const enabled = gs.settings?.enabled || false
                 const mode = gs.settings?.tracking_mode || 'auto'
                 return (
@@ -870,6 +872,25 @@ export default function Dashboard() {
                   </div>
                 )
               })}
+              {groupSettings.length > 2 && (
+                <div
+                  onClick={() => navigate('/groups')}
+                  style={{
+                    textAlign: 'center',
+                    paddingTop: 4,
+                    fontSize: 11,
+                    color: '#9ca3af',
+                    fontWeight: 500,
+                    cursor: 'pointer',
+                    userSelect: 'none',
+                    transition: 'color 0.15s',
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.color = '#4b5563'}
+                  onMouseLeave={e => e.currentTarget.style.color = '#9ca3af'}
+                >
+                  showing 2 of {groupSettings.length} groups
+                </div>
+              )}
             </div>
           )}
         </div>
