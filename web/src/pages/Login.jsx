@@ -233,97 +233,25 @@ export default function Login() {
         padding: '36px 32px',
       }}>
 
-        {/* Brand Header */}
-        <div style={{ marginBottom: 28 }}>
-          <div
-            onClick={() => navigate('/')}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              cursor: 'pointer',
-              marginBottom: 6,
-            }}
-          >
-            <Fa
-              icon="fa-crown"
-              style={{
-                fontSize: 18,
-                color: 'var(--reyna-accent, #25D366)',
-                marginRight: 2,
-                filter: 'drop-shadow(0 1px 2px rgba(0, 0, 0, 0.08))',
-              }}
-            />
-            <span style={{
-              fontSize: 20,
-              fontWeight: 800,
-              letterSpacing: -0.4,
-              color: '#111827',
-              textShadow: '0 1px 2px rgba(0, 0, 0, 0.08)',
-            }}>
-              reyna
-            </span>
-            <span style={{
-              fontSize: 10,
-              fontWeight: 700,
-              color: '#059669',
-              background: '#dcfce7',
-              padding: '2px 7px',
-              borderRadius: 9999,
-              marginLeft: 2,
-              boxShadow: '0 1px 3px rgba(5, 150, 105, 0.15)',
-            }}>
-              v2
-            </span>
-          </div>
-          <p style={{
-            fontSize: 13,
-            color: '#6b7280',
-            margin: 0,
-            fontWeight: 400,
-            textShadow: '0 1px 2px rgba(0, 0, 0, 0.05)',
-          }}>
-            your group chat's knowledge base
-          </p>
-        </div>
-
-        {/* Heading with Warm Spotlight Glow behind it */}
-        <div style={{ position: 'relative' }}>
-          {/* Spotlight Blob directly behind "log in to an existing account" */}
-          <div
-            style={{
-              position: 'absolute',
-              top: -35,
-              left: -35,
-              width: 360,
-              height: 190,
-              background: 'radial-gradient(ellipse at 40% 45%, rgba(254, 225, 95, 0.20) 0%, rgba(253, 216, 53, 0.09) 45%, rgba(254, 243, 199, 0.02) 70%, transparent 90%)',
-              filter: 'blur(35px)',
-              pointerEvents: 'none',
-              zIndex: -1,
-            }}
-          />
-
-          <h2 style={{
-            fontSize: 32,
-            fontWeight: 800,
-            color: '#111827',
-            margin: '0 0 24px 0',
-            letterSpacing: '-0.03em',
-            lineHeight: 1.15,
-            position: 'relative',
-          }}>
-            {isRegister ? (
-              <>
-                create a new<br />account
-              </>
-            ) : (
-              <>
-                log in to an existing<br />account
-              </>
-            )}
-          </h2>
-        </div>
+        {/* Heading (wrapped across 2 lines with balanced size and leading) */}
+        <h2 style={{
+          fontSize: 32,
+          fontWeight: 800,
+          color: '#111827',
+          margin: '0 0 24px 0',
+          letterSpacing: '-0.03em',
+          lineHeight: 1.15,
+        }}>
+          {isRegister ? (
+            <>
+              create a new<br />account
+            </>
+          ) : (
+            <>
+              log in to an existing<br />account
+            </>
+          )}
+        </h2>
 
         {/* Form Fields */}
         <form onSubmit={step === 1 ? handleContinue : handleSubmit}>
