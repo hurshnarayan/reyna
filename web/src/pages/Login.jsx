@@ -237,9 +237,16 @@ export default function Login() {
                 fontSize: 18,
                 color: 'var(--reyna-accent, #25D366)',
                 marginRight: 2,
+                filter: 'drop-shadow(0 1px 2px rgba(0, 0, 0, 0.08))',
               }}
             />
-            <span style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.4, color: '#111827' }}>
+            <span style={{
+              fontSize: 20,
+              fontWeight: 800,
+              letterSpacing: -0.4,
+              color: '#111827',
+              textShadow: '0 1px 2px rgba(0, 0, 0, 0.08)',
+            }}>
               reyna
             </span>
             <span style={{
@@ -250,11 +257,18 @@ export default function Login() {
               padding: '2px 7px',
               borderRadius: 9999,
               marginLeft: 2,
+              boxShadow: '0 1px 3px rgba(5, 150, 105, 0.15)',
             }}>
               v2
             </span>
           </div>
-          <p style={{ fontSize: 13, color: '#6b7280', margin: 0, fontWeight: 400 }}>
+          <p style={{
+            fontSize: 13,
+            color: '#6b7280',
+            margin: 0,
+            fontWeight: 400,
+            textShadow: '0 1px 2px rgba(0, 0, 0, 0.05)',
+          }}>
             your group chat's knowledge base
           </p>
         </div>
@@ -710,6 +724,7 @@ export default function Login() {
           fontSize: 11,
           color: '#6b7280',
           lineHeight: 1.6,
+          textShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
         }}>
           <div style={{
             fontSize: 11,
@@ -718,6 +733,7 @@ export default function Login() {
             letterSpacing: '0.04em',
             textTransform: 'uppercase',
             marginBottom: 6,
+            textShadow: '0 1px 2px rgba(0, 0, 0, 0.05)',
           }}>
             by continuing you agree to the following:
           </div>
