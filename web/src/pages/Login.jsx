@@ -288,7 +288,7 @@ export default function Login() {
               value={phone}
               readOnly={step === 2}
               onChange={e => setPhone(e.target.value)}
-              placeholder="harsh or +91 9876543210"
+              placeholder="+91 9876543210"
               style={{
                 width: '100%',
                 padding: '13px 22px',
