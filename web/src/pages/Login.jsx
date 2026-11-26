@@ -176,22 +176,6 @@ export default function Login() {
         }}
       />
 
-      {/* Warm Yellowish Spotlight (behind grid lines in center of form, fading outwards) */}
-      <div
-        style={{
-          position: 'fixed',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          width: 620,
-          height: 680,
-          background: 'radial-gradient(ellipse 65% 68% at center, rgba(254, 225, 95, 0.35) 0%, rgba(253, 216, 53, 0.18) 45%, rgba(254, 243, 199, 0.06) 72%, transparent 90%)',
-          filter: 'blur(45px)',
-          pointerEvents: 'none',
-          zIndex: 0,
-        }}
-      />
-
       {/* Dimensional Depth Guidelines (closely packed grid fading off with radial mask) */}
       <div
         style={{
@@ -748,6 +732,7 @@ export default function Login() {
 
         {/* Legal / Policy Disclaimer (with generous top divider & padding) */}
         <div style={{
+          position: 'relative',
           borderTop: '1px solid #e5e7eb',
           paddingTop: 22,
           marginTop: 24,
@@ -756,6 +741,21 @@ export default function Login() {
           lineHeight: 1.6,
           textShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
         }}>
+          {/* Smaller Warm Spotlight Blob on top-left of "by continuing you agree to the following" */}
+          <div
+            style={{
+              position: 'absolute',
+              top: -45,
+              left: -35,
+              width: 260,
+              height: 220,
+              background: 'radial-gradient(ellipse at center, rgba(254, 225, 95, 0.40) 0%, rgba(253, 216, 53, 0.18) 45%, rgba(254, 243, 199, 0.05) 70%, transparent 90%)',
+              filter: 'blur(30px)',
+              pointerEvents: 'none',
+              zIndex: -1,
+            }}
+          />
+
           <div style={{
             fontSize: 11,
             fontWeight: 700,
